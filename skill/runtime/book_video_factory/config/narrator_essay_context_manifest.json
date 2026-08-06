@@ -1,0 +1,200 @@
+{
+  "schema_version": "narrator-essay-context-manifest.v1",
+  "line_id": "classic-narrator-hbg-v1",
+  "purpose": "强制内容决策智能体加载的案例知识清单；缺失任意必读项时 narrator-essay 流程 fail closed",
+  "gold_standard": {
+    "required": true,
+    "files": [
+      "docs/gold_standard/BOOK_NARRATION_GOLD_STANDARD.md",
+      "docs/gold_standard/CROSS_CASE_MATRIX.md",
+      "docs/gold_standard/USER_SATISFACTION_GAP_ANALYSIS.md"
+    ]
+  },
+  "reference_cases": {
+    "required": true,
+    "index": "docs/reference_cases/00_CASE_INDEX.md",
+    "cases": [
+      {
+        "id": "bel_ami",
+        "dir": "docs/reference_cases/01_BEL_AMI",
+        "evidence_level": "video_audio_transcript",
+        "transcript_file": "TRANSCRIPT_RAW.md"
+      },
+      {
+        "id": "strait_is_the_gate",
+        "dir": "docs/reference_cases/02_STRAIT_IS_THE_GATE",
+        "evidence_level": "video_audio_transcript",
+        "transcript_file": "TRANSCRIPT_RAW.md"
+      },
+      {
+        "id": "jane_eyre",
+        "dir": "docs/reference_cases/03_JANE_EYRE",
+        "evidence_level": "video_audio_transcript",
+        "transcript_file": "TRANSCRIPT_RAW.md"
+      },
+      {
+        "id": "the_little_prince",
+        "dir": "docs/reference_cases/04_THE_LITTLE_PRINCE",
+        "evidence_level": "video_audio_transcript",
+        "transcript_file": "TRANSCRIPT_RAW.md"
+      },
+      {
+        "id": "madame_bovary",
+        "dir": "docs/reference_cases/05_MADAME_BOVARY",
+        "evidence_level": "transcript_only",
+        "transcript_file": "TRANSCRIPT_RAW.md"
+      },
+      {
+        "id": "the_moon_and_sixpence",
+        "dir": "docs/reference_cases/06_THE_MOON_AND_SIXPENCE",
+        "evidence_level": "transcript_only",
+        "transcript_file": "TRANSCRIPT_RAW.md"
+      },
+      {
+        "id": "wuthering_heights",
+        "dir": "docs/reference_cases/07_WUTHERING_HEIGHTS_VALIDATION",
+        "evidence_level": "video_transcript",
+        "transcript_file": "REFERENCE_CREATOR_TRANSCRIPT.md",
+        "comparison_files": {
+          "approved_script": "USER_APPROVED_OPTIMIZED_SCRIPT.md",
+          "comparative_review": "COMPARATIVE_REVIEW.md"
+        }
+      }
+    ]
+  },
+  "evals": {
+    "required": true,
+    "files": [
+      "docs/evals/narrator_essay/QUALITY_RUBRIC.md",
+      "docs/evals/narrator_essay/ACCEPTANCE_TESTS.md",
+      "docs/evals/narrator_essay/NEGATIVE_EXAMPLES.md"
+    ]
+  },
+  "agent_routing": {
+    "required": true,
+    "file": "docs/agent_routing/AGENT_CONTEXT_ROUTING.md"
+  },
+  "schemas": {
+    "required": true,
+    "dir": "docs/schemas/narrator_essay",
+    "contracts": [
+      "creative-decision.v1",
+      "fate-anchors.v1",
+      "event-cards.v1",
+      "script-beats.v1",
+      "visual-bible.v1",
+      "voice-direction.narrator.v1",
+      "content-quality-report.v1"
+    ]
+  },
+  "persona_routing": {
+    "antihero_social_satire": "辛辣看客",
+    "psychological_tragedy": "克制侦探",
+    "first_person_growth": "主角化讲述者",
+    "allegory": "温柔陪伴者",
+    "desire_crash": "先理解后审判",
+    "moral_debate": "辩论主持人",
+    "gothic_generational_trauma": "阴郁故事讲述者",
+    "social_mechanism": "冷静取证者"
+  },
+  "narrative_engines": [
+    "antihero_ascent",
+    "psychological_mystery",
+    "first_person_growth",
+    "allegory_decoding",
+    "desire_escalation",
+    "moral_debate",
+    "generational_cycle_and_repair",
+    "social_mechanism"
+  ],
+  "speed_contract_cpm": {
+    "average": [
+      220,
+      245
+    ],
+    "hook": [
+      245,
+      285
+    ],
+    "narrative": [
+      225,
+      250
+    ],
+    "confession_death_reinterpretation": [
+      190,
+      225
+    ],
+    "theory": [
+      210,
+      235
+    ],
+    "final_line": [
+      185,
+      215
+    ]
+  },
+  "quality_threshold": {
+    "total_min": 66,
+    "total_max": 75,
+    "item_min": 4,
+    "fact_reliability_must": 5,
+    "auto_fail_missing": [
+      "click_question",
+      "midpoint_requestion",
+      "reinterpretation"
+    ],
+    "auto_fail_if_present": [
+      "deep_thesis_leaked_in_opening"
+    ],
+    "auto_fail_not_overridable_by_score": true
+  },
+  "text_gates": {
+    "purpose": "发现式叙事硬门禁；由 gates/装配/文学审查在 release 前调用 narrator_essay_contracts.TEXT_GATE_VALIDATORS",
+    "hard_auto_fail": [
+      "deep_thesis_leaked_in_opening"
+    ],
+    "gates": [
+      "narrator-essay.opening",
+      "narrator-essay.metaphor-budget",
+      "narrator-essay.story-first",
+      "narrator-essay.self-reveal",
+      "narrator-essay.chat-relaxation",
+      "narrator-essay.evidence-before-thesis",
+      "narrator-essay.brand-opener",
+      "narrator-essay.click-question-sharp",
+      "narrator-essay.midpoint-emergent",
+      "narrator-essay.theory-anchored",
+      "narrator-essay.theory-not-concept-sticking",
+      "narrator-essay.ending-takeaway"
+    ],
+    "rules": {
+      "opening_deep_thesis_fraction": 0.15,
+      "metaphor_reveal_position_min": 0.55,
+      "metaphor_reveal_position_min_if_reframing": 0.65,
+      "metaphor_mentions_before_midpoint_max": 2,
+      "story_first_first_fraction": 0.7,
+      "story_first_min_story_ratio": 0.8,
+      "story_first_local_window": 7,
+      "story_first_local_analysis_max": 1,
+      "self_reveal_min": 3,
+      "self_reveal_max": 10,
+      "chat_relaxation_natural_min_ratio": 0.3,
+      "evidence_before_thesis_min_ratio": 0.7,
+      "brand_opener_window_chars": 340
+    }
+  },
+  "metaphor_budget_fields": {
+    "required": [
+      "primary_metaphor",
+      "metaphor_reveal_position",
+      "metaphor_mentions_before_midpoint",
+      "metaphor_mentions_before_theory"
+    ],
+    "constraints": [
+      "metaphor_reveal_position >= 0.55",
+      "metaphor_reveal_position >= 0.65 if metaphor_carries_reframing",
+      "metaphor_mentions_before_midpoint <= 2",
+      "forbidden_first_half_tokens: 空资产/第一笔债/负债/征信/收费/抵押物/连带责任/开票/结清/账本/清算"
+    ]
+  }
+}

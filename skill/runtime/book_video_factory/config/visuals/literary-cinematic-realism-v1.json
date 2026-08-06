@@ -1,0 +1,26 @@
+{
+  "schema_version": "visual-quality-kernel.v1",
+  "kernel_id": "literary-cinematic-realism-v1",
+  "shared_requirements": [
+    "literary cinematic composition with a clear narrative focal hierarchy",
+    "plausible human anatomy and natural skin rather than plastic CGI",
+    "period-accurate clothing, architecture, tools and domestic objects",
+    "readable deep shadows with restrained small-area highlights",
+    "tactile cloth, wood, stone, paper, metal, skin and vegetation",
+    "cinematic-still precision for faces, hands, animal anatomy and story-critical objects",
+    "brush texture is concentrated on sea, wood, rope, cloth and background weather rather than focal anatomy",
+    "generated frames contain no text, captions, logo, watermark, UI or border",
+    "subjects remain outside the subtitle safety area where composition permits"
+  ],
+  "shared_prohibitions": [
+    "generic AI influencer face",
+    "commercial HDR with every shadow lifted",
+    "cheap fantasy particles or universal golden glow",
+    "modern object contamination",
+    "pseudo-writing or generated book-cover text",
+    "heavy impasto",
+    "generic AI oil-painting filter",
+    "copying a reference person's identity, exact pose, text or layout"
+  ],
+  "machine_diagnostics_are_aesthetic_approval": false
+}

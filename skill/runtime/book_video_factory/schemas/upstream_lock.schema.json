@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/schemas/hbg-upstream-lock.v1.json",
+  "title": "HBG upstream lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "repository", "repository_url", "commit",
+    "source_archive_sha256", "imported_at", "vendor_policy", "files",
+    "direct_reuse", "local_patches"
+  ],
+  "properties": {
+    "schema_version": {"const": "hbg-upstream-lock.v1"},
+    "repository": {"const": "Mr-funny/hbg-life-simulation"},
+    "repository_url": {"type": "string", "format": "uri"},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "source_archive_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "imported_at": {"type": "string"},
+    "vendor_policy": {"const": "pristine-vendor-plus-external-wrappers"},
+    "files": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    },
+    "direct_reuse": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+    "local_patches": {"type": "array"}
+  }
+}

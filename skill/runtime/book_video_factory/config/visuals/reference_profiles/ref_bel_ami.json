@@ -1,0 +1,20 @@
+{
+  "schema_version": "reference-visual-profile.v1",
+  "reference_id": "REF_BEL_AMI",
+  "work_title": "漂亮朋友",
+  "visual_language": "巴黎美好时代、暗金红棕、高阶层华丽感、写实肖像与古典油画",
+  "metrics": {
+    "shot_count": 291,
+    "mean_luma": 72.318,
+    "mean_contrast": 48.161,
+    "dark_share": 0.477,
+    "highlight_share": 0.019,
+    "warm_tendency": 0.123
+  },
+  "roles": {
+    "style_only": true,
+    "identity_reference_allowed": false,
+    "production_asset_allowed": false,
+    "exact_composition_copy_allowed": false
+  }
+}

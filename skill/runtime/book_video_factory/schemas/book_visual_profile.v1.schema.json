@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "book_visual_profile.v1.schema.json",
+  "title": "Book Visual Profile V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "release_id", "bound_hbg_bridge_digest", "bound_release_text_sha256",
+    "global_kernel_id", "style_reference_ids", "book_look", "palette_profiles",
+    "lighting_profiles", "material_profiles", "composition_rules", "repeated_motifs",
+    "forbidden_traits", "character_anchors", "scene_anchors", "object_anchors"
+  ],
+  "properties": {
+    "schema_version": {"const": "book-visual-profile.v1"},
+    "release_id": {"type": "string", "minLength": 1},
+    "bound_hbg_bridge_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "bound_release_text_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "global_kernel_id": {"const": "literary-cinematic-realism-v1"},
+    "style_reference_ids": {"type": "array", "minItems": 1, "uniqueItems": true},
+    "book_look": {"type": "object"},
+    "palette_profiles": {"type": "array", "minItems": 1},
+    "lighting_profiles": {"type": "array", "minItems": 1},
+    "material_profiles": {"type": "array", "minItems": 1},
+    "composition_rules": {"type": "array", "minItems": 2},
+    "repeated_motifs": {"type": "array", "minItems": 2},
+    "forbidden_traits": {"type": "array", "minItems": 2},
+    "character_anchors": {"type": "array", "minItems": 1},
+    "scene_anchors": {"type": "array"},
+    "object_anchors": {"type": "array"}
+  }
+}

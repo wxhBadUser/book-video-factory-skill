@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "scene_review_decision.v1.schema.json",
+  "type": "object",
+  "required": ["schema_version", "release_id", "director_stage_manifest_sha256", "scene_asset_manifest_sha256", "reviewer", "decisions"],
+  "properties": {
+    "schema_version": {"const": "scene-review-decision.v1"},
+    "decisions": {"type": "array"}
+  },
+  "additionalProperties": false
+}

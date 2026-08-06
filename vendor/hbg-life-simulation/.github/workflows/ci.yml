@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check shell syntax
+        run: |
+          bash -n install.sh
+          for script in scripts/*.sh; do bash -n "$script"; done
+
+      - name: Check JavaScript syntax
+        run: |
+          for script in scripts/*.mjs; do node --check "$script"; done
+
+      - name: Validate skill frontmatter and JSON assets
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          text = Path("SKILL.md").read_text(encoding="utf-8")
+          assert text.startswith("---\n"), "SKILL.md must start with YAML frontmatter"
+          _, frontmatter, _ = text.split("---", 2)
+          fields = {}
+          for line in frontmatter.splitlines():
+              if ":" in line:
+                  key, value = line.split(":", 1)
+                  fields[key.strip()] = value.strip()
+          assert fields.get("name") == "hbg-life-simulation"
+          assert fields.get("description"), "description is required"
+          assert set(fields) == {"name", "description"}, "only name and description are allowed"
+
+          for path in Path("assets").glob("*.json"):
+              json.loads(path.read_text(encoding="utf-8"))
+          PY
+
+      - name: Block credentials and local project data
+        run: |
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          forbidden_literals = (
+              "/" + "Users/",
+              "codex." + "huamosi.com",
+              "gh" + "o_",
+              "7e5f" + "23de",
+              "SCRIPT_SOURCE.md" + "【",
+          )
+          secret_patterns = (
+              re.compile(r"gh[opsu]_[A-Za-z0-9]{20,}"),
+              re.compile(r"(?i)bearer\s+[A-Za-z0-9._-]{20,}"),
+          )
+
+          for path in Path(".").rglob("*"):
+              if not path.is_file() or ".git" in path.parts:
+                  continue
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except UnicodeDecodeError:
+                  continue
+              for literal in forbidden_literals:
+                  assert literal not in text, f"forbidden local or credential marker in {path}: {literal}"
+              for pattern in secret_patterns:
+                  assert not pattern.search(text), f"possible credential in {path}: {pattern.pattern}"
+          PY
+
+      - name: Smoke-test style initialization
+        run: |
+          temp_dir=$(mktemp -d)
+          mkdir -p "$temp_dir/landscape" "$temp_dir/portrait"
+          node scripts/init_project_style.mjs "$temp_dir/landscape"
+          node scripts/init_project_style.mjs "$temp_dir/portrait" --orientation portrait
+          test -s "$temp_dir/landscape/HBG_STYLE.json"
+          test -s "$temp_dir/portrait/HBG_STYLE.json"
+
+      - name: Check installer help
+        run: ./install.sh --help

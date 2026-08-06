@@ -1,0 +1,36 @@
+{
+  "schema_version": "content-quality-report.v1",
+  "items": {
+    "item_01": 5,
+    "item_02": 5,
+    "item_03": 5,
+    "item_04": 5,
+    "item_05": 5,
+    "item_06": 5,
+    "item_07": 5,
+    "item_08": 5,
+    "item_09": 5,
+    "item_10": 5,
+    "item_11": 5,
+    "item_12": 5,
+    "item_13": 5,
+    "item_14": 5,
+    "fact_reliability": 5
+  },
+  "total": 75,
+  "max_total": 75,
+  "checks": [
+    {
+      "check_id": "gold_standard_blind_score",
+      "check_type": "human_judgment",
+      "score": 5,
+      "status": "pass",
+      "evidence": [
+        "review"
+      ],
+      "notes": ""
+    }
+  ],
+  "human_review_required": true,
+  "blocking_issues": []
+}

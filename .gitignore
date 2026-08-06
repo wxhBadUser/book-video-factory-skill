@@ -1,0 +1,66 @@
+# ============================================================
+# book-video-factory — skill source repo (curated for GitHub)
+# Only skill-related SOURCE files are tracked.
+# Generated outputs, media, and large binaries are excluded.
+# All directory excludes are anchored to repo root ("/") so they
+# do NOT match skill/runtime/book_video_factory or skill/scripts.
+# ============================================================
+
+# ---- Generated / per-project outputs (never source) ----
+/content-input/
+/workspace/
+/qa/
+/book_video_warehouse/
+/FINAL_BLIND_TEST/
+/HBG_PARITY_CODEX_UPGRADE_PACK/
+/hbg-life-simulation-main.zip
+/FINAL_AUDIT_REPORT.md
+
+# ---- Redundant top-level deploy mirror (skill/runtime carries the code) ----
+/book_video_factory/
+
+# ---- Top-level dev verification scripts (not part of the skill) ----
+/scripts/
+
+# ---- Project knowledge docs (supplementary, not the skill) ----
+/docs/
+
+# ---- Media / binary (skill repo is text + code + required font) ----
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.webp
+*.mp4
+*.mov
+*.webm
+*.mkv
+*.avi
+*.zip
+*.tar.*
+*.bin
+*.pt
+*.onnx
+*.ckpt
+*.pth
+*.wav
+*.mp3
+
+# ---- Python cache ----
+__pycache__/
+*.pyc
+*.pyo
+*.pytest_cache/
+*.egg-info/
+
+# ---- Env / OS / editor ----
+.venv/
+venv/
+env/
+/models/
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
+*.log

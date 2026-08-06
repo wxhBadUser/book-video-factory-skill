@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/schemas/release_profile.schema.json",
+  "title": "Book Video Release Profile",
+  "type": "object",
+  "required": ["schema_version", "profile_id", "renderer", "workflow_kind", "canvas", "script", "visual", "audio", "video"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "profile_id": {"enum": ["book-classic-narrator-hbg-16x9-v1", "book-classic-narrator-hbg-9x16-v1"]},
+    "renderer": {"const": "hbg-streaming-ffmpeg"},
+    "workflow_kind": {"const": "classic_narrator_hbg"},
+    "canvas": {
+      "type": "object",
+      "required": ["width", "height", "fps", "aspect_ratio"],
+      "oneOf": [
+        {"properties": {"width": {"const": 1920}, "height": {"const": 1080}, "aspect_ratio": {"const": "16:9"}}},
+        {"properties": {"width": {"const": 1080}, "height": {"const": 1920}, "aspect_ratio": {"const": "9:16"}}}
+      ],
+      "properties": {
+        "width": {"type": "integer"},
+        "height": {"type": "integer"},
+        "fps": {"const": 30},
+        "aspect_ratio": {"type": "string"}
+      }
+    },
+    "script": {
+      "type": "object",
+      "required": ["language_mode", "contract"],
+      "properties": {
+        "language_mode": {"const": "zh"},
+        "contract": {"const": "script.narrator-essay.v1"}
+      }
+    },
+    "audio": {
+      "type": "object",
+      "required": ["provider", "timing_source"],
+      "properties": {
+        "provider": {"const": "edge-tts"},
+        "timing_source": {"const": "edge-vtt"}
+      }
+    },
+    "video": {
+      "type": "object",
+      "required": ["preview_renderer", "master_renderer"],
+      "properties": {
+        "preview_renderer": {"const": "hbg-hyperframes"},
+        "master_renderer": {"const": "hbg-streaming-ffmpeg"}
+      }
+    },
+    "visual": {"type": "object"}
+  },
+  "additionalProperties": true
+}

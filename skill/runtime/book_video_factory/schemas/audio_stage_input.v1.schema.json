@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Audio Stage Input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_id",
+    "provider",
+    "voice",
+    "body_rate",
+    "lead_rate",
+    "reveal_rate",
+    "pitch",
+    "lead_text",
+    "reveal_text",
+    "caption_min_chars",
+    "caption_max_chars",
+    "caption_min_duration",
+    "lead_start",
+    "flash_gap_after_lead",
+    "flash_duration",
+    "reveal_hold",
+    "body_gap",
+    "body_mode",
+    "bindings"
+  ]
+}

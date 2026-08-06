@@ -1,0 +1,153 @@
+{
+  "schema_version": "creative-decision.v1",
+  "book_id": "old-man-and-the-sea",
+  "candidate_routes": [
+    {
+      "route_id": "route-1",
+      "click_question": "连续失败八十四天，还要不要再出海？",
+      "deep_thesis": "尊严是在失败中仍然选择行动",
+      "narrative_engine": "first_person_growth",
+      "fate_evidence_ids": [
+        "EV001",
+        "EV002",
+        "EV003",
+        "EV004",
+        "EV005",
+        "EV006",
+        "EV007",
+        "EV008",
+        "EV009",
+        "EV010"
+      ],
+      "midpoint_question": "路线1在大鱼咬钩后如何重新开题？",
+      "reinterpretation_evidence_ids": [
+        "EV008",
+        "EV009",
+        "EV010"
+      ],
+      "narrator_persona": "克制讲述者",
+      "main_concept": "行动尊严",
+      "target_emotional_curve": [
+        {
+          "section": "hook",
+          "emotion": "curiosity"
+        }
+      ],
+      "visual_potential": 5,
+      "ending_image": "老人梦见狮子",
+      "recommended_duration_minutes": 18,
+      "scores": {
+        "audience_resonance": 5,
+        "textual_evidence": 5,
+        "emotional_range": 5,
+        "midpoint_power": 5,
+        "reinterpretation_power": 5,
+        "modern_mapping": 5,
+        "visual_potential": 5,
+        "originality": 5,
+        "character_complexity": 5,
+        "ending_specificity": 5
+      }
+    },
+    {
+      "route_id": "route-2",
+      "click_question": "人能不能真正战胜命运？",
+      "deep_thesis": "人与自然的搏斗暴露的是自我边界",
+      "narrative_engine": "moral_debate",
+      "fate_evidence_ids": [
+        "EV002",
+        "EV003",
+        "EV004",
+        "EV005",
+        "EV006",
+        "EV007",
+        "EV008",
+        "EV009",
+        "EV010",
+        "EV011"
+      ],
+      "midpoint_question": "路线2在大鱼咬钩后如何重新开题？",
+      "reinterpretation_evidence_ids": [
+        "EV009",
+        "EV010",
+        "EV011"
+      ],
+      "narrator_persona": "冷静辩论者",
+      "main_concept": "人的边界",
+      "target_emotional_curve": [
+        {
+          "section": "hook",
+          "emotion": "curiosity"
+        }
+      ],
+      "visual_potential": 4,
+      "ending_image": "鱼骨留在岸边",
+      "recommended_duration_minutes": 18,
+      "scores": {
+        "audience_resonance": 4,
+        "textual_evidence": 4,
+        "emotional_range": 4,
+        "midpoint_power": 4,
+        "reinterpretation_power": 4,
+        "modern_mapping": 4,
+        "visual_potential": 4,
+        "originality": 4,
+        "character_complexity": 4,
+        "ending_specificity": 4
+      }
+    },
+    {
+      "route_id": "route-3",
+      "click_question": "失去成果以后，努力还有意义吗？",
+      "deep_thesis": "行动塑造的人比带回的猎物更持久",
+      "narrative_engine": "psychological_mystery",
+      "fate_evidence_ids": [
+        "EV003",
+        "EV004",
+        "EV005",
+        "EV006",
+        "EV007",
+        "EV008",
+        "EV009",
+        "EV010",
+        "EV011",
+        "EV012"
+      ],
+      "midpoint_question": "路线3在大鱼咬钩后如何重新开题？",
+      "reinterpretation_evidence_ids": [
+        "EV010",
+        "EV011",
+        "EV012"
+      ],
+      "narrator_persona": "温柔侦探",
+      "main_concept": "努力的残留",
+      "target_emotional_curve": [
+        {
+          "section": "hook",
+          "emotion": "curiosity"
+        }
+      ],
+      "visual_potential": 3,
+      "ending_image": "空船回港",
+      "recommended_duration_minutes": 18,
+      "scores": {
+        "audience_resonance": 3,
+        "textual_evidence": 3,
+        "emotional_range": 3,
+        "midpoint_power": 3,
+        "reinterpretation_power": 3,
+        "modern_mapping": 3,
+        "visual_potential": 3,
+        "originality": 3,
+        "character_complexity": 3,
+        "ending_specificity": 3
+      }
+    }
+  ],
+  "selected_route_id": "route-1",
+  "rejected_route_reasons": [
+    "route-2: 现代共鸣较弱",
+    "route-3: 中点动力较弱"
+  ],
+  "recommended_duration_minutes": 18
+}

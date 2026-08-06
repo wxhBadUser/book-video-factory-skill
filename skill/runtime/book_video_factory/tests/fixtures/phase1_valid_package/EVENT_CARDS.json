@@ -1,0 +1,181 @@
+{
+  "schema_version": "event-cards.v1",
+  "cards": [
+    {
+      "event_card_id": "EC001",
+      "anchor_id": "FA001",
+      "scene_location": "墨西哥湾流上的旧木船",
+      "sensory_objects": [
+        "粗麻绳",
+        "盐渍木板"
+      ],
+      "character_actions": [
+        "老人收紧钓线"
+      ],
+      "key_dialogue": "鱼啊，我尊敬你，但我必须杀死你。",
+      "narrator_reaction": "读到这里，我第一次意识到他没有把对手当成战利品。",
+      "hammer_line": "他要证明的不是鱼有多大，而是自己还没有被失败定义。",
+      "next_question": "可当胜利出现，命运会让他完整带回去吗？",
+      "emotion": "克制而紧张",
+      "visual_function": "escalation",
+      "source_ids": [
+        "CH01",
+        "F001"
+      ]
+    },
+    {
+      "event_card_id": "EC002",
+      "anchor_id": "FA002",
+      "scene_location": "墨西哥湾流上的旧木船",
+      "sensory_objects": [
+        "粗麻绳",
+        "盐渍木板"
+      ],
+      "character_actions": [
+        "老人收紧钓线"
+      ],
+      "key_dialogue": "鱼啊，我尊敬你，但我必须杀死你。",
+      "narrator_reaction": "读到这里，我第一次意识到他没有把对手当成战利品。",
+      "hammer_line": "他要证明的不是鱼有多大，而是自己还没有被失败定义。",
+      "next_question": "可当胜利出现，命运会让他完整带回去吗？",
+      "emotion": "克制而紧张",
+      "visual_function": "escalation",
+      "source_ids": [
+        "CH02",
+        "F002"
+      ]
+    },
+    {
+      "event_card_id": "EC003",
+      "anchor_id": "FA003",
+      "scene_location": "墨西哥湾流上的旧木船",
+      "sensory_objects": [
+        "粗麻绳",
+        "盐渍木板"
+      ],
+      "character_actions": [
+        "老人收紧钓线"
+      ],
+      "key_dialogue": "鱼啊，我尊敬你，但我必须杀死你。",
+      "narrator_reaction": "读到这里，我第一次意识到他没有把对手当成战利品。",
+      "hammer_line": "他要证明的不是鱼有多大，而是自己还没有被失败定义。",
+      "next_question": "可当胜利出现，命运会让他完整带回去吗？",
+      "emotion": "克制而紧张",
+      "visual_function": "escalation",
+      "source_ids": [
+        "CH03",
+        "F003"
+      ]
+    },
+    {
+      "event_card_id": "EC004",
+      "anchor_id": "FA004",
+      "scene_location": "墨西哥湾流上的旧木船",
+      "sensory_objects": [
+        "粗麻绳",
+        "盐渍木板"
+      ],
+      "character_actions": [
+        "老人收紧钓线"
+      ],
+      "key_dialogue": "鱼啊，我尊敬你，但我必须杀死你。",
+      "narrator_reaction": "读到这里，我第一次意识到他没有把对手当成战利品。",
+      "hammer_line": "他要证明的不是鱼有多大，而是自己还没有被失败定义。",
+      "next_question": "可当胜利出现，命运会让他完整带回去吗？",
+      "emotion": "克制而紧张",
+      "visual_function": "escalation",
+      "source_ids": [
+        "CH04",
+        "F004"
+      ]
+    },
+    {
+      "event_card_id": "EC005",
+      "anchor_id": "FA005",
+      "scene_location": "墨西哥湾流上的旧木船",
+      "sensory_objects": [
+        "粗麻绳",
+        "盐渍木板"
+      ],
+      "character_actions": [
+        "老人收紧钓线"
+      ],
+      "key_dialogue": "鱼啊，我尊敬你，但我必须杀死你。",
+      "narrator_reaction": "读到这里，我第一次意识到他没有把对手当成战利品。",
+      "hammer_line": "他要证明的不是鱼有多大，而是自己还没有被失败定义。",
+      "next_question": "可当胜利出现，命运会让他完整带回去吗？",
+      "emotion": "克制而紧张",
+      "visual_function": "escalation",
+      "source_ids": [
+        "CH05",
+        "F005"
+      ]
+    },
+    {
+      "event_card_id": "EC006",
+      "anchor_id": "FA006",
+      "scene_location": "墨西哥湾流上的旧木船",
+      "sensory_objects": [
+        "粗麻绳",
+        "盐渍木板"
+      ],
+      "character_actions": [
+        "老人收紧钓线"
+      ],
+      "key_dialogue": "鱼啊，我尊敬你，但我必须杀死你。",
+      "narrator_reaction": "读到这里，我第一次意识到他没有把对手当成战利品。",
+      "hammer_line": "他要证明的不是鱼有多大，而是自己还没有被失败定义。",
+      "next_question": "可当胜利出现，命运会让他完整带回去吗？",
+      "emotion": "克制而紧张",
+      "visual_function": "escalation",
+      "source_ids": [
+        "CH06",
+        "F006"
+      ]
+    },
+    {
+      "event_card_id": "EC007",
+      "anchor_id": "FA007",
+      "scene_location": "墨西哥湾流上的旧木船",
+      "sensory_objects": [
+        "粗麻绳",
+        "盐渍木板"
+      ],
+      "character_actions": [
+        "老人收紧钓线"
+      ],
+      "key_dialogue": "鱼啊，我尊敬你，但我必须杀死你。",
+      "narrator_reaction": "读到这里，我第一次意识到他没有把对手当成战利品。",
+      "hammer_line": "他要证明的不是鱼有多大，而是自己还没有被失败定义。",
+      "next_question": "可当胜利出现，命运会让他完整带回去吗？",
+      "emotion": "克制而紧张",
+      "visual_function": "escalation",
+      "source_ids": [
+        "CH07",
+        "F007"
+      ]
+    },
+    {
+      "event_card_id": "EC008",
+      "anchor_id": "FA008",
+      "scene_location": "墨西哥湾流上的旧木船",
+      "sensory_objects": [
+        "粗麻绳",
+        "盐渍木板"
+      ],
+      "character_actions": [
+        "老人收紧钓线"
+      ],
+      "key_dialogue": "鱼啊，我尊敬你，但我必须杀死你。",
+      "narrator_reaction": "读到这里，我第一次意识到他没有把对手当成战利品。",
+      "hammer_line": "他要证明的不是鱼有多大，而是自己还没有被失败定义。",
+      "next_question": "可当胜利出现，命运会让他完整带回去吗？",
+      "emotion": "克制而紧张",
+      "visual_function": "escalation",
+      "source_ids": [
+        "CH08",
+        "F008"
+      ]
+    }
+  ]
+}

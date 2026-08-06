@@ -1,0 +1,20 @@
+{
+  "schema_version": "reference-visual-profile.v1",
+  "reference_id": "REF_MADAME_BOVARY",
+  "work_title": "包法利夫人",
+  "visual_language": "浪漫奢华、粉紫花卉、丝绸珠宝、美化幻想与现实落差",
+  "metrics": {
+    "shot_count": 236,
+    "mean_luma": 79.186,
+    "mean_contrast": 45.789,
+    "dark_share": 0.398,
+    "highlight_share": 0.015,
+    "warm_tendency": 0.147
+  },
+  "roles": {
+    "style_only": true,
+    "identity_reference_allowed": false,
+    "production_asset_allowed": false,
+    "exact_composition_copy_allowed": false
+  }
+}

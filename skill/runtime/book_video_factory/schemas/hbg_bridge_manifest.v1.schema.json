@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hbg_bridge_manifest.v1.schema.json",
+  "title": "HBG Bridge Manifest V1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "release_id",
+    "bridge_digest",
+    "content_package_digest",
+    "release_text_sha256",
+    "hbg_upstream_commit",
+    "approval_event_id",
+    "input_sha256",
+    "output_hashes",
+    "stage_manifest_path",
+    "stage_manifest_sha256",
+    "next_stage_status"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "hbg-bridge-manifest.v1"
+    },
+    "bridge_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "content_package_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "release_text_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "stage_manifest_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "next_stage_status": {
+      "const": "ready_for_visual_anchor_generation"
+    }
+  }
+}

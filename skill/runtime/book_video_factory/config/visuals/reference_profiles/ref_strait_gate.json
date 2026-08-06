@@ -1,0 +1,20 @@
+{
+  "schema_version": "reference-visual-profile.v1",
+  "reference_id": "REF_STRAIT_GATE",
+  "work_title": "窄门",
+  "visual_language": "克制宗教感、烛光、暗绿棕红、前拉斐尔式人物与花卉",
+  "metrics": {
+    "shot_count": 208,
+    "mean_luma": 69.054,
+    "mean_contrast": 46.672,
+    "dark_share": 0.498,
+    "highlight_share": 0.014,
+    "warm_tendency": 0.121
+  },
+  "roles": {
+    "style_only": true,
+    "identity_reference_allowed": false,
+    "production_asset_allowed": false,
+    "exact_composition_copy_allowed": false
+  }
+}

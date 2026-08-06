@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="720" viewBox="0 0 1400 720" role="img" aria-labelledby="title desc">
+  <title id="title">HBG Life Simulation</title>
+  <desc id="desc">A warm editorial banner showing a rapid multi-life opening, a consistent comic protagonist, narration, zoom motion and final video QA.</desc>
+  <defs>
+    <pattern id="grid" width="44" height="44" patternUnits="userSpaceOnUse">
+      <path d="M44 0H0V44" fill="none" stroke="#d8d0c3" stroke-width="1" opacity="0.38"/>
+    </pattern>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#173c3a" flood-opacity="0.18"/>
+    </filter>
+    <linearGradient id="frameBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1d2c34"/>
+      <stop offset="1" stop-color="#4c3028"/>
+    </linearGradient>
+    <clipPath id="storyFrame">
+      <rect x="874" y="112" width="404" height="404" rx="28"/>
+    </clipPath>
+  </defs>
+
+  <rect width="1400" height="720" rx="28" fill="#f4efe4"/>
+  <rect width="1400" height="720" rx="28" fill="url(#grid)"/>
+  <circle cx="1270" cy="86" r="170" fill="#e96e3d" opacity="0.08"/>
+  <circle cx="1030" cy="660" r="220" fill="#32756a" opacity="0.08"/>
+  <path d="M0 610C250 545 430 680 692 610C930 547 1110 558 1400 636V720H0Z" fill="#173c3a" opacity="0.06"/>
+
+  <g transform="translate(86 82)">
+    <rect width="248" height="38" rx="19" fill="#173c3a"/>
+    <text x="124" y="25" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" font-weight="700" fill="#fff9ed" letter-spacing="2">HBG · AGENT SKILL</text>
+
+    <text x="0" y="112" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="67" font-weight="900" fill="#25221f">模拟人生叙事视频</text>
+    <text x="0" y="166" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="24" font-weight="700" fill="#81776d" letter-spacing="1.5">LIFE SIMULATION STORY VIDEO</text>
+
+    <text x="0" y="232" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="25" font-weight="600" fill="#25221f">从中文长文案到统一漫画 IP 的完整成片</text>
+    <text x="0" y="272" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="21" fill="#81776d">快闪开头 · 连续 TTS · 语义字幕 · Zoom / Pan · 最终 MP4 QA</text>
+
+    <g transform="translate(0 326)">
+      <rect width="228" height="74" rx="18" fill="#fff9ed" stroke="#32756a" stroke-width="3"/>
+      <circle cx="40" cy="37" r="19" fill="#32756a"/>
+      <path d="M31 37l6 6 13-15" fill="none" stroke="#fff9ed" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="72" y="31" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="17" font-weight="800" fill="#25221f">默认横屏</text>
+      <text x="72" y="53" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" fill="#81776d">1920×1080</text>
+    </g>
+
+    <g transform="translate(246 326)">
+      <rect width="228" height="74" rx="18" fill="#fff9ed" stroke="#e96e3d" stroke-width="3"/>
+      <path d="M28 48V27M28 27l-8 9M28 27l8 9M52 27v21M52 48l-8-9M52 48l8-9" fill="none" stroke="#e96e3d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="82" y="31" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="17" font-weight="800" fill="#25221f">Zoom / Pan</text>
+      <text x="82" y="53" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" fill="#81776d">STATIC MANGA</text>
+    </g>
+
+    <g transform="translate(492 326)">
+      <rect width="228" height="74" rx="18" fill="#fff9ed" stroke="#25221f" stroke-width="3"/>
+      <path d="M27 43c8-22 14 22 22 0s14 22 22 0" fill="none" stroke="#25221f" stroke-width="4" stroke-linecap="round"/>
+      <text x="88" y="31" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="17" font-weight="800" fill="#25221f">连续旁白</text>
+      <text x="88" y="53" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" fill="#81776d">EDGE TTS</text>
+    </g>
+
+    <g transform="translate(0 435)">
+      <path d="M0 0H720" stroke="#bdb4a7" stroke-width="2"/>
+      <circle cx="12" cy="40" r="12" fill="#e96e3d"/>
+      <circle cx="250" cy="40" r="12" fill="#32756a"/>
+      <circle cx="488" cy="40" r="12" fill="#25221f"/>
+      <path d="M25 40H237M263 40H475M501 40H710" stroke="#81776d" stroke-width="3" stroke-dasharray="8 10"/>
+      <text x="0" y="82" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="17" font-weight="700" fill="#25221f">快闪人生</text>
+      <text x="222" y="82" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="17" font-weight="700" fill="#25221f">漫画叙事</text>
+      <text x="458" y="82" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="17" font-weight="700" fill="#25221f">最终 QA</text>
+    </g>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="846" y="82" width="460" height="500" rx="42" fill="#25221f"/>
+    <rect x="874" y="112" width="404" height="404" rx="28" fill="url(#frameBg)"/>
+  </g>
+
+  <g clip-path="url(#storyFrame)">
+    <rect x="874" y="112" width="404" height="404" fill="url(#frameBg)"/>
+    <path d="M874 408C960 350 1044 456 1142 388C1202 346 1242 360 1278 340V516H874Z" fill="#121a20"/>
+    <rect x="904" y="140" width="120" height="70" rx="12" fill="#d7a36c" opacity="0.86"/>
+    <rect x="1035" y="140" width="104" height="70" rx="12" fill="#6d8992" opacity="0.82"/>
+    <rect x="1150" y="140" width="98" height="70" rx="12" fill="#aa6f62" opacity="0.82"/>
+    <path d="M904 225H1248" stroke="#fff9ed" stroke-width="3" opacity="0.28"/>
+
+    <circle cx="1070" cy="292" r="51" fill="#d5b299"/>
+    <path d="M1017 282c12-62 100-72 112-3c-27-22-69-28-112 3Z" fill="#15191d"/>
+    <path d="M1014 355c28-35 89-39 120 0l34 104H980Z" fill="#eee8df"/>
+    <path d="M1014 380l-78 54M1134 380l74 52" stroke="#eee8df" stroke-width="28" stroke-linecap="round"/>
+    <path d="M994 459H1149" stroke="#161b20" stroke-width="16" stroke-linecap="round"/>
+
+    <g transform="translate(896 468)">
+      <rect width="360" height="62" rx="14" fill="#171312" opacity="0.92"/>
+      <path d="M0 0H360" stroke="#ef5360" stroke-width="4"/>
+      <text x="180" y="38" text-anchor="middle" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="21" font-weight="800" fill="#fff9ed">今天体验的人生副本是……</text>
+    </g>
+  </g>
+
+  <g transform="translate(880 604)">
+    <circle cx="18" cy="18" r="18" fill="#e96e3d"/>
+    <path d="M12 18l5 5 10-12" fill="none" stroke="#fff9ed" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="48" y="24" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" font-weight="700" fill="#25221f">IP CONSISTENCY</text>
+    <circle cx="218" cy="18" r="18" fill="#32756a"/>
+    <path d="M212 18l5 5 10-12" fill="none" stroke="#fff9ed" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="248" y="24" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" font-weight="700" fill="#25221f">FINAL MP4</text>
+  </g>
+</svg>

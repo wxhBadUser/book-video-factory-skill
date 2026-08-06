@@ -1,0 +1,245 @@
+{
+  "schema_version": "fate-anchors.v1",
+  "book_id": "old-man-and-the-sea",
+  "candidate_event_count": 20,
+  "anchors": [
+    {
+      "anchor_id": "FA001",
+      "source_event_id": "EV001",
+      "chapter_refs": [
+        "CH01"
+      ],
+      "event_summary": "老人面对第1次命运选择",
+      "character_desire": "证明自己仍然是一个真正的渔夫",
+      "choice": "继续独自出海",
+      "result": "他离海岸越来越远",
+      "cost": "体力、孤独和失去援助的风险",
+      "functions": [
+        "changes_fate",
+        "reveals_character",
+        "strong_visual"
+      ],
+      "treatment": "expand",
+      "source_ids": [
+        "CH01",
+        "F001"
+      ]
+    },
+    {
+      "anchor_id": "FA002",
+      "source_event_id": "EV002",
+      "chapter_refs": [
+        "CH02"
+      ],
+      "event_summary": "老人面对第2次命运选择",
+      "character_desire": "证明自己仍然是一个真正的渔夫",
+      "choice": "继续独自出海",
+      "result": "他离海岸越来越远",
+      "cost": "体力、孤独和失去援助的风险",
+      "functions": [
+        "changes_fate",
+        "reveals_character",
+        "strong_visual"
+      ],
+      "treatment": "expand",
+      "source_ids": [
+        "CH02",
+        "F002"
+      ]
+    },
+    {
+      "anchor_id": "FA003",
+      "source_event_id": "EV003",
+      "chapter_refs": [
+        "CH03"
+      ],
+      "event_summary": "老人面对第3次命运选择",
+      "character_desire": "证明自己仍然是一个真正的渔夫",
+      "choice": "继续独自出海",
+      "result": "他离海岸越来越远",
+      "cost": "体力、孤独和失去援助的风险",
+      "functions": [
+        "changes_fate",
+        "reveals_character",
+        "strong_visual"
+      ],
+      "treatment": "expand",
+      "source_ids": [
+        "CH03",
+        "F003"
+      ]
+    },
+    {
+      "anchor_id": "FA004",
+      "source_event_id": "EV004",
+      "chapter_refs": [
+        "CH04"
+      ],
+      "event_summary": "老人面对第4次命运选择",
+      "character_desire": "证明自己仍然是一个真正的渔夫",
+      "choice": "继续独自出海",
+      "result": "他离海岸越来越远",
+      "cost": "体力、孤独和失去援助的风险",
+      "functions": [
+        "changes_fate",
+        "reveals_character",
+        "strong_visual"
+      ],
+      "treatment": "expand",
+      "source_ids": [
+        "CH04",
+        "F004"
+      ]
+    },
+    {
+      "anchor_id": "FA005",
+      "source_event_id": "EV005",
+      "chapter_refs": [
+        "CH05"
+      ],
+      "event_summary": "老人面对第5次命运选择",
+      "character_desire": "证明自己仍然是一个真正的渔夫",
+      "choice": "继续独自出海",
+      "result": "他离海岸越来越远",
+      "cost": "体力、孤独和失去援助的风险",
+      "functions": [
+        "changes_fate",
+        "reveals_character",
+        "strong_visual"
+      ],
+      "treatment": "expand",
+      "source_ids": [
+        "CH05",
+        "F005"
+      ]
+    },
+    {
+      "anchor_id": "FA006",
+      "source_event_id": "EV006",
+      "chapter_refs": [
+        "CH06"
+      ],
+      "event_summary": "老人面对第6次命运选择",
+      "character_desire": "证明自己仍然是一个真正的渔夫",
+      "choice": "继续独自出海",
+      "result": "他离海岸越来越远",
+      "cost": "体力、孤独和失去援助的风险",
+      "functions": [
+        "changes_fate",
+        "reveals_character",
+        "strong_visual"
+      ],
+      "treatment": "expand",
+      "source_ids": [
+        "CH06",
+        "F006"
+      ]
+    },
+    {
+      "anchor_id": "FA007",
+      "source_event_id": "EV007",
+      "chapter_refs": [
+        "CH07"
+      ],
+      "event_summary": "老人面对第7次命运选择",
+      "character_desire": "证明自己仍然是一个真正的渔夫",
+      "choice": "继续独自出海",
+      "result": "他离海岸越来越远",
+      "cost": "体力、孤独和失去援助的风险",
+      "functions": [
+        "changes_fate",
+        "reveals_character",
+        "strong_visual"
+      ],
+      "treatment": "expand",
+      "source_ids": [
+        "CH07",
+        "F007"
+      ]
+    },
+    {
+      "anchor_id": "FA008",
+      "source_event_id": "EV008",
+      "chapter_refs": [
+        "CH08"
+      ],
+      "event_summary": "老人面对第8次命运选择",
+      "character_desire": "证明自己仍然是一个真正的渔夫",
+      "choice": "继续独自出海",
+      "result": "他离海岸越来越远",
+      "cost": "体力、孤独和失去援助的风险",
+      "functions": [
+        "changes_fate",
+        "reveals_character",
+        "strong_visual"
+      ],
+      "treatment": "expand",
+      "source_ids": [
+        "CH08",
+        "F008"
+      ]
+    }
+  ],
+  "omission_map": [
+    {
+      "event_id": "EV009",
+      "treatment": "compress",
+      "reason": "保留因果并压缩重复行动"
+    },
+    {
+      "event_id": "EV010",
+      "treatment": "compress",
+      "reason": "保留因果并压缩重复行动"
+    },
+    {
+      "event_id": "EV011",
+      "treatment": "compress",
+      "reason": "保留因果并压缩重复行动"
+    },
+    {
+      "event_id": "EV012",
+      "treatment": "compress",
+      "reason": "保留因果并压缩重复行动"
+    },
+    {
+      "event_id": "EV013",
+      "treatment": "compress",
+      "reason": "保留因果并压缩重复行动"
+    },
+    {
+      "event_id": "EV014",
+      "treatment": "compress",
+      "reason": "保留因果并压缩重复行动"
+    },
+    {
+      "event_id": "EV015",
+      "treatment": "compress",
+      "reason": "保留因果并压缩重复行动"
+    },
+    {
+      "event_id": "EV016",
+      "treatment": "compress",
+      "reason": "保留因果并压缩重复行动"
+    },
+    {
+      "event_id": "EV017",
+      "treatment": "compress",
+      "reason": "保留因果并压缩重复行动"
+    },
+    {
+      "event_id": "EV018",
+      "treatment": "compress",
+      "reason": "保留因果并压缩重复行动"
+    },
+    {
+      "event_id": "EV019",
+      "treatment": "compress",
+      "reason": "保留因果并压缩重复行动"
+    },
+    {
+      "event_id": "EV020",
+      "treatment": "compress",
+      "reason": "保留因果并压缩重复行动"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"visual_anchor_approval.v1.schema.json",
+  "type":"object","additionalProperties":false,
+  "required":["schema_version","release_id","review_digest","visual_stage_digest","decision","reviewer","reviewed_at","note","decision_input_sha256","review_checks","subjects","approval_event","next_stage_status"],
+  "properties":{
+    "schema_version":{"const":"visual-anchor-approval.v1"},
+    "release_id":{"type":"string","minLength":1},
+    "review_digest":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "visual_stage_digest":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "decision":{"enum":["approved","rejected"]},
+    "reviewer":{"type":"string","minLength":1},
+    "reviewed_at":{"type":"string","minLength":1},
+    "note":{"type":"string"},
+    "decision_input_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "review_checks":{"type":"object"},
+    "subjects":{"type":"array","minItems":7,"maxItems":7},
+    "approval_event":{"type":"object"},
+    "next_stage_status":{"enum":["ready_for_edge_tts","blocked_by_visual_rejection"]}
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "mix_calibration.v1.schema.json",
+  "type": "object",
+  "required": [
+    "schema_version", "calibration_id", "release_id", "render_input_path", "render_input_sha256",
+    "bgm_source_path", "bgm_source_sha256", "opening_preview_manifest_sha256", "preview_path",
+    "preview_sha256", "hbg_style_sha256", "mix_mode", "ducking", "gain_linear", "gain_db",
+    "gain_step_db", "source_probe", "source_first_20_seconds_probe", "preview_duration_seconds",
+    "preview_integrated_lufs", "encoded_true_peak_dbtp", "true_peak_limit_dbtp", "recorded_at",
+    "next_stage_status"
+  ],
+  "properties": {
+    "schema_version": {"const": "mix-calibration.v1"},
+    "calibration_id": {"type": "string", "pattern": "^[0-9a-f]{20}$"},
+    "release_id": {"type": "string", "minLength": 1},
+    "render_input_path": {"type": "string", "minLength": 1},
+    "render_input_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "bgm_source_path": {"type": "string", "minLength": 1},
+    "bgm_source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "opening_preview_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "preview_path": {"type": "string", "minLength": 1},
+    "preview_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "hbg_style_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "mix_mode": {"const": "fixed"},
+    "ducking": {"const": false},
+    "gain_linear": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+    "gain_db": {"type": "number", "maximum": 0},
+    "gain_step_db": {"type": ["number", "null"], "minimum": 0, "maximum": 4},
+    "source_probe": {"$ref": "#/$defs/probe"},
+    "source_first_20_seconds_probe": {"$ref": "#/$defs/probe"},
+    "preview_duration_seconds": {"type": "number", "minimum": 15, "maximum": 20},
+    "preview_integrated_lufs": {"type": "number"},
+    "encoded_true_peak_dbtp": {"type": "number", "maximum": -3},
+    "true_peak_limit_dbtp": {"const": -3},
+    "recorded_at": {"type": "string", "minLength": 1},
+    "next_stage_status": {"const": "awaiting_opening_mix_approval"}
+  },
+  "$defs": {
+    "probe": {
+      "type": "object",
+      "required": ["duration_seconds", "integrated_lufs", "true_peak_dbtp"],
+      "properties": {
+        "duration_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "integrated_lufs": {"type": "number"},
+        "true_peak_dbtp": {"type": "number"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

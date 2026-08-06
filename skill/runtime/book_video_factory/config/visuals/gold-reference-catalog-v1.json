@@ -1,0 +1,165 @@
+{
+  "schema_version": "gold-reference-catalog.v1",
+  "catalog_id": "six-classic-video-visual-evidence-v1",
+  "kernel_id": "literary-cinematic-realism-v1",
+  "entries": [
+    {
+      "reference_id": "REF_BEL_AMI",
+      "work_title": "漂亮朋友",
+      "path": "docs/visual-upgrade-input/contact_sheets/#U6f02#U4eae#U670b#U53cb_allshots.jpg",
+      "profile": "book_video_factory/config/visuals/reference_profiles/ref_bel_ami.json",
+      "sha256": "0d4bf6680eed1ae183fae0220fb8be51b788c8ea456ffba2660649f29f5f3392",
+      "width": 3280,
+      "height": 1410,
+      "shot_count": 291,
+      "metrics": {
+        "shot_count": 291,
+        "mean_luma": 72.318,
+        "mean_contrast": 48.161,
+        "dark_share": 0.477,
+        "highlight_share": 0.019,
+        "warm_tendency": 0.123
+      },
+      "visual_language": "巴黎美好时代、暗金红棕、高阶层华丽感、写实肖像与古典油画",
+      "roles": {
+        "style_only": true,
+        "identity_reference_allowed": false,
+        "production_asset_allowed": false,
+        "exact_composition_copy_allowed": false
+      },
+      "profile_sha256": "42f9edaf8a7e5a68c94d0c06ddd8489c1901cfd12d87f719f925e47cbd564b2e"
+    },
+    {
+      "reference_id": "REF_STRAIT_GATE",
+      "work_title": "窄门",
+      "path": "docs/visual-upgrade-input/contact_sheets/#U7a84#U95e8_allshots.jpg",
+      "profile": "book_video_factory/config/visuals/reference_profiles/ref_strait_gate.json",
+      "sha256": "d60bd644dedd5b134c7862ffb2dd82fa526f602f37f5c8bf25d91df2455ea191",
+      "width": 3280,
+      "height": 1034,
+      "shot_count": 208,
+      "metrics": {
+        "shot_count": 208,
+        "mean_luma": 69.054,
+        "mean_contrast": 46.672,
+        "dark_share": 0.498,
+        "highlight_share": 0.014,
+        "warm_tendency": 0.121
+      },
+      "visual_language": "克制宗教感、烛光、暗绿棕红、前拉斐尔式人物与花卉",
+      "roles": {
+        "style_only": true,
+        "identity_reference_allowed": false,
+        "production_asset_allowed": false,
+        "exact_composition_copy_allowed": false
+      },
+      "profile_sha256": "e9044b8f0c291384975d3e4d85da924c07a911f5d38f2e62edacaa84acd67e1d"
+    },
+    {
+      "reference_id": "REF_JANE_EYRE",
+      "work_title": "简爱",
+      "path": "docs/visual-upgrade-input/contact_sheets/#U7b80#U7231_allshots.jpg",
+      "profile": "book_video_factory/config/visuals/reference_profiles/ref_jane_eyre.json",
+      "sha256": "19a37e5267e0d7987b6f9f23ada4019c905bee3845531e72b86285b8a5582c66",
+      "width": 3280,
+      "height": 1692,
+      "shot_count": 344,
+      "metrics": {
+        "shot_count": 344,
+        "mean_luma": 67.896,
+        "mean_contrast": 44.101,
+        "dark_share": 0.497,
+        "highlight_share": 0.012,
+        "warm_tendency": 0.122
+      },
+      "visual_language": "哥特写实、火与雾、暗红黑棕、荒原冷色与室内暖色对冲",
+      "roles": {
+        "style_only": true,
+        "identity_reference_allowed": false,
+        "production_asset_allowed": false,
+        "exact_composition_copy_allowed": false
+      },
+      "profile_sha256": "a47804283ec1240dc7eaa74fdf52649458b2363e4f1a15986a8c3c6a8f1452f3"
+    },
+    {
+      "reference_id": "REF_LITTLE_PRINCE",
+      "work_title": "小王子",
+      "path": "docs/visual-upgrade-input/contact_sheets/#U5c0f#U738b#U5b50_allshots.jpg",
+      "profile": "book_video_factory/config/visuals/reference_profiles/ref_little_prince.json",
+      "sha256": "e45b40d2aaf5c1ebd786067c5bcbae99e39f0b075064afaf3653992d4db2a8d2",
+      "width": 3280,
+      "height": 940,
+      "shot_count": 200,
+      "metrics": {
+        "shot_count": 200,
+        "mean_luma": 54.029,
+        "mean_contrast": 47.31,
+        "dark_share": 0.608,
+        "highlight_share": 0.014,
+        "warm_tendency": 0.1
+      },
+      "visual_language": "梦境写实、深蓝金红、柔光、角色锚定、宇宙与玫瑰反复",
+      "roles": {
+        "style_only": true,
+        "identity_reference_allowed": false,
+        "production_asset_allowed": false,
+        "exact_composition_copy_allowed": false
+      },
+      "profile_sha256": "62f5a90f1e20334a03232710e7badf1daf144ecb1372402ab34e9bb7182b2603"
+    },
+    {
+      "reference_id": "REF_MADAME_BOVARY",
+      "work_title": "包法利夫人",
+      "path": "docs/visual-upgrade-input/contact_sheets/#U5305#U6cd5#U5229#U592b#U4eba_allshots.jpg",
+      "profile": "book_video_factory/config/visuals/reference_profiles/ref_madame_bovary.json",
+      "sha256": "1563c2cddf50216b929dda10f20e32de2bb8afee7832eacf9dff950c4777cd95",
+      "width": 3280,
+      "height": 1128,
+      "shot_count": 236,
+      "metrics": {
+        "shot_count": 236,
+        "mean_luma": 79.186,
+        "mean_contrast": 45.789,
+        "dark_share": 0.398,
+        "highlight_share": 0.015,
+        "warm_tendency": 0.147
+      },
+      "visual_language": "浪漫奢华、粉紫花卉、丝绸珠宝、美化幻想与现实落差",
+      "roles": {
+        "style_only": true,
+        "identity_reference_allowed": false,
+        "production_asset_allowed": false,
+        "exact_composition_copy_allowed": false
+      },
+      "profile_sha256": "bcb264dbbbd2878e9835b51bfe173bebd545ff0865dbfe1e8b34fdaf611d6cbf"
+    },
+    {
+      "reference_id": "REF_MOON_SIXPENCE",
+      "work_title": "月亮与六便士",
+      "path": "docs/visual-upgrade-input/contact_sheets/#U6708#U4eae#U4e0e#U516d#U4fbf#U58eb_allshots.jpg",
+      "profile": "book_video_factory/config/visuals/reference_profiles/ref_moon_sixpence.json",
+      "sha256": "0880a6f098224f938d64fbc01abfb05527bffcec061b20371c1abf6b10e5249e",
+      "width": 3280,
+      "height": 1410,
+      "shot_count": 285,
+      "metrics": {
+        "shot_count": 285,
+        "mean_luma": 83.09,
+        "mean_contrast": 42.679,
+        "dark_share": 0.327,
+        "highlight_share": 0.014,
+        "warm_tendency": 0.154
+      },
+      "visual_language": "后印象派、热带装饰、赭石青绿珊瑚、纹样与画布质感",
+      "roles": {
+        "style_only": true,
+        "identity_reference_allowed": false,
+        "production_asset_allowed": false,
+        "exact_composition_copy_allowed": false
+      },
+      "profile_sha256": "b43bf742e3192b435b5578e4e4eccf95aed952c7cc291af742a2fefe8d36d3b4"
+    }
+  ],
+  "kernel_path": "book_video_factory/config/visuals/literary-cinematic-realism-v1.json",
+  "kernel_sha256": "829e30a55afa95d6ddca288463468e7b2a0d5180888bd7b5d0c35eedee66185d"
+}

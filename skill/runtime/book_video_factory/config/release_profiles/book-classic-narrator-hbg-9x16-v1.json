@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "profile_id": "book-classic-narrator-hbg-9x16-v1",
+  "profile_revision": 1,
+  "renderer": "hbg-streaming-ffmpeg",
+  "workflow_kind": "classic_narrator_hbg",
+  "canvas": {"width": 1080, "height": 1920, "fps": 30, "aspect_ratio": "9:16"},
+  "script": {
+    "language_mode": "zh",
+    "line_count_policy": "variable",
+    "contract": "script.narrator-essay.v1",
+    "target_duration_seconds": {"min": 720, "max": 1320}
+  },
+  "visual": {
+    "scene_count_policy": "manifest",
+    "scene_format": "mixed",
+    "asset_manifest": "STORYBOARD.json",
+    "per_book_visual_profile_required": true,
+    "supports_2x2_sheets": true,
+    "high_risk_single_required": true
+  },
+  "typography": {
+    "title_safe_margin_x_px": 75,
+    "title_max_width_px": 930,
+    "title_max_lines": 2,
+    "subtitle_font_size_px": 48,
+    "subtitle_safe_margin_x_px": 70,
+    "subtitle_safe_margin_bottom_px": 280,
+    "overflow_policy": "fail"
+  },
+  "audio": {
+    "codec": "aac",
+    "sample_rate_hz": 48000,
+    "provider": "edge-tts",
+    "timing_source": "edge-vtt",
+    "bgm_mode": "fixed-baseline",
+    "narration_priority": true,
+    "true_peak_headroom_db": 3.0
+  },
+  "video": {
+    "codec": "h264",
+    "pixel_format": "yuv420p",
+    "frame_rate_policy": "constant_30fps",
+    "preview_renderer": "hbg-hyperframes",
+    "master_renderer": "hbg-streaming-ffmpeg",
+    "generated_audio_policy": "strip"
+  }
+}

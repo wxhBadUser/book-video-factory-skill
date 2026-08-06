@@ -1,0 +1,82 @@
+{
+  "schema_version": "1.0",
+  "profile_id": "book-classic-narrator-hbg-16x9-v1",
+  "profile_revision": 1,
+  "renderer": "hbg-streaming-ffmpeg",
+  "workflow_kind": "classic_narrator_hbg",
+  "canvas": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "aspect_ratio": "16:9"
+  },
+  "script": {
+    "language_mode": "zh",
+    "line_count_policy": "variable",
+    "contract": "script.narrator-essay.v1",
+    "target_duration_seconds": {"min": 720, "max": 1320},
+    "narrator_share": {"min": 0.85, "max": 0.95},
+    "dialogue_share": {"min": 0.05, "max": 0.15},
+    "speaker_count_max": 1,
+    "main_concept_count_max": 1,
+    "requires_midpoint_requestion": true,
+    "requires_evidence_reinterpretation": true,
+    "requires_audit_and_release_versions": true
+  },
+  "narrative": {
+    "candidate_event_count": {"min": 20, "max": 40},
+    "fate_anchor_count": {"min": 8, "max": 12},
+    "competing_routes": 3,
+    "midpoint_position_percent": {"min": 40, "max": 55},
+    "speed_contract_cpm": {
+      "average": {"min": 220, "max": 245},
+      "hook": {"min": 245, "max": 285},
+      "narrative": {"min": 225, "max": 250},
+      "confession_death_reinterpretation": {"min": 190, "max": 225},
+      "theory": {"min": 210, "max": 235},
+      "final_line": {"min": 185, "max": 215}
+    }
+  },
+  "visual": {
+    "scene_count_policy": "manifest",
+    "scene_format": "mixed",
+    "asset_manifest": "STORYBOARD.json",
+    "per_book_visual_profile_required": true,
+    "median_shot_seconds": {"min": 3.2, "max": 5.5},
+    "hard_max_shot_seconds": 16.0,
+    "supports_2x2_sheets": true,
+    "high_risk_single_required": true
+  },
+  "typography": {
+    "title_safe_margin_x_px": 120,
+    "title_max_width_px": 1680,
+    "title_max_lines": 2,
+    "title_max_font_size_px": 116,
+    "title_min_font_size_px": 58,
+    "title_fit_strategy": "semantic_two_line_then_shrink",
+    "subtitle_font_size_px": 48,
+    "subtitle_stroke_width_px": 12,
+    "subtitle_safe_margin_x_px": 110,
+    "subtitle_safe_margin_bottom_px": 58,
+    "subtitle_meaning_unit_chars": {"min": 8, "max": 18},
+    "overflow_policy": "fail"
+  },
+  "audio": {
+    "codec": "aac",
+    "sample_rate_hz": 48000,
+    "provider": "edge-tts",
+    "timing_source": "edge-vtt",
+    "body_rate": "+0%",
+    "bgm_mode": "fixed-baseline",
+    "narration_priority": true,
+    "true_peak_headroom_db": 3.0
+  },
+  "video": {
+    "codec": "h264",
+    "pixel_format": "yuv420p",
+    "frame_rate_policy": "constant_30fps",
+    "preview_renderer": "hbg-hyperframes",
+    "master_renderer": "hbg-streaming-ffmpeg",
+    "generated_audio_policy": "strip"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "schema_version": "reference-visual-profile.v1",
+  "reference_id": "REF_LITTLE_PRINCE",
+  "work_title": "小王子",
+  "visual_language": "梦境写实、深蓝金红、柔光、角色锚定、宇宙与玫瑰反复",
+  "metrics": {
+    "shot_count": 200,
+    "mean_luma": 54.029,
+    "mean_contrast": 47.31,
+    "dark_share": 0.608,
+    "highlight_share": 0.014,
+    "warm_tendency": 0.1
+  },
+  "roles": {
+    "style_only": true,
+    "identity_reference_allowed": false,
+    "production_asset_allowed": false,
+    "exact_composition_copy_allowed": false
+  }
+}

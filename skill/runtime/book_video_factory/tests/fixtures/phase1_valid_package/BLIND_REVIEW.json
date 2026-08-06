@@ -1,0 +1,38 @@
+{
+  "schema_version": "blind-review.v1",
+  "reviewer_count": 2,
+  "reviewers": [
+    "reviewer_literary",
+    "reviewer_retention"
+  ],
+  "independent": true,
+  "reviews": [
+    {
+      "reviewer_id": "reviewer_literary",
+      "scores": {
+        "depth": 5,
+        "evidence": 5,
+        "voice": 4
+      },
+      "verdict": "pass",
+      "notes": "文学证据链完整",
+      "blocking_issues": []
+    },
+    {
+      "reviewer_id": "reviewer_retention",
+      "scores": {
+        "hook": 5,
+        "midpoint": 4,
+        "payoff": 4
+      },
+      "verdict": "pass",
+      "notes": "留存结构完整",
+      "blocking_issues": []
+    }
+  ],
+  "shared_keys": [],
+  "has_disagreement": false,
+  "disagreements": {},
+  "verdict": "pass",
+  "blocking_issues": []
+}

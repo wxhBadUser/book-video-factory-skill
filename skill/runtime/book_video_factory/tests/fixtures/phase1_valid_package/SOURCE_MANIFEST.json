@@ -1,0 +1,19 @@
+{
+  "schema_version": "book-research.v1",
+  "book_id": "old-man-and-the-sea",
+  "book_title": "老人与海",
+  "author": "欧内斯特·海明威",
+  "source_level": "A",
+  "research_status": "ready",
+  "is_full_text": true,
+  "coverage": "full_text_available",
+  "source_dir": "source",
+  "files": [
+    {
+      "path": "full_text.txt",
+      "size": 33001,
+      "sha256": "0ba74bdbcb7ca78a134c16d59510446726788dea18861e9b76601bd430623dfb",
+      "kind": "full_text"
+    }
+  ]
+}

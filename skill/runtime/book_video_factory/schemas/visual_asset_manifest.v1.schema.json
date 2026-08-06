@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "visual_asset_manifest.v1.schema.json",
+  "title": "Visual Asset Manifest V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "release_id", "visual_stage_digest", "provider",
+    "assets", "registered_asset_count", "last_registered_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "visual-asset-manifest.v1"},
+    "release_id": {"type": "string", "minLength": 1},
+    "visual_stage_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "provider": {"const": "host-imagegen"},
+    "assets": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/asset"}
+    },
+    "registered_asset_count": {"type": "integer", "minimum": 0},
+    "last_registered_at": {
+      "type": ["string", "null"],
+      "minLength": 1
+    }
+  },
+  "$defs": {
+    "styleReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference_id", "sha256", "profile_sha256", "role"],
+      "properties": {
+        "reference_id": {"type": "string", "pattern": "^REF_[A-Z0-9_]{2,64}$"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "profile_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "role": {"const": "style_only"}
+      }
+    },
+    "identityReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id", "path", "sha256", "role"],
+      "properties": {
+        "task_id": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,63}$"},
+        "path": {"type": "string", "pattern": "^assets/generated/(anchors|lookdev)/[A-Z0-9_]+\\.png$"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "role": {"const": "identity_reference"}
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id", "task_kind", "category", "path", "sha256", "bytes",
+        "prompt_sha256", "provider", "tool_call_id", "width", "height",
+        "mode", "palette_id", "lighting_id", "style_reference_evidence",
+        "identity_reference_evidence", "machine_diagnostic",
+        "semantic_review_status", "reality_review_status", "human_review_status",
+        "registered_at"
+      ],
+      "properties": {
+        "task_id": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,63}$"},
+        "task_kind": {"enum": ["character_anchor", "scene_anchor", "object_anchor", "lookdev"]},
+        "category": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "pattern": "^assets/generated/(anchors|lookdev)/[A-Z0-9_]+\\.png$"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "bytes": {"type": "integer", "minimum": 1},
+        "prompt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "provider": {"const": "host-imagegen"},
+        "tool_call_id": {"type": "string", "minLength": 8},
+        "width": {"enum": [1920, 1080]},
+        "height": {"enum": [1080, 1920]},
+        "mode": {"enum": ["RGB", "RGBA"]},
+        "palette_id": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,63}$"},
+        "lighting_id": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,63}$"},
+        "style_reference_evidence": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/styleReference"}
+        },
+        "identity_reference_evidence": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/identityReference"}
+        },
+        "machine_diagnostic": {"type": "object"},
+        "semantic_review_status": {"const": "pending"},
+        "reality_review_status": {"const": "pending"},
+        "human_review_status": {"const": "pending"},
+        "registered_at": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

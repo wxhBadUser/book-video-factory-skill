@@ -1,0 +1,9 @@
+# Phase 5–7 production continuation
+
+After Phase 4 returns `ready_for_image_task_planning`, run `build_director_stage.py`. Generate and register every scene image from `05_director/IMAGE_TASKS.jsonl`, create a complete scene review decision, build the HBG contact sheet, and obtain explicit scene-image approval. Fill `07_render/RENDER_INPUT.json`, use `run_render_stage.py preview` to create the HBG/HyperFrames opening preview, then use `prepare` and `execute`. Review the encoded MP4 and QA contact sheet, then run `approve_final_master.py`; no project is complete before this explicit fourth human gate.
+
+## Host ImageGen wave protocol
+
+Run `plan_generation_run.py`, read `06_visual_production/GENERATION_RUN_MANIFEST.json`, and use `next_generation_wave.py`. One wave contains `最多 5` dependency-safe jobs. Only independent jobs run in parallel. Every output must be `显示给用户`, saved first to project `staging`, and registered with the real `tool call ID` and `SHA-256`. A failed job does not erase successful siblings. Do not request another wave until this wave is `全部完成或明确失败`; settle it with `finalize_generation_wave.py`. Python runtime `不实现私有图片 API`.
+
+Always run `run_full_pipeline.py status` before deciding the next step. Missing external tools or human approval are blocking results. Never synthesize fake media or copy HBG media engines into Python.

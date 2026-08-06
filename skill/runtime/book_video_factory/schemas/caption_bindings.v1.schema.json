@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "caption_bindings.v1.schema.json",
+  "title": "Caption Bindings v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "release_id", "captions", "shots", "coverage"],
+  "properties": {
+    "schema_version": {"const": "caption-bindings.v1"},
+    "release_id": {"type": "string", "minLength": 1},
+    "captions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["caption_id", "text", "start", "end", "text_sha256", "shot_ids", "shared_required_entities", "semantic_rationale", "restoration_status"],
+        "properties": {
+          "caption_id": {"type": "string"},
+          "text": {"type": "string", "minLength": 1},
+          "start": {"type": "number", "minimum": 0},
+          "end": {"type": "number", "exclusiveMinimum": 0},
+          "text_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "shot_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+          "shared_required_entities": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+          "semantic_rationale": {"type": "string", "minLength": 1},
+          "restoration_status": {"const": "display-restored"}
+        }
+      }
+    },
+    "shots": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["shot_id", "start", "end", "source_beat_ids", "caption_ids", "uncovered_time", "intentional_hold", "hold_reason", "shared_required_entities"],
+        "properties": {
+          "shot_id": {"type": "string"},
+          "start": {"type": "number", "minimum": 0},
+          "end": {"type": "number", "exclusiveMinimum": 0},
+          "source_beat_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+          "caption_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+          "uncovered_time": {"type": "number", "minimum": 0},
+          "intentional_hold": {"type": "boolean"},
+          "hold_reason": {"type": "string"},
+          "shared_required_entities": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caption_count", "shot_count", "unbound_captions"],
+      "properties": {
+        "caption_count": {"type": "integer", "minimum": 1},
+        "shot_count": {"type": "integer", "minimum": 1},
+        "unbound_captions": {"type": "array", "maxItems": 0}
+      }
+    }
+  }
+}

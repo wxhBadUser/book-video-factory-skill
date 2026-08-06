@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "storyboard_audio_plan.v1.schema.json",
+  "title": "Storyboard Audio Plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_id",
+    "preliminary_manifest_sha256",
+    "shots",
+    "beat_dispositions"
+  ],
+  "properties": {
+    "schema_version": {"const": "storyboard-audio-plan.v1"},
+    "release_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$"},
+    "preliminary_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "beat_dispositions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["beat_id", "mode", "shot_ids"],
+        "properties": {
+          "beat_id": {"type": "string"},
+          "mode": {"enum": ["retain", "split", "merge"]},
+          "shot_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}}
+        }
+      }
+    },
+    "shots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id", "source_beat_ids", "chapter", "cue", "caption_ids", "description",
+          "required_entities", "forbidden_entities", "risk_flags", "generation_mode",
+          "anchor_refs", "participants", "motion", "visual_load", "intentional_hold",
+          "hold_reason", "semantic_rationale", "nonverbal_window"
+        ],
+        "properties": {
+          "id": {"type": "string"},
+          "source_beat_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+          "chapter": {"type": "integer", "minimum": 1},
+          "cue": {"type": "string", "minLength": 1},
+          "caption_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+          "description": {"type": "string", "minLength": 1},
+          "required_entities": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+          "forbidden_entities": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+          "risk_flags": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {"enum": ["hands", "phone", "tool_use", "water_action", "animal_contact", "body_contact", "reflection", "death_climax", "hero_shot"]}
+          },
+          "generation_mode": {"enum": ["single", "2x2"]},
+          "anchor_refs": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+          "participants": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["count", "allowed"],
+            "properties": {
+              "count": {"type": "integer", "minimum": 0},
+              "allowed": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
+            }
+          },
+          "motion": {"type": "string", "minLength": 1},
+          "visual_load": {"enum": ["ordinary", "strong"]},
+          "intentional_hold": {"type": "boolean"},
+          "hold_reason": {"type": "string"},
+          "semantic_rationale": {"type": "string", "minLength": 1},
+          "nonverbal_window": {
+            "oneOf": [
+              {"type": "null"},
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["start", "end"],
+                "properties": {
+                  "start": {"type": "number", "minimum": 0},
+                  "end": {"type": "number", "exclusiveMinimum": 0}
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

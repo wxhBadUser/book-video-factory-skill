@@ -1,0 +1,24 @@
+{
+  "schema_version": "originality-report.v1",
+  "max_consecutive_chars": 20,
+  "candidate_chars": 4518,
+  "candidate_sha256": "0d36bddba0a6e1209fb7158f806bc66ca497ffc9a48aa399876825f5acaa7e27",
+  "corpus_sources": [
+    "gold-reference-fixture"
+  ],
+  "corpus_hashes": {
+    "gold-reference-fixture": "3f558a7ebb01b1df11fde6a8a136051434698845ee89c198a89d423f8c57995f"
+  },
+  "per_source": {
+    "gold-reference-fixture": {
+      "source_id": "gold-reference-fixture",
+      "label": "gold-reference-fixture",
+      "normalized_chars": 29,
+      "longest_overlap": 0,
+      "overlap_count": 0
+    }
+  },
+  "longest_overlap": 0,
+  "violations": [],
+  "passed": true
+}

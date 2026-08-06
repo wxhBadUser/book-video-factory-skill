@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "audio_stage_manifest.v1.schema.json",
+  "title": "Audio Stage Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "release_id", "input_digest", "preliminary_manifest_path",
+    "preliminary_manifest_sha256", "storyboard_plan_path", "storyboard_plan_sha256",
+    "preliminary_audio_hashes", "final_output_hashes", "caption_timeline_sha256",
+    "media_report", "tool_provenance", "external_edge_service_exercised",
+    "stage_manifest_path", "stage_manifest_sha256", "next_stage_status"
+  ],
+  "properties": {
+    "schema_version": {"const": "audio-stage-manifest.v1"},
+    "release_id": {"type": "string", "minLength": 1},
+    "input_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "preliminary_manifest_path": {"const": "04_audio/AUDIO_PRELIMINARY_MANIFEST.json"},
+    "preliminary_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "storyboard_plan_path": {"const": "04_audio/STORYBOARD_AUDIO_PLAN.json"},
+    "storyboard_plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "preliminary_audio_hashes": {"$ref": "#/$defs/hashTable"},
+    "final_output_hashes": {"$ref": "#/$defs/hashTable"},
+    "caption_timeline_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "media_report": {"type": "object"},
+    "tool_provenance": {"type": "object"},
+    "external_edge_service_exercised": {"type": "boolean"},
+    "stage_manifest_path": {"type": "string", "pattern": "^manifests/stages/audio_final/"},
+    "stage_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "next_stage_status": {"const": "ready_for_image_task_planning"}
+  },
+  "$defs": {
+    "hashTable": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    }
+  }
+}

@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "visual_task.v1.schema.json",
+  "title": "Visual Task V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "task_id",
+    "task_kind",
+    "source_anchor_id",
+    "category",
+    "view",
+    "generation_lane",
+    "generation_mode",
+    "canvas",
+    "style_reference_ids",
+    "identity_reference_ids",
+    "anchor_refs",
+    "depends_on_task_ids",
+    "identity_dependency_task_ids",
+    "required_entities",
+    "forbidden_entities",
+    "risk_flags",
+    "palette_id",
+    "lighting_id",
+    "prompt",
+    "prompt_sha256",
+    "output_target",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "visual-task.v1"
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{1,63}$"
+    },
+    "task_kind": {
+      "enum": [
+        "character_anchor",
+        "scene_anchor",
+        "object_anchor",
+        "lookdev"
+      ]
+    },
+    "source_anchor_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "category": {
+      "type": "string",
+      "minLength": 1
+    },
+    "view": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "generation_lane": {
+      "const": "host-imagegen"
+    },
+    "generation_mode": {
+      "const": "single"
+    },
+    "canvas": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        {"properties": {"width": {"const": 1920}, "height": {"const": 1080}, "orientation": {"const": "landscape"}}},
+        {"properties": {"width": {"const": 1080}, "height": {"const": 1920}, "orientation": {"const": "portrait"}}}
+      ],
+      "required": [
+        "width",
+        "height",
+        "orientation"
+      ],
+      "properties": {
+        "width": {"type": "integer"},
+        "height": {"type": "integer"},
+        "orientation": {"enum": ["landscape", "portrait"]}
+      }
+    },
+    "style_reference_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "identity_reference_ids": {
+      "type": "array",
+      "maxItems": 0
+    },
+    "anchor_refs": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "depends_on_task_ids": {
+      "type": "array",
+      "uniqueItems": true
+    },
+    "identity_dependency_task_ids": {
+      "type": "array",
+      "uniqueItems": true
+    },
+    "required_entities": {
+      "type": "array",
+      "minItems": 1
+    },
+    "forbidden_entities": {
+      "type": "array",
+      "minItems": 1
+    },
+    "risk_flags": {
+      "type": "array",
+      "uniqueItems": true
+    },
+    "prompt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "output_target": {
+      "type": "string",
+      "pattern": "^assets/generated/(anchors|lookdev)/[A-Z0-9_]+\\.png$"
+    },
+    "status": {
+      "const": "planned"
+    },
+    "palette_id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{1,63}$"
+    },
+    "lighting_id": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{1,63}$"
+    }
+  }
+}

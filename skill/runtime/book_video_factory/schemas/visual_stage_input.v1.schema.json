@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "visual_stage_input.v1.schema.json",
+  "title": "Visual Stage Input V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "release_id", "hbg_bridge_digest", "release_text_sha256",
+    "orientation", "global_kernel_id", "style_reference_ids", "book_look",
+    "palette_profiles", "lighting_profiles", "material_profiles", "composition_rules",
+    "repeated_motifs", "forbidden_traits", "character_anchors", "scene_anchors",
+    "object_anchors", "lookdev_tasks"
+  ],
+  "properties": {
+    "schema_version": {"const": "visual-stage-input.v1"},
+    "release_id": {"type": "string", "minLength": 1},
+    "hbg_bridge_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "release_text_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "orientation": {"enum": ["landscape", "portrait"]},
+    "global_kernel_id": {"const": "literary-cinematic-realism-v1"},
+    "style_reference_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^REF_[A-Z0-9_]+$"}},
+    "book_look": {"type": "object"},
+    "palette_profiles": {"type": "array", "minItems": 1},
+    "lighting_profiles": {"type": "array", "minItems": 1},
+    "material_profiles": {"type": "array", "minItems": 1},
+    "composition_rules": {"type": "array", "minItems": 2},
+    "repeated_motifs": {"type": "array", "minItems": 2},
+    "forbidden_traits": {"type": "array", "minItems": 2},
+    "character_anchors": {"type": "array", "minItems": 1},
+    "scene_anchors": {"type": "array"},
+    "object_anchors": {"type": "array"},
+    "lookdev_tasks": {"type": "array", "minItems": 12, "maxItems": 12}
+  }
+}

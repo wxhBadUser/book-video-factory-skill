@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "production_image_task.v1.schema.json",
+  "type": "object",
+  "required": ["schema_version", "task_id", "scene_id", "generation_lane", "generation_mode", "prompt", "prompt_sha256", "output_target"],
+  "properties": {
+    "schema_version": {"const": "production-image-task.v1"},
+    "generation_lane": {"const": "host-imagegen"},
+    "generation_mode": {"enum": ["single", "2x2"]},
+    "prompt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "additionalProperties": true
+}

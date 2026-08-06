@@ -1,0 +1,80 @@
+{
+  "schema_version": "1.0",
+  "style_id": "classic-narrator-hbg-v1",
+  "display_name": {
+    "zh-CN": "单主播名著口播 HBG 视频",
+    "en": "Classic Single-Narrator HBG Book Video"
+  },
+  "release_profile_id": "book-classic-narrator-hbg-16x9-v1",
+  "release_profiles_by_orientation": {
+    "landscape": "book-classic-narrator-hbg-16x9-v1",
+    "portrait": "book-classic-narrator-hbg-9x16-v1"
+  },
+  "execution_mode": "hybrid_orchestration_and_local_renderer",
+  "supported_workflow_modes": [
+    "single-book"
+  ],
+  "description": "Source-grounded single-narrator Chinese classic-book video using Book Video Factory editorial contracts and the vendored HBG Edge TTS/VTT, storyboard, opening, caption, audio-mix and streaming FFmpeg engine.",
+  "output": {
+    "local_master": {
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "ratio": "16:9",
+      "codec": "h264+aac"
+    }
+  },
+  "default_generation_lane": "host-imagegen",
+  "generation_lane_required": false,
+  "generation_lanes": {
+    "host-imagegen": {
+      "image_provider": "host-imagegen",
+      "sheet_modes": [
+        "single",
+        "2x2"
+      ],
+      "require_prompt_and_output_hashes": true
+    }
+  },
+  "asset_ready_approvals": [
+    "visual_anchor_lookdev",
+    "image_batch",
+    "bgm_rights"
+  ],
+  "timeline_approval_gate": "picture_lock",
+  "required_publish_approvals": [
+    "topic",
+    "source_audit",
+    "book_research",
+    "creative_decision",
+    "fate_anchors",
+    "event_cards",
+    "script",
+    "visual_anchor_lookdev",
+    "scene_visual",
+    "image_batch",
+    "picture_lock",
+    "bgm_rights",
+    "audio_qc",
+    "content_quality",
+    "technical_qc",
+    "local_master_review",
+    "publish"
+  ],
+  "conditional_publish_approvals": {},
+  "human_blocking_gates": [
+    "script",
+    "visual_anchor_lookdev",
+    "scene_visual",
+    "local_master_review"
+  ],
+  "prohibitions": [
+    "reference_narrator_voice_cloning",
+    "generated_book_cover_presented_as_official",
+    "embedded_caption_text_in_generated_assets",
+    "unlicensed_music",
+    "visible_third_party_watermark",
+    "claiming_deep_read_without_source_manifest",
+    "mixing_visual_bibles_across_books"
+  ]
+}

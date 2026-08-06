@@ -1,0 +1,20 @@
+{
+  "schema_version": "reference-visual-profile.v1",
+  "reference_id": "REF_JANE_EYRE",
+  "work_title": "简爱",
+  "visual_language": "哥特写实、火与雾、暗红黑棕、荒原冷色与室内暖色对冲",
+  "metrics": {
+    "shot_count": 344,
+    "mean_luma": 67.896,
+    "mean_contrast": 44.101,
+    "dark_share": 0.497,
+    "highlight_share": 0.012,
+    "warm_tendency": 0.122
+  },
+  "roles": {
+    "style_only": true,
+    "identity_reference_allowed": false,
+    "production_asset_allowed": false,
+    "exact_composition_copy_allowed": false
+  }
+}

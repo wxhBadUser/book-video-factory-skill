@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0",
+  "pipeline_id": "classic-narrator-hbg-v1",
+  "display_name": "单主播名著口播 HBG 生产线",
+  "content_engine": "book-video-factory",
+  "production_engine": "vendor/hbg-life-simulation",
+  "state_authority": "workflow-gates-manifests",
+  "script_contract": "script.narrator-essay.v1",
+  "audio_provider": "edge-tts",
+  "timing_source": "edge-vtt",
+  "preview_renderer": "hbg-hyperframes",
+  "master_renderer": "hbg-streaming-ffmpeg",
+  "default_orientation": "landscape",
+  "default_canvas": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30
+  },
+  "human_gates": [
+    "script",
+    "visual_anchor_lookdev",
+    "scene_visual",
+    "local_master_review"
+  ],
+  "single_active_route": true
+}

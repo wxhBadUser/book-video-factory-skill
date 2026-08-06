@@ -1,0 +1,20 @@
+{
+  "schema_version": "reference-visual-profile.v1",
+  "reference_id": "REF_MOON_SIXPENCE",
+  "work_title": "月亮与六便士",
+  "visual_language": "后印象派、热带装饰、赭石青绿珊瑚、纹样与画布质感",
+  "metrics": {
+    "shot_count": 285,
+    "mean_luma": 83.09,
+    "mean_contrast": 42.679,
+    "dark_share": 0.327,
+    "highlight_share": 0.014,
+    "warm_tendency": 0.154
+  },
+  "roles": {
+    "style_only": true,
+    "identity_reference_allowed": false,
+    "production_asset_allowed": false,
+    "exact_composition_copy_allowed": false
+  }
+}

@@ -1,0 +1,684 @@
+{
+  "schema_version": "book-research.v1",
+  "book_title": "老人与海",
+  "author": "欧内斯特·海明威",
+  "source_level": "A",
+  "research_status": "ready",
+  "coverage": "full_text_available",
+  "chapter_notes": [
+    {
+      "chapter_id": "CH01",
+      "chapter_marker": "第1章",
+      "summary": "第1章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第1章"
+    },
+    {
+      "chapter_id": "CH02",
+      "chapter_marker": "第2章",
+      "summary": "第2章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第2章"
+    },
+    {
+      "chapter_id": "CH03",
+      "chapter_marker": "第3章",
+      "summary": "第3章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第3章"
+    },
+    {
+      "chapter_id": "CH04",
+      "chapter_marker": "第4章",
+      "summary": "第4章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第4章"
+    },
+    {
+      "chapter_id": "CH05",
+      "chapter_marker": "第5章",
+      "summary": "第5章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第5章"
+    },
+    {
+      "chapter_id": "CH06",
+      "chapter_marker": "第6章",
+      "summary": "第6章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第6章"
+    },
+    {
+      "chapter_id": "CH07",
+      "chapter_marker": "第7章",
+      "summary": "第7章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第7章"
+    },
+    {
+      "chapter_id": "CH08",
+      "chapter_marker": "第8章",
+      "summary": "第8章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第8章"
+    },
+    {
+      "chapter_id": "CH09",
+      "chapter_marker": "第9章",
+      "summary": "第9章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第9章"
+    },
+    {
+      "chapter_id": "CH10",
+      "chapter_marker": "第10章",
+      "summary": "第10章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第10章"
+    },
+    {
+      "chapter_id": "CH11",
+      "chapter_marker": "第11章",
+      "summary": "第11章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第11章"
+    },
+    {
+      "chapter_id": "CH12",
+      "chapter_marker": "第12章",
+      "summary": "第12章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第12章"
+    },
+    {
+      "chapter_id": "CH13",
+      "chapter_marker": "第13章",
+      "summary": "第13章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第13章"
+    },
+    {
+      "chapter_id": "CH14",
+      "chapter_marker": "第14章",
+      "summary": "第14章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第14章"
+    },
+    {
+      "chapter_id": "CH15",
+      "chapter_marker": "第15章",
+      "summary": "第15章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第15章"
+    },
+    {
+      "chapter_id": "CH16",
+      "chapter_marker": "第16章",
+      "summary": "第16章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第16章"
+    },
+    {
+      "chapter_id": "CH17",
+      "chapter_marker": "第17章",
+      "summary": "第17章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第17章"
+    },
+    {
+      "chapter_id": "CH18",
+      "chapter_marker": "第18章",
+      "summary": "第18章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第18章"
+    },
+    {
+      "chapter_id": "CH19",
+      "chapter_marker": "第19章",
+      "summary": "第19章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第19章"
+    },
+    {
+      "chapter_id": "CH20",
+      "chapter_marker": "第20章",
+      "summary": "第20章可靠摘要",
+      "characters": [
+        "老人"
+      ],
+      "events": [],
+      "source_ref": "第20章"
+    }
+  ],
+  "character_map": [
+    {
+      "character_id": "C001",
+      "name": "圣地亚哥"
+    }
+  ],
+  "event_candidates": [
+    {
+      "event_id": "EV001",
+      "chapter_ref": "CH01",
+      "summary": "老人经历第1个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": false,
+      "strong_visual": true,
+      "key_dialogue": false,
+      "launches_question": true,
+      "supports_payoff": false,
+      "source_ids": [
+        "CH01",
+        "F001"
+      ]
+    },
+    {
+      "event_id": "EV002",
+      "chapter_ref": "CH02",
+      "summary": "老人经历第2个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": true,
+      "strong_visual": true,
+      "key_dialogue": false,
+      "launches_question": true,
+      "supports_payoff": false,
+      "source_ids": [
+        "CH02",
+        "F002"
+      ]
+    },
+    {
+      "event_id": "EV003",
+      "chapter_ref": "CH03",
+      "summary": "老人经历第3个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": false,
+      "strong_visual": true,
+      "key_dialogue": true,
+      "launches_question": true,
+      "supports_payoff": false,
+      "source_ids": [
+        "CH03",
+        "F003"
+      ]
+    },
+    {
+      "event_id": "EV004",
+      "chapter_ref": "CH04",
+      "summary": "老人经历第4个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": true,
+      "strong_visual": true,
+      "key_dialogue": false,
+      "launches_question": true,
+      "supports_payoff": false,
+      "source_ids": [
+        "CH04",
+        "F004"
+      ]
+    },
+    {
+      "event_id": "EV005",
+      "chapter_ref": "CH05",
+      "summary": "老人经历第5个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": false,
+      "strong_visual": true,
+      "key_dialogue": false,
+      "launches_question": true,
+      "supports_payoff": false,
+      "source_ids": [
+        "CH05",
+        "F005"
+      ]
+    },
+    {
+      "event_id": "EV006",
+      "chapter_ref": "CH06",
+      "summary": "老人经历第6个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": true,
+      "strong_visual": true,
+      "key_dialogue": true,
+      "launches_question": true,
+      "supports_payoff": false,
+      "source_ids": [
+        "CH06",
+        "F006"
+      ]
+    },
+    {
+      "event_id": "EV007",
+      "chapter_ref": "CH07",
+      "summary": "老人经历第7个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": false,
+      "strong_visual": true,
+      "key_dialogue": false,
+      "launches_question": true,
+      "supports_payoff": false,
+      "source_ids": [
+        "CH07",
+        "F007"
+      ]
+    },
+    {
+      "event_id": "EV008",
+      "chapter_ref": "CH08",
+      "summary": "老人经历第8个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": true,
+      "strong_visual": true,
+      "key_dialogue": false,
+      "launches_question": true,
+      "supports_payoff": false,
+      "source_ids": [
+        "CH08",
+        "F008"
+      ]
+    },
+    {
+      "event_id": "EV009",
+      "chapter_ref": "CH09",
+      "summary": "老人经历第9个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": false,
+      "strong_visual": true,
+      "key_dialogue": true,
+      "launches_question": true,
+      "supports_payoff": false,
+      "source_ids": [
+        "CH09",
+        "F009"
+      ]
+    },
+    {
+      "event_id": "EV010",
+      "chapter_ref": "CH10",
+      "summary": "老人经历第10个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": true,
+      "strong_visual": true,
+      "key_dialogue": false,
+      "launches_question": true,
+      "supports_payoff": false,
+      "source_ids": [
+        "CH10",
+        "F010"
+      ]
+    },
+    {
+      "event_id": "EV011",
+      "chapter_ref": "CH11",
+      "summary": "老人经历第11个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": false,
+      "strong_visual": true,
+      "key_dialogue": false,
+      "launches_question": true,
+      "supports_payoff": false,
+      "source_ids": [
+        "CH11",
+        "F011"
+      ]
+    },
+    {
+      "event_id": "EV012",
+      "chapter_ref": "CH12",
+      "summary": "老人经历第12个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": true,
+      "strong_visual": true,
+      "key_dialogue": true,
+      "launches_question": true,
+      "supports_payoff": false,
+      "source_ids": [
+        "CH12",
+        "F012"
+      ]
+    },
+    {
+      "event_id": "EV013",
+      "chapter_ref": "CH13",
+      "summary": "老人经历第13个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": false,
+      "strong_visual": true,
+      "key_dialogue": false,
+      "launches_question": true,
+      "supports_payoff": false,
+      "source_ids": [
+        "CH13",
+        "F013"
+      ]
+    },
+    {
+      "event_id": "EV014",
+      "chapter_ref": "CH14",
+      "summary": "老人经历第14个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": true,
+      "strong_visual": true,
+      "key_dialogue": false,
+      "launches_question": true,
+      "supports_payoff": false,
+      "source_ids": [
+        "CH14",
+        "F014"
+      ]
+    },
+    {
+      "event_id": "EV015",
+      "chapter_ref": "CH15",
+      "summary": "老人经历第15个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": false,
+      "strong_visual": true,
+      "key_dialogue": true,
+      "launches_question": true,
+      "supports_payoff": false,
+      "source_ids": [
+        "CH15",
+        "F015"
+      ]
+    },
+    {
+      "event_id": "EV016",
+      "chapter_ref": "CH16",
+      "summary": "老人经历第16个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": true,
+      "strong_visual": true,
+      "key_dialogue": false,
+      "launches_question": true,
+      "supports_payoff": true,
+      "source_ids": [
+        "CH16",
+        "F016"
+      ]
+    },
+    {
+      "event_id": "EV017",
+      "chapter_ref": "CH17",
+      "summary": "老人经历第17个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": false,
+      "strong_visual": true,
+      "key_dialogue": false,
+      "launches_question": true,
+      "supports_payoff": true,
+      "source_ids": [
+        "CH17",
+        "F017"
+      ]
+    },
+    {
+      "event_id": "EV018",
+      "chapter_ref": "CH18",
+      "summary": "老人经历第18个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": true,
+      "strong_visual": true,
+      "key_dialogue": true,
+      "launches_question": true,
+      "supports_payoff": true,
+      "source_ids": [
+        "CH18",
+        "F018"
+      ]
+    },
+    {
+      "event_id": "EV019",
+      "chapter_ref": "CH19",
+      "summary": "老人经历第19个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": false,
+      "strong_visual": true,
+      "key_dialogue": false,
+      "launches_question": true,
+      "supports_payoff": true,
+      "source_ids": [
+        "CH19",
+        "F019"
+      ]
+    },
+    {
+      "event_id": "EV020",
+      "chapter_ref": "CH20",
+      "summary": "老人经历第20个真实命运事件",
+      "changes_fate": true,
+      "reveals_character": true,
+      "proves_thesis": true,
+      "strong_visual": true,
+      "key_dialogue": false,
+      "launches_question": true,
+      "supports_payoff": true,
+      "source_ids": [
+        "CH20",
+        "F020"
+      ]
+    }
+  ],
+  "fact_ledger": {
+    "schema_version": "fact-ledger.v1",
+    "entries": [
+      {
+        "id": "F001",
+        "type": "F",
+        "claim": "第1项原著事实",
+        "source_ref": "第1章",
+        "verified": true
+      },
+      {
+        "id": "F002",
+        "type": "F",
+        "claim": "第2项原著事实",
+        "source_ref": "第2章",
+        "verified": true
+      },
+      {
+        "id": "F003",
+        "type": "F",
+        "claim": "第3项原著事实",
+        "source_ref": "第3章",
+        "verified": true
+      },
+      {
+        "id": "F004",
+        "type": "F",
+        "claim": "第4项原著事实",
+        "source_ref": "第4章",
+        "verified": true
+      },
+      {
+        "id": "F005",
+        "type": "F",
+        "claim": "第5项原著事实",
+        "source_ref": "第5章",
+        "verified": true
+      },
+      {
+        "id": "F006",
+        "type": "F",
+        "claim": "第6项原著事实",
+        "source_ref": "第6章",
+        "verified": true
+      },
+      {
+        "id": "F007",
+        "type": "F",
+        "claim": "第7项原著事实",
+        "source_ref": "第7章",
+        "verified": true
+      },
+      {
+        "id": "F008",
+        "type": "F",
+        "claim": "第8项原著事实",
+        "source_ref": "第8章",
+        "verified": true
+      },
+      {
+        "id": "F009",
+        "type": "F",
+        "claim": "第9项原著事实",
+        "source_ref": "第9章",
+        "verified": true
+      },
+      {
+        "id": "F010",
+        "type": "F",
+        "claim": "第10项原著事实",
+        "source_ref": "第10章",
+        "verified": true
+      },
+      {
+        "id": "F011",
+        "type": "F",
+        "claim": "第11项原著事实",
+        "source_ref": "第11章",
+        "verified": true
+      },
+      {
+        "id": "F012",
+        "type": "F",
+        "claim": "第12项原著事实",
+        "source_ref": "第12章",
+        "verified": true
+      },
+      {
+        "id": "F013",
+        "type": "F",
+        "claim": "第13项原著事实",
+        "source_ref": "第13章",
+        "verified": true
+      },
+      {
+        "id": "F014",
+        "type": "F",
+        "claim": "第14项原著事实",
+        "source_ref": "第14章",
+        "verified": true
+      },
+      {
+        "id": "F015",
+        "type": "F",
+        "claim": "第15项原著事实",
+        "source_ref": "第15章",
+        "verified": true
+      },
+      {
+        "id": "F016",
+        "type": "F",
+        "claim": "第16项原著事实",
+        "source_ref": "第16章",
+        "verified": true
+      },
+      {
+        "id": "F017",
+        "type": "F",
+        "claim": "第17项原著事实",
+        "source_ref": "第17章",
+        "verified": true
+      },
+      {
+        "id": "F018",
+        "type": "F",
+        "claim": "第18项原著事实",
+        "source_ref": "第18章",
+        "verified": true
+      },
+      {
+        "id": "F019",
+        "type": "F",
+        "claim": "第19项原著事实",
+        "source_ref": "第19章",
+        "verified": true
+      },
+      {
+        "id": "F020",
+        "type": "F",
+        "claim": "第20项原著事实",
+        "source_ref": "第20章",
+        "verified": true
+      }
+    ]
+  },
+  "research_summary": "基于完整原著建立的章节、人物、事件与事实台账。"
+}

@@ -1,0 +1,111 @@
+name: book-video-factory-ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Python test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ./book_video_factory pytest
+
+      - name: Run Python and Skill tests
+        run: python -m pytest book_video_factory/tests skill/tests -q
+
+      - name: Run Phase 0 architecture scan
+        run: python scripts/verify_phase0_architecture.py --json qa/phase0-adversarial-report.json
+
+      - name: Run Phase 1 content-brain scan
+        run: python scripts/verify_phase1_content_brain.py --json qa/phase1-architecture-report.json
+
+      - name: Run Phase 2 HBG bridge scan
+        run: python scripts/verify_phase2_hbg_bridge.py --json qa/phase2-architecture-report.json
+
+      - name: Run Phase 3 visual-stage scan
+        run: python scripts/verify_phase3_visual_stage.py --json qa/phase3-architecture-report.json
+
+      - name: Run Phase 4 audio-stage scan
+        run: python scripts/verify_phase4_audio_stage.py --json qa/phase4-architecture-report.json
+
+      - name: Check HBG JavaScript syntax
+        shell: bash
+        run: |
+          while IFS= read -r -d '' file; do
+            node --check "$file"
+          done < <(find vendor/hbg-life-simulation -name '*.mjs' -print0)
+
+      - name: Check HBG shell syntax
+        shell: bash
+        run: |
+          while IFS= read -r -d '' file; do
+            bash -n "$file"
+          done < <(find vendor/hbg-life-simulation -name '*.sh' -print0)
+
+      - name: Validate JSON files
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          excluded = {'.git', '.pytest_cache', '__pycache__'}
+          failures = []
+          for path in Path('.').rglob('*.json'):
+              if any(part in excluded for part in path.parts):
+                  continue
+              try:
+                  json.loads(path.read_text(encoding='utf-8-sig'))
+              except Exception as error:
+                  failures.append(f'{path}: {error}')
+          if failures:
+              raise SystemExit('\n'.join(failures))
+          PY
+
+      - name: Reject committed credential patterns
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          patterns = [
+              re.compile(r'(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}'),
+              re.compile(r'AIza[0-9A-Za-z_-]{30,}'),
+              re.compile(r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----'),
+          ]
+          allowed = {'vendor/hbg-life-simulation'}
+          hits = []
+          for path in Path('.').rglob('*'):
+              if not path.is_file() or '.git' in path.parts:
+                  continue
+              relative = path.as_posix()
+              if any(relative.startswith(prefix) for prefix in allowed):
+                  continue
+              if path.suffix.lower() not in {'.py', '.md', '.json', '.yaml', '.yml', '.sh', '.mjs', '.txt', '.toml'}:
+                  continue
+              text = path.read_text(encoding='utf-8', errors='ignore')
+              for pattern in patterns:
+                  if pattern.search(text):
+                      hits.append(f'{relative}: {pattern.pattern}')
+          if hits:
+              raise SystemExit('\n'.join(hits))
+          PY
+
+      - name: Compile Python
+        run: python -m compileall -q book_video_factory/src book_video_factory/scripts scripts skill/scripts

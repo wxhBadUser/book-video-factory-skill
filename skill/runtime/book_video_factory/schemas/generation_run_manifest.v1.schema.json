@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "generation_run_manifest.v1.schema.json",
+  "type": "object",
+  "required": ["schema_version", "release_id", "input_digest", "generation_plan_sha256", "generation_jobs_sha256", "concurrency", "max_concurrency", "attempt_count", "jobs"],
+  "properties": {
+    "schema_version": {"const": "generation-run-manifest.v1"},
+    "release_id": {"type": "string", "minLength": 1},
+    "input_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "generation_plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "generation_jobs_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "concurrency": {"type": "integer", "minimum": 1, "maximum": 10},
+    "max_concurrency": {"const": 10},
+    "attempt_count": {"type": "integer", "minimum": 0},
+    "jobs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["job_id", "status", "attempt_count", "last_error", "evidence_sha256"],
+        "properties": {
+          "job_id": {"type": "string", "minLength": 1},
+          "status": {"enum": ["ready", "blocked", "completed", "failed"]},
+          "attempt_count": {"type": "integer", "minimum": 0},
+          "last_error": {"type": ["string", "null"]},
+          "evidence_sha256": {"type": ["string", "null"]}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

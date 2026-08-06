@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "generation_plan.v1.schema.json",
+  "type": "object",
+  "required": ["schema_version", "release_id", "input_digest", "source_evidence", "concurrency", "max_concurrency", "job_count", "sheet_job_count", "single_job_count"],
+  "properties": {
+    "schema_version": {"const": "generation-plan.v1"},
+    "release_id": {"type": "string", "minLength": 1},
+    "input_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_evidence": {"type": "object"},
+    "concurrency": {"type": "integer", "minimum": 1, "maximum": 10},
+    "max_concurrency": {"const": 10},
+    "job_count": {"type": "integer", "minimum": 1},
+    "sheet_job_count": {"type": "integer", "minimum": 0},
+    "single_job_count": {"type": "integer", "minimum": 0}
+  },
+  "additionalProperties": false
+}

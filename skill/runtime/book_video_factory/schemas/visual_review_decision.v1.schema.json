@@ -1,0 +1,15 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"visual_review_decision.v1.schema.json",
+  "type":"object","additionalProperties":false,
+  "required":["schema_version","release_id","review_digest","decision","semantic_checks","reality_checks","aesthetic_checks"],
+  "properties":{
+    "schema_version":{"const":"visual-review-decision.v1"},
+    "release_id":{"type":"string","minLength":1},
+    "review_digest":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "decision":{"enum":["approved","rejected"]},
+    "semantic_checks":{"type":"array","minItems":1},
+    "reality_checks":{"type":"array","minItems":1},
+    "aesthetic_checks":{"type":"array","minItems":1}
+  }
+}

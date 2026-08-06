@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "visual_review_report.v1.schema.json",
+  "title": "Visual Review Report V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "release_id", "visual_stage_digest", "review_digest",
+    "visual_asset_manifest", "generator", "anchor_assets", "lookdev_assets",
+    "diagnostic_summary", "contact_sheet", "semantic_review", "reality_review",
+    "aesthetic_review", "human_review_status", "stage_manifest_path", "next_stage_status"
+  ],
+  "properties": {
+    "schema_version": {"const": "visual-review-report.v1"},
+    "release_id": {"type": "string", "minLength": 1},
+    "visual_stage_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "review_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "visual_asset_manifest": {"type": "object"},
+    "generator": {"type": "object"},
+    "anchor_assets": {"type": "array", "minItems": 1},
+    "lookdev_assets": {"type": "array", "minItems": 12, "maxItems": 12},
+    "diagnostic_summary": {"type": "object"},
+    "contact_sheet": {"type": "object"},
+    "semantic_review": {"type": "object"},
+    "reality_review": {"type": "object"},
+    "aesthetic_review": {"type": "object"},
+    "human_review_status": {"const": "pending"},
+    "stage_manifest_path": {"type": "string", "minLength": 1},
+    "next_stage_status": {"const": "blocked_by_visual_review"}
+  }
+}
