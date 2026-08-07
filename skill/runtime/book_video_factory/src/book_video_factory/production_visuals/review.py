@@ -15,6 +15,7 @@ from book_video_factory.hbg_bridge.provenance import _verify_vendor
 from book_video_factory.hbg_bridge.runner import repository_root
 from book_video_factory.hbg_bridge.shell import bash_executable, path_for_bash
 from book_video_factory.manifests import record_approval, safe_project_output, sha256_file
+from book_video_factory.semantic_alignment.vision_review import validate_review_decision
 from .registry import SceneAssetError, _load, _manifest, _tasks
 
 
@@ -89,12 +90,18 @@ def _decision(path: Path, *, release_id: str, director_sha: str, asset_sha: str,
     if not isinstance(decisions, list) or len(decisions) != len(task_ids):
         raise SceneReviewError("scene review decision must cover every task exactly once")
     normalized: dict[str, dict[str, Any]] = {}
-    allowed_fields = {
+    required_fields = {
         "task_id", "semantic_review_status", "reality_review_status",
         "identity_review_status", "note",
     }
+    # §10.1 additive fields: a decision may carry real vision evidence, or be
+    # marked as historical legacy. No other keys are permitted.
+    optional_fields = {"vision_evidence", "legacy_pass"}
     for item in decisions:
-        if not isinstance(item, dict) or set(item) != allowed_fields:
+        if not isinstance(item, dict):
+            raise SceneReviewError("scene review decision item fields are invalid")
+        keys = set(item)
+        if not required_fields <= keys or not keys <= (required_fields | optional_fields):
             raise SceneReviewError("scene review decision item fields are invalid")
         task_id = item.get("task_id")
         if task_id not in task_ids or task_id in normalized:
@@ -105,6 +112,13 @@ def _decision(path: Path, *, release_id: str, director_sha: str, asset_sha: str,
         note = item.get("note")
         if not isinstance(note, str) or note != note.strip():
             raise SceneReviewError("scene review note must be a trimmed string")
+        if "legacy_pass" in item and not isinstance(item["legacy_pass"], bool):
+            raise SceneReviewError("scene review legacy_pass must be a boolean")
+        # Fail closed: a decision may not advance the pipeline unless it carries
+        # authoritative vision evidence or is explicitly marked legacy_pass.
+        # ``MissingVisionEvidenceError`` / ``VisionReviewError`` are raised here
+        # and deliberately not swallowed -- the pipeline must stop.
+        validate_review_decision({**item, "shot_id": task_id})
         normalized[task_id] = dict(item)
     if set(normalized) != set(task_ids):
         raise SceneReviewError("scene review decision task coverage is incomplete")

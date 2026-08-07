@@ -15,6 +15,11 @@ from book_video_factory.hbg_bridge.provenance import _verify_vendor
 from book_video_factory.hbg_bridge.runner import repository_root
 from book_video_factory.hbg_bridge.shell import bash_executable, path_for_bash
 from book_video_factory.manifests import safe_project_output, sha256_file
+from book_video_factory.semantic_alignment.vision_review import (
+    MissingVisionEvidenceError,
+    VisionReviewError,
+    validate_review_decision,
+)
 
 
 class RenderPreflightError(RuntimeError):
@@ -37,8 +42,57 @@ _REPORT_FIELDS = {
     "opening_mix_approval_sha256", "hbg_vendor_lock_sha256", "workspace", "chosen_renderer",
     "render_job_id", "expected_work_dir", "free_disk_bytes", "free_disk_gib", "required_disk_bytes",
     "required_disk_gib", "style_validation", "hbg_disk_preflight", "existing_work_dirs",
-    "recovery_commands", "recorded_at", "status", "next_stage_status",
+    "recovery_commands", "vision_review_decision_present", "vision_review_blockers",
+    "recorded_at", "status", "next_stage_status",
 }
+
+# §10.1 / Part 6: the render preflight re-validates the committed scene review
+# decision as a final vision-evidence gate. A shot may advance only if it carries
+# authoritative vision evidence bound to its frame, or is explicitly marked
+# ``legacy_pass``. Once the decision artifact exists, an unbound shot fails closed
+# and blocks the render -- this is defense-in-depth against a decision file being
+# stripped or tampered between review approval and render.
+_SCENE_REVIEW_DECISION_RELATIVE = "06_visual_production/SCENE_REVIEW_DECISION.json"
+_REQUIRED_DECISION_FIELDS = {
+    "task_id", "semantic_review_status", "reality_review_status",
+    "identity_review_status", "note",
+}
+_OPTIONAL_DECISION_FIELDS = {"vision_evidence", "legacy_pass"}
+
+
+def _scene_review_vision_blockers(decision_path: Path) -> list[str]:
+    """Return the task ids whose scene review decision lacks a vision binding.
+
+    The decision artifact is optional at the preflight layer: when it is absent
+    the scene-approval gate (a separate control) governs render eligibility. When
+    it is present, every decision must carry vision evidence or a legacy mark;
+    otherwise the offending task ids are returned so the preflight can block.
+    """
+
+    if decision_path.is_symlink() or not decision_path.is_file():
+        return []
+    try:
+        document = json.loads(decision_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RenderPreflightError(f"scene review decision is unreadable: {error}") from error
+    if not isinstance(document, dict) or document.get("schema_version") != "scene-review-decision.v1":
+        raise RenderPreflightError("scene review decision schema is unexpected")
+    decisions = document.get("decisions")
+    if not isinstance(decisions, list):
+        raise RenderPreflightError("scene review decision has no decisions")
+    blockers: list[str] = []
+    for item in decisions:
+        if not isinstance(item, dict):
+            raise RenderPreflightError("scene review decision item is invalid")
+        keys = set(item)
+        if not _REQUIRED_DECISION_FIELDS <= keys or not keys <= (_REQUIRED_DECISION_FIELDS | _OPTIONAL_DECISION_FIELDS):
+            raise RenderPreflightError("scene review decision item fields are invalid")
+        task_id = item.get("task_id")
+        try:
+            validate_review_decision({**item, "shot_id": task_id})
+        except (MissingVisionEvidenceError, VisionReviewError):
+            blockers.append(task_id)
+    return blockers
 
 
 def _now() -> str:
@@ -258,11 +312,14 @@ def preflight_render(
         item for item in work_dirs
         if item["activity"] in {"active", "unsafe"} or item["belongs_to_current_job"]
     ]
+    decision_path = root / _SCENE_REVIEW_DECISION_RELATIVE
+    vision_blockers = _scene_review_vision_blockers(decision_path)
     passed = (
         bool(style_evidence["validated"])
         and bool(disk_evidence["passed"])
         and usage.free >= required_bytes
         and not blockers
+        and not vision_blockers
     )
     render_manifest_sha = sha256_file(prepared.render_manifest_path)
     job_id = hashlib.sha256(f"{render_manifest_sha}:{manifest['output_name']}".encode("utf-8")).hexdigest()[:20]
@@ -285,6 +342,8 @@ def preflight_render(
         "hbg_disk_preflight": disk_evidence,
         "existing_work_dirs": work_dirs,
         "recovery_commands": [item["remove_command"] for item in work_dirs if item["remove_command"]],
+        "vision_review_decision_present": decision_path.is_file(),
+        "vision_review_blockers": vision_blockers,
         "recorded_at": _now(),
         "status": "pass" if passed else "blocked",
         "next_stage_status": "ready_for_hbg_render" if passed else "blocked_by_render_preflight",

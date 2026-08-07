@@ -12,6 +12,17 @@ from typing import Any, Iterable, Mapping
 from book_video_factory.audio_stage.status import audio_stage_status
 from book_video_factory.manifests import safe_project_output, sha256_file
 from book_video_factory.orientation import OrientationError, validate_orientation_contract
+from book_video_factory.semantic_alignment.caption_grouping import NARRATIVE_FUNCTIONS
+from book_video_factory.semantic_alignment.classifier import (
+    PropositionClassifierError,
+    classify_proposition,
+)
+from book_video_factory.semantic_alignment.models import VisualProposition
+from book_video_factory.semantic_alignment.prompting import (
+    PromptSpecError,
+    build_aligned_prompt_blocks,
+    compute_prompt_binding,
+)
 from book_video_factory.visual_assets import build_imagegen_prompt
 
 
@@ -248,6 +259,76 @@ def _scene_mode(scene: Mapping[str, Any]) -> str:
     return "landscape" if isinstance(participants, Mapping) and participants.get("count") == 0 else "scene"
 
 
+def _classifier_anchor_table(profile: Mapping[str, Any], key: str) -> dict[str, dict[str, Any]]:
+    """Reshape a visual profile anchor list into the classifier's anchor table."""
+    table: dict[str, dict[str, Any]] = {}
+    for anchor in profile.get(key, []) or []:
+        if not isinstance(anchor, Mapping):
+            continue
+        anchor_id = str(anchor.get("anchor_id") or anchor.get("character_id") or "").strip()
+        if not anchor_id:
+            continue
+        table[anchor_id] = {
+            "prompt_subject": str(anchor.get("prompt_subject", "")),
+            "natural_language": str(
+                anchor.get("natural_language") or anchor.get("prompt_subject") or ""
+            ),
+            "aliases": [
+                str(item)
+                for item in (anchor.get("aliases") or [])
+                if isinstance(item, str) and item.strip()
+            ],
+        }
+    return table
+
+
+def _scene_narrative_function(scene: Mapping[str, Any]) -> str:
+    raw = str(scene.get("narrativeFunction") or scene.get("narrative_function") or "plot").strip()
+    if raw not in NARRATIVE_FUNCTIONS:
+        raise DirectorStageError(
+            f"scene {scene.get('id')} has unsupported narrativeFunction {raw!r}; "
+            f"expected one of {NARRATIVE_FUNCTIONS}"
+        )
+    return raw
+
+
+def _scene_proposition(
+    scene: Mapping[str, Any],
+    profile: Mapping[str, Any],
+    caption_texts: list[str],
+    required: list[str],
+    light: Mapping[str, Any],
+) -> VisualProposition:
+    """Return the frozen visual proposition this scene's image must satisfy.
+
+    A scene may carry an Agent-authored ``visualProposition``; otherwise the
+    deterministic classifier derives one from the captions, the scene
+    description and the registered anchors. The scene's template
+    ``semanticRationale`` is never used as the proposition rationale, because it
+    is boilerplate and cannot justify anything.
+    """
+    authored = scene.get("visualProposition") or scene.get("visual_proposition")
+    if isinstance(authored, Mapping):
+        return VisualProposition.from_mapping(authored)
+    try:
+        return classify_proposition(
+            shot_id=str(scene.get("id", "")),
+            caption_texts=caption_texts,
+            description=str(scene.get("description", "")),
+            seed_rationale=str(scene.get("semanticRationale", "")),
+            source_entities=required,
+            character_anchors=_classifier_anchor_table(profile, "character_anchors"),
+            scene_anchors=_classifier_anchor_table(profile, "scene_anchors"),
+            object_anchors=_classifier_anchor_table(profile, "object_anchors"),
+            lighting=str(light.get("lighting_id", "DUSK_SOFT")),
+            palette=str(profile["palette_profiles"][0].get("palette_id", "EARTH_DUSK")),
+        )
+    except PropositionClassifierError as error:
+        raise DirectorStageError(
+            f"scene {scene.get('id')} cannot be given a defensible visual proposition: {error}"
+        ) from error
+
+
 def _task_for_scene(
     scene: Mapping[str, Any],
     profile: Mapping[str, Any],
@@ -257,18 +338,30 @@ def _task_for_scene(
 ) -> dict[str, Any]:
     continuity, front_tasks = _anchor_context(profile, visual_assets)
     caption_ids = list(scene["captionIds"])
-    caption_text = " / ".join(str(captions[item]["text"]) for item in caption_ids)
+    caption_texts = [str(captions[item]["text"]) for item in caption_ids]
+    caption_text = " / ".join(caption_texts)
     anchor_refs = list(scene.get("anchorRefs", []))
     character_anchors = [continuity[item] for item in anchor_refs if item in continuity]
     identity_tasks = sorted({front_tasks[item] for item in anchor_refs if item in front_tasks})
     required = list(scene.get("requiredEntities", []))
     forbidden = [*profile.get("forbidden_traits", []), *scene.get("forbiddenEntities", [])]
     light = profile["lighting_profiles"][0]
+    beat_ids = [
+        str(item)
+        for item in (scene.get("sourceBeatIds") or scene.get("source_beat_ids") or [])
+        if str(item).strip()
+    ]
+    if not beat_ids:
+        raise DirectorStageError(
+            f"scene {scene.get('id')} declares no sourceBeatIds; the image task cannot be bound"
+        )
+    narrative_function = _scene_narrative_function(scene)
+    proposition = _scene_proposition(scene, profile, caption_texts, required, light)
     shot = {
         "shot_id": "SHOT_" + str(scene["id"]).upper().replace("-", "_").replace(".", "_"),
         "asset_tier": "narrative_scene",
-        "subject": str(scene.get("description", "")),
-        "action": str(scene.get("semanticRationale", "illustrate the exact current narration beat")),
+        "subject": proposition.subject or str(scene.get("description", "")),
+        "action": proposition.action or str(scene.get("description", "")),
         "shot_size": _shot_size(scene),
         "lens": "35mm" if _shot_size(scene).startswith("wide") else "50mm",
         "camera_angle": "eye level with story-motivated variation",
@@ -287,8 +380,9 @@ def _task_for_scene(
         },
         "risk_flags": list(scene.get("riskFlags", [])),
     }
+    art_direction = _visual_art_direction(profile)
     prompt = build_imagegen_prompt(
-        _visual_art_direction(profile),
+        art_direction,
         {**shot, "output_orientation": canvas["orientation"]},
         [{"continuity_anchor": item} for item in character_anchors],
     )
@@ -296,6 +390,33 @@ def _task_for_scene(
         f"\nOutput canvas: native {canvas['orientation']} {canvas['width']}x{canvas['height']}; "
         "compose for this aspect ratio without rotation or embedded text."
     )
+    try:
+        priority_blocks = build_aligned_prompt_blocks(
+            caption_text=caption_text,
+            proposition=proposition,
+            narrative_function=narrative_function,
+            camera={
+                "shot_size": shot["shot_size"],
+                "lens": shot["lens"],
+                "camera_angle": shot["camera_angle"],
+                "composition": shot["composition"],
+                "depth": shot["depth"],
+            },
+            style={
+                "visual_world": art_direction["visual_world"],
+                "palette": art_direction["palette"],
+                "texture": art_direction["texture"],
+            },
+            forbidden_entities=forbidden,
+            anchors=character_anchors,
+        )
+    except PromptSpecError as error:
+        raise DirectorStageError(
+            f"scene {scene.get('id')} cannot produce a caption-first prompt: {error}"
+        ) from error
+    # Caption-first: the priority blocks lead, the legacy art-direction body follows
+    # as supporting detail. The model reads the top of the prompt hardest.
+    prompt = "\n".join(priority_blocks) + "\n" + prompt
     generation_mode = "single" if scene.get("riskFlags") else str(scene.get("generationMode", "single"))
     if generation_mode not in {"single", "2x2"}:
         raise DirectorStageError(f"scene {scene['id']} has unsupported generation mode")
@@ -320,6 +441,18 @@ def _task_for_scene(
         "lighting_id": profile["lighting_profiles"][0]["lighting_id"],
         "prompt": prompt,
         "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "narrative_function": narrative_function,
+        "source_beat_ids": beat_ids,
+        "visual_proposition": proposition.to_dict(),
+        "prompt_binding": compute_prompt_binding(
+            caption_ids=caption_ids,
+            caption_text=caption_text,
+            proposition=proposition,
+            prompt=prompt,
+            scene_id=str(scene["id"]),
+            beat_ids=beat_ids,
+            shot_id=shot["shot_id"],
+        ),
         "output_target": f"assets/generated/scenes/{scene['id']}.png",
         "status": "planned",
     }

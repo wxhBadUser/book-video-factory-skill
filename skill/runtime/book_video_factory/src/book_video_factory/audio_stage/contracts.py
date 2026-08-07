@@ -260,3 +260,105 @@ def verify_phase4_prerequisites(
         "next_stage_status": approval.next_stage_status,
         "hbg_commit": commit,
     }
+
+
+# ---------------------------------------------------------------------------
+# Voice Performance Plan (Part 8) -- per-caption prosody so the narration
+# carries the emotional beat instead of a flat single rate.
+# ---------------------------------------------------------------------------
+
+_VPP_KEYS = {"schema_version", "release_id", "audio_meta_sha256", "captions", "status"}
+_VPP_CAPTION_REQUIRED = {"rate", "pitch", "pause_ms_before", "pause_ms_after"}
+_VPP_CAPTION_OPTIONAL = {"emphasis_words", "emotion_hint", "ssml_override"}
+_VPP_CAPTION_KEYS = _VPP_CAPTION_REQUIRED | _VPP_CAPTION_OPTIONAL
+_VPP_STATUSES = {"draft", "approved", "applied"}
+
+
+def validate_voice_performance_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise AudioStageContractError("voice performance plan must be a JSON object")
+    _ensure_exact_keys(payload, _VPP_KEYS, "voice performance plan")
+    if payload.get("schema_version") != "voice-performance-plan.v1":
+        raise AudioStageContractError("voice performance plan schema_version is invalid")
+    _text(payload.get("release_id"), "release_id")
+    if not _SHA256_RE.fullmatch(payload.get("audio_meta_sha256", "")):
+        raise AudioStageContractError("voice performance plan audio_meta_sha256 must be a SHA-256")
+    status = payload.get("status")
+    if status not in _VPP_STATUSES:
+        raise AudioStageContractError("voice performance plan status must be draft/approved/applied")
+    captions = payload.get("captions")
+    if not isinstance(captions, Mapping):
+        raise AudioStageContractError("voice performance plan captions must be a JSON object")
+    normalized: dict[str, dict[str, Any]] = {}
+    for caption_id, raw in captions.items():
+        if not isinstance(raw, Mapping):
+            raise AudioStageContractError(f"voice performance plan captions[{caption_id!r}] must be an object")
+        keys = set(raw)
+        if not _VPP_CAPTION_REQUIRED <= keys or not keys <= _VPP_CAPTION_KEYS:
+            raise AudioStageContractError(f"voice performance plan captions[{caption_id!r}] fields are invalid")
+        rate = _text(raw.get("rate"), f"captions[{caption_id!r}].rate")
+        if not _RATE_RE.fullmatch(rate):
+            raise AudioStageContractError(f"captions[{caption_id!r}].rate must use Edge syntax like +0%")
+        pitch = _text(raw.get("pitch"), f"captions[{caption_id!r}].pitch")
+        if not _PITCH_RE.fullmatch(pitch):
+            raise AudioStageContractError(f"captions[{caption_id!r}].pitch must use Edge syntax like +0Hz")
+        pause_before = int(_number(raw.get("pause_ms_before"), f"captions[{caption_id!r}].pause_ms_before", minimum=0, maximum=10000))
+        pause_after = int(_number(raw.get("pause_ms_after"), f"captions[{caption_id!r}].pause_ms_after", minimum=0, maximum=10000))
+        emphasis = raw.get("emphasis_words")
+        if not isinstance(emphasis, list) or not all(isinstance(word, str) for word in emphasis):
+            raise AudioStageContractError(f"captions[{caption_id!r}].emphasis_words must be a list of strings")
+        emotion = _text(raw.get("emotion_hint"), f"captions[{caption_id!r}].emotion_hint", allow_empty=True)
+        ssml = raw.get("ssml_override")
+        if ssml is not None and (not isinstance(ssml, str) or not ssml.strip()):
+            raise AudioStageContractError(f"captions[{caption_id!r}].ssml_override must be a nonempty string when present")
+        normalized[caption_id] = {
+            "rate": rate,
+            "pitch": pitch,
+            "pause_ms_before": pause_before,
+            "pause_ms_after": pause_after,
+            "emphasis_words": list(emphasis),
+            "emotion_hint": emotion,
+            "ssml_override": ssml,
+        }
+    return {
+        "schema_version": "voice-performance-plan.v1",
+        "release_id": payload.get("release_id"),
+        "audio_meta_sha256": payload.get("audio_meta_sha256"),
+        "status": status,
+        "captions": normalized,
+    }
+
+
+_VPA_KEYS = {"schema_version", "release_id", "voice_performance_plan_sha256", "reviewer", "status", "note"}
+
+
+def validate_voice_audition_approval(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Gate: a human must approve the auditioned voice performance before full TTS.
+
+    The pipeline fails closed -- an unapproved or missing audition blocks the
+    full narration render, so a never-listened-to performance can never ship.
+    """
+
+    if not isinstance(payload, Mapping):
+        raise AudioStageContractError("voice audition approval must be a JSON object")
+    _ensure_exact_keys(payload, _VPA_KEYS, "voice audition approval")
+    if payload.get("schema_version") != "voice-audition-approval.v1":
+        raise AudioStageContractError("voice audition approval schema_version is invalid")
+    _text(payload.get("release_id"), "release_id")
+    if not _SHA256_RE.fullmatch(payload.get("voice_performance_plan_sha256", "")):
+        raise AudioStageContractError("voice audition approval plan_sha256 must be a SHA-256")
+    reviewer = _text(payload.get("reviewer"), "reviewer")
+    status = payload.get("status")
+    if status != "approved":
+        raise AudioStageContractError(
+            f"voice audition is not approved (status={status!r}); full TTS is blocked"
+        )
+    note = _text(payload.get("note"), "note", allow_empty=True)
+    return {
+        "schema_version": "voice-audition-approval.v1",
+        "release_id": payload.get("release_id"),
+        "voice_performance_plan_sha256": payload.get("voice_performance_plan_sha256"),
+        "reviewer": reviewer,
+        "status": status,
+        "note": note,
+    }

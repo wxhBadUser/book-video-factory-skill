@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from book_video_factory.manifests import sha256_file
+from book_video_factory.semantic_alignment import (
+    SemanticContractError,
+    evaluate_semantic_bridge,
+)
 
 
 class StoryboardPlanError(RuntimeError):
@@ -360,6 +364,7 @@ def compile_final_storyboard(
             "start": captions[caption_id]["start"], "end": captions[caption_id]["end"],
             "text_sha256": captions[caption_id]["text_sha256"], "shot_ids": [],
             "shared_required_entities": [], "semantic_rationale": "",
+            "semantic_bridge_mode": "", "rationale_is_boilerplate": False,
             "restoration_status": captions[caption_id]["restoration_status"],
         }
         for caption_id in ordered_caption_ids
@@ -372,9 +377,18 @@ def compile_final_storyboard(
         source_entities: set[str] = set()
         for beat_id in shot["source_beat_ids"]:
             source_entities.update(beat_index[beat_id].get("requiredEntities", []))
-        shared = sorted(set(shot["required_entities"]) & source_entities)
-        if not shared and not shot["semantic_rationale"]:
-            raise StoryboardPlanError(f"shot {shot['id']} has no shared entity or semantic rationale")
+        caption_texts = [str(captions[caption_id]["text"]) for caption_id in shot["caption_ids"]]
+        try:
+            bridge = evaluate_semantic_bridge(
+                shot_id=str(shot["id"]),
+                required_entities=list(shot["required_entities"]),
+                source_entities=source_entities,
+                rationale=str(shot["semantic_rationale"]),
+                caption_texts=caption_texts,
+            )
+        except SemanticContractError as error:
+            raise StoryboardPlanError(str(error)) from error
+        shared = list(bridge.shared_entities)
         final = {
             "id": shot["id"], "beatId": shot["source_beat_ids"][0],
             "sourceBeatIds": list(shot["source_beat_ids"]), "chapter": shot["chapter"],
@@ -389,17 +403,27 @@ def compile_final_storyboard(
             "end": round(body_start + timeline_end, 3), "duration": round(timeline_end-timeline_start, 3),
             "intentionalHold": shot["intentional_hold"], "holdReason": shot["hold_reason"],
             "semanticRationale": shot["semantic_rationale"],
+            "semanticBridgeMode": bridge.mode,
+            "semanticSourceTermsNamed": list(bridge.source_terms_named),
+            "semanticImageTermsNamed": list(bridge.image_terms_named),
+            "rationaleIsBoilerplate": bridge.rationale_is_boilerplate,
         }
         storyboard.append(final)
         for caption_id in shot["caption_ids"]:
             caption_bindings[caption_id]["shot_ids"].append(shot["id"])
             caption_bindings[caption_id]["shared_required_entities"] = shared
             caption_bindings[caption_id]["semantic_rationale"] = shot["semantic_rationale"]
+            caption_bindings[caption_id]["semantic_bridge_mode"] = bridge.mode
+            caption_bindings[caption_id]["rationale_is_boilerplate"] = bridge.rationale_is_boilerplate
         shot_bindings[shot["id"]] = {
             "shot_id": shot["id"], "start": final["start"], "end": final["end"],
             "source_beat_ids": list(shot["source_beat_ids"]), "caption_ids": list(shot["caption_ids"]),
             "uncovered_time": 0.0, "intentional_hold": shot["intentional_hold"],
             "hold_reason": shot["hold_reason"], "shared_required_entities": shared,
+            "semantic_bridge_mode": bridge.mode,
+            "source_terms_named": list(bridge.source_terms_named),
+            "image_terms_named": list(bridge.image_terms_named),
+            "rationale_is_boilerplate": bridge.rationale_is_boilerplate,
         }
     bindings = {
         "schema_version": "caption-bindings.v1", "release_id": plan["release_id"],

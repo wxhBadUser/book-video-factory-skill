@@ -877,3 +877,50 @@ def finalize_audio_stage(
         if isinstance(error, AudioStageError):
             raise
         raise AudioStageError(str(error)) from error
+
+
+# ---------------------------------------------------------------------------
+# Voice Performance Plan integration (Part 8, design §9.3).
+#
+# These are additive helpers: the main compile path is unchanged, but when a
+# project opts into a Voice Performance Plan the planner SSML is read here and
+# full TTS is gated behind an explicit audition approval. The pipeline fails
+# closed -- an unapproved audition blocks the whole narration render.
+# ---------------------------------------------------------------------------
+
+def load_voice_performance_ssml(plan_path: Path) -> dict[str, str]:
+    """Return ``{caption_id: ssml_override}`` for a validated VPP.
+
+    Captions without an ``ssml_override`` are omitted, so callers can fall back
+    to default Edge-TTS rendering for those.
+    """
+
+    from .contracts import validate_voice_performance_plan
+    from .voice_performance import build_caption_ssml
+
+    document = json.loads(Path(plan_path).read_text(encoding="utf-8"))
+    plan = validate_voice_performance_plan(document)
+    ssml: dict[str, str] = {}
+    for caption_id, entry in plan["captions"].items():
+        override = entry.get("ssml_override")
+        if override:
+            ssml[caption_id] = override
+        else:
+            ssml[caption_id] = build_caption_ssml(
+                caption_id,
+                rate=entry["rate"],
+                pitch=entry["pitch"],
+                pause_ms_before=entry["pause_ms_before"],
+                pause_ms_after=entry["pause_ms_after"],
+                emphasis_words=entry["emphasis_words"],
+            )
+    return ssml
+
+
+def require_voice_audition_approved(approval_path: Path) -> dict[str, Any]:
+    """Fail closed unless the voice audition was explicitly approved."""
+
+    from .contracts import validate_voice_audition_approval
+
+    document = json.loads(Path(approval_path).read_text(encoding="utf-8"))
+    return validate_voice_audition_approval(document)

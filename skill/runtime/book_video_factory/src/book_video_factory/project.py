@@ -12,6 +12,42 @@ from .style_profiles import (
 )
 
 
+class ProviderPolicyError(RuntimeError):
+    """A generation provider is not permitted for new work."""
+
+
+# The only sanctioned scene-image generation provider for NEW work. Host
+# ImageGen is the default and the sole vetted lane; the flagged web providers
+# (huozhe-r1 shipped 173 assets on ``gemini-web`` / ``flow-web``) must fail
+# closed so no new artifact can be produced by an unvetted provider. Legacy
+# artifacts are not rehashed (see design §12.1); this gate governs new work.
+SANCTIONED_IMAGE_PROVIDER = "host-imagegen"
+FORBIDDEN_IMAGE_PROVIDERS = frozenset({"gemini-web", "flow-web", "imagegen"})
+
+
+def validate_provider(provider: str) -> str:
+    """Fail closed unless ``provider`` is the sanctioned generation provider.
+
+    Returns the normalized provider name on success so callers can bind the
+    exact string they validated.
+    """
+
+    name = (provider or "").strip()
+    if not name:
+        raise ProviderPolicyError("generation provider is required")
+    if name in FORBIDDEN_IMAGE_PROVIDERS:
+        raise ProviderPolicyError(
+            f"generation provider {name!r} is forbidden for new work; "
+            f"use {SANCTIONED_IMAGE_PROVIDER!r}"
+        )
+    if name != SANCTIONED_IMAGE_PROVIDER:
+        raise ProviderPolicyError(
+            f"generation provider {name!r} is not on the sanctioned allowlist; "
+            f"use {SANCTIONED_IMAGE_PROVIDER!r}"
+        )
+    return name
+
+
 PROJECT_DIRECTORIES = (
     "00_topic_选题",
     "01_research_资料搜集/raw",
@@ -389,6 +425,14 @@ def initialize_project(
             "scene_asset_manifest_sha256": "0" * 64,
             "reviewer": "",
             "decisions": [],
+        },
+        overwrite=False,
+    )
+    write_json(
+        project / "qa" / "vision_review_provider.example.json",
+        {
+            "schema_version": "vision-review-provider.v1",
+            "active_provider": "claude-sonnet-4.5",
         },
         overwrite=False,
     )

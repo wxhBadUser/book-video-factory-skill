@@ -7,7 +7,68 @@
     "schema_version": {"const": "production-image-task.v1"},
     "generation_lane": {"const": "host-imagegen"},
     "generation_mode": {"enum": ["single", "2x2"]},
-    "prompt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    "prompt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "narrative_function": {
+      "type": "string",
+      "enum": ["opening", "plot", "theory", "author_background", "transition", "closing"]
+    },
+    "source_beat_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "visual_proposition": {
+      "type": "object",
+      "required": ["mode", "subject", "action", "environment", "mood", "lighting", "palette", "rationale_text"],
+      "properties": {
+        "mode": {"enum": ["Literal", "Symbolic", "Abstract"]},
+        "subject": {"type": "string", "minLength": 1},
+        "action": {"type": "string", "minLength": 1},
+        "environment": {"type": "string", "minLength": 1},
+        "mood": {"type": "string", "minLength": 1},
+        "lighting": {"type": "string", "minLength": 1},
+        "palette": {"type": "string", "minLength": 1},
+        "rationale_text": {"type": "string", "minLength": 1},
+        "entity_visibility": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["entity_id", "must_be_visible", "natural_language"],
+            "properties": {
+              "entity_id": {"type": "string", "minLength": 1},
+              "must_be_visible": {"type": "boolean"},
+              "natural_language": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": false
+          }
+        },
+        "surrogate_objects": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "source_terms": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      },
+      "additionalProperties": false
+    },
+    "prompt_binding": {
+      "type": "object",
+      "required": [
+        "shot_id",
+        "scene_id",
+        "caption_ids",
+        "beat_ids",
+        "caption_text_sha256",
+        "proposition_sha256",
+        "prompt_sha256"
+      ],
+      "properties": {
+        "shot_id": {"type": "string", "minLength": 1},
+        "scene_id": {"type": "string", "minLength": 1},
+        "caption_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "beat_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "caption_text_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "proposition_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "prompt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": true
 }

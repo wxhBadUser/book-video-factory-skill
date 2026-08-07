@@ -16,6 +16,7 @@ from book_video_factory.hbg_bridge.provenance import _verify_vendor
 from book_video_factory.hbg_bridge.runner import repository_root
 from book_video_factory.manifests import record_approval, safe_project_output, sha256_file
 from book_video_factory.render_stage.preflight import RenderPreflightError, verify_render_preflight
+from book_video_factory.semantic_alignment.vision_review import validate_review_decision
 
 
 class EncodedVisualQaError(RuntimeError):
@@ -383,8 +384,16 @@ def _review_decision(
         raise EncodedVisualQaError("encoded visual review must cover every planned sample")
     by_id: dict[str, dict[str, Any]] = {}
     fields = {"sample_id", "semantic_status", "visual_reality_status", "identity_status", "caption_status", "note", "caption_note"}
+    # §10.2 additive fields, mirroring the per-shot scene review gate: an encoded
+    # sample may carry real vision evidence bound to the extracted frame, or be
+    # marked as historical legacy. No other keys are permitted.
+    optional_fields = {"vision_evidence", "legacy_pass"}
     for item in decisions:
-        if not isinstance(item, dict) or set(item) != fields or item.get("sample_id") not in sample_ids or item["sample_id"] in by_id:
+        if not isinstance(item, dict):
+            raise EncodedVisualQaError("encoded visual decision sample coverage is invalid")
+        keys = set(item)
+        if (not fields <= keys or not keys <= (fields | optional_fields)
+                or item.get("sample_id") not in sample_ids or item["sample_id"] in by_id):
             raise EncodedVisualQaError("encoded visual decision sample coverage is invalid")
         if item.get("semantic_status") not in {"pass", "fail"} or item.get("visual_reality_status") not in {"pass", "fail"}:
             raise EncodedVisualQaError("semantic and visual reality decisions must be pass or fail")
@@ -393,12 +402,23 @@ def _review_decision(
         expected_caption = {"pass", "fail"} if item["sample_id"] in caption_sample_ids else {"not_applicable"}
         if item.get("caption_status") not in expected_caption:
             raise EncodedVisualQaError("caption decision does not match the encoded frame plan")
+        graded = {
+            "semantic_status": item.get("semantic_status"),
+            "visual_reality_status": item.get("visual_reality_status"),
+            "identity_status": item.get("identity_status"),
+            "caption_status": item.get("caption_status"),
+        }
         note = item.get("note")
-        if not isinstance(note, str) or note != note.strip() or ("fail" in item.values() and not note):
+        if not isinstance(note, str) or note != note.strip() or ("fail" in graded.values() and not note):
             raise EncodedVisualQaError("failed encoded visual decisions require a precise note")
         caption_note = item.get("caption_note")
         if not isinstance(caption_note, str) or caption_note != caption_note.strip() or (item["sample_id"] in caption_sample_ids and not caption_note):
             raise EncodedVisualQaError("encoded caption samples require a precise caption note")
+        if "legacy_pass" in item and not isinstance(item["legacy_pass"], bool):
+            raise EncodedVisualQaError("encoded visual legacy_pass must be a boolean")
+        # Fail closed: an encoded sample may not advance without authoritative
+        # vision evidence bound to the extracted frame, or an explicit legacy mark.
+        validate_review_decision({**item, "shot_id": item["sample_id"]})
         by_id[item["sample_id"]] = dict(item)
     value["decisions"] = [by_id[sample_id] for sample_id in sample_ids]
     return value

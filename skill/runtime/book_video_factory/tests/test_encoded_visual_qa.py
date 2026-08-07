@@ -97,6 +97,9 @@ class EncodedVisualQaTests(unittest.TestCase):
                 "caption_status": "pass" if {"caption_bright", "caption_dark"} & set(item["categories"]) else "not_applicable",
                 "note": "Reviewed.",
                 "caption_note": "ASS caption box and subject clearance reviewed." if {"caption_bright", "caption_dark"} & set(item["categories"]) else "",
+                # §18 legacy migration: pre-visual-evidence reviews are retained
+                # as historical evidence and must be explicitly marked.
+                "legacy_pass": True,
             } for item in plan["samples"]]
             decisions[0]["semantic_status"] = "fail"; decisions[0]["note"] = "Opening title does not match the approved story."
             phase7.write_json(decision_path, {

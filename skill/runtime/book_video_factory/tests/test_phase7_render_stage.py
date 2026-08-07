@@ -352,6 +352,8 @@ class RenderStageTests(unittest.TestCase):
                         "caption_status": "pass" if {"caption_bright", "caption_dark"} & set(item["categories"]) else "not_applicable",
                         "note": "Reviewed.",
                         "caption_note": "ASS caption box and subject clearance reviewed." if {"caption_bright", "caption_dark"} & set(item["categories"]) else "",
+                        # §18 legacy migration marker.
+                        "legacy_pass": True,
                     } for item in plan["samples"]],
                 })
                 reviewed = review_encoded_master(project, decision_path)
