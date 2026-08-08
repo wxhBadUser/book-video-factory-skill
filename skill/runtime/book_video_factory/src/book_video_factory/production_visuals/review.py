@@ -15,7 +15,15 @@ from book_video_factory.hbg_bridge.provenance import _verify_vendor
 from book_video_factory.hbg_bridge.runner import repository_root
 from book_video_factory.hbg_bridge.shell import bash_executable, path_for_bash
 from book_video_factory.manifests import record_approval, safe_project_output, sha256_file
-from book_video_factory.semantic_alignment.vision_review import validate_review_decision
+from book_video_factory.semantic_alignment.vision_review import (
+    PASSING_VERDICTS,
+    validate_review_decision,
+)
+from book_video_factory.semantic_alignment.vision_review.contracts import VisionEvidence
+from book_video_factory.semantic_alignment.vision_review.evidence import (
+    StaleVisionEvidenceError,
+    verify_evidence_current,
+)
 from .registry import SceneAssetError, _load, _manifest, _tasks
 
 
@@ -172,6 +180,23 @@ def build_scene_asset_review(
         release_id=manifest["release_id"], director_sha=director_sha,
         asset_sha=asset_sha, task_ids=list(tasks),
     )
+    # L4 (BLOCKER-2 change-invalidation): re-hash the *current* on-disk frame
+    # for every shot that carries vision evidence and fail closed if the stored
+    # evidence no longer matches the pixels on disk. A swapped or regenerated
+    # image must never ride a stale approval. Caption/prompt prose is not
+    # available at this gate, so only the authoritative image is re-verified.
+    for item in decision["decisions"]:
+        evidence_payload = item.get("vision_evidence")
+        if not isinstance(evidence_payload, Mapping):
+            continue
+        task_id = item["task_id"]
+        asset = by_task.get(task_id)
+        if asset is None:
+            continue
+        verify_evidence_current(
+            VisionEvidence.from_mapping({**evidence_payload, "shot_id": task_id}),
+            image_path=root / asset["path"],
+        )
     output = safe_project_output(root, Path("06_visual_production/SCENE_CONTACT_SHEET.jpg"))
     report_path = safe_project_output(root, Path("06_visual_production/SCENE_REVIEW_REPORT.json"))
     stage_relative = "manifests/stages/scene_visual_review/scene-visual-review.json"
@@ -204,11 +229,22 @@ def build_scene_asset_review(
         runner(staged_sheet, images)
         _verify_contact_sheet(staged_sheet)
         decisions = {item["task_id"]: item for item in decision["decisions"]}
-        all_pass = all(
-            decisions[task_id][field] == "pass"
-            for task_id in tasks
-            for field in ("semantic_review_status", "reality_review_status", "identity_review_status")
-        )
+
+        def _shot_machine_passed(item: Mapping[str, Any]) -> bool:
+            # The vision model's parity verdict is authoritative. A shot whose
+            # reviewed image does not illustrate its caption (mismatch) may not
+            # advance no matter how the three human review strings are set.
+            evidence = item.get("vision_evidence")
+            if not isinstance(evidence, Mapping):
+                return False
+            if evidence.get("parity_verdict") not in PASSING_VERDICTS:
+                return False
+            return all(
+                item.get(field) == "pass"
+                for field in ("semantic_review_status", "reality_review_status", "identity_review_status")
+            )
+
+        all_pass = all(_shot_machine_passed(decisions[task_id]) for task_id in tasks)
         contact_sha = sha256_file(staged_sheet)
         report = {
             "schema_version": "scene-review-report.v1",

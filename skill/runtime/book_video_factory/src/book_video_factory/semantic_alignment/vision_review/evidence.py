@@ -8,8 +8,8 @@
   stored evidence, so an edited caption or a swapped image can never be served
   by a stale approval.
 * ``validate_review_decision`` is the gate used by the per-shot and encoded
-  reviews: evidence present -> authoritative; missing but ``legacy_pass`` ->
-  accepted as legacy; otherwise it refuses to advance.
+  reviews: evidence present -> authoritative; missing (including a
+  ``legacy_pass`` marker) -> refused to advance.
 """
 
 from __future__ import annotations
@@ -72,10 +72,17 @@ def verify_evidence_current(
     evidence: VisionEvidence,
     *,
     image_path: str | Path,
-    caption_text: str,
-    prompt_text: str,
+    caption_text: str | None = None,
+    prompt_text: str | None = None,
 ) -> None:
-    """Fail closed when the reviewed image, caption or prompt drifted."""
+    """Fail closed when the reviewed image, caption or prompt drifted.
+
+    The image is always re-hashed against the on-disk file, because the
+    reviewed pixels are the authoritative artifact (BLOCKER-2). ``caption_text``
+    and ``prompt_text`` are optional: the scene-review entrypoint cannot always
+    source the current caption/prompt prose, so when they are not supplied only
+    the image is re-verified. When supplied, their hashes are re-checked too.
+    """
 
     evidence.validate()
     path = Path(image_path)
@@ -89,16 +96,18 @@ def verify_evidence_current(
             f"shot {evidence.shot_id}: image changed since review "
             f"({evidence.image_sha256[:12]} -> {current_image[:12]})"
         )
-    current_caption = _sha_text(caption_text)
-    if current_caption != evidence.caption_sha256:
-        raise StaleVisionEvidenceError(
-            f"shot {evidence.shot_id}: caption changed since review"
-        )
-    current_prompt = _sha_text(prompt_text)
-    if current_prompt != evidence.prompt_sha256:
-        raise StaleVisionEvidenceError(
-            f"shot {evidence.shot_id}: prompt changed since review"
-        )
+    if caption_text is not None:
+        current_caption = _sha_text(caption_text)
+        if current_caption != evidence.caption_sha256:
+            raise StaleVisionEvidenceError(
+                f"shot {evidence.shot_id}: caption changed since review"
+            )
+    if prompt_text is not None:
+        current_prompt = _sha_text(prompt_text)
+        if current_prompt != evidence.prompt_sha256:
+            raise StaleVisionEvidenceError(
+                f"shot {evidence.shot_id}: prompt changed since review"
+            )
 
 
 def validate_review_decision(
@@ -106,17 +115,19 @@ def validate_review_decision(
 ) -> None:
     """Gate a single review decision.
 
-    ``require_pass`` additionally rejects a ``mismatch`` verdict, so the render
-    preflight can demand not just *that* a review exists but that it *passed*.
+    A decision may only advance when it carries authoritative vision evidence
+    bound to the shot (image/caption/prompt hashes plus a trusted multimodal
+    provider that read the pixels). ``legacy_pass`` is no longer accepted as a
+    substitute for evidence. ``require_pass`` additionally rejects a
+    ``mismatch`` verdict, so the render preflight can demand not just *that* a
+    review exists but that it *passed*.
     """
 
     shot_id = decision.get("shot_id", "<unknown>")
     raw = decision.get("vision_evidence")
     if raw is None:
-        if decision.get("legacy_pass") is True:
-            return
         raise MissingVisionEvidenceError(
-            f"shot {shot_id}: decision has no vision evidence and is not marked legacy_pass"
+            f"shot {shot_id}: decision has no vision evidence"
         )
     if not isinstance(raw, Mapping):
         raise VisionReviewError(f"shot {shot_id}: vision_evidence is not a mapping")

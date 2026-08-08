@@ -48,7 +48,7 @@ def _vision_summary(evidence: Mapping[str, Any] | None, legacy_pass: bool) -> di
         "legacy_pass": bool(evidence.get("legacy_pass", False)),
         "vision_provider": evidence.get("vision_provider"),
         "vision_verdict": evidence.get("parity_verdict"),
-        "reviewed_pixels": bool(evidence.get("reviewed_pixels", True)),
+        "reviewed_pixels": bool(evidence.get("reviewed_pixels", False)),
     }
 
 

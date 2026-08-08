@@ -7,8 +7,7 @@ test (and is broken upstream at the phase-2 content package fixture in this
 tree). ``_decision`` is the exact boundary the design modifies:
 
     * evidence present            -> authoritative, decision accepted
-    * evidence absent + legacy    -> accepted as legacy history
-    * evidence absent, not legacy -> ``MissingVisionEvidenceError`` (no advance)
+    * evidence absent (incl. legacy) -> ``MissingVisionEvidenceError`` (no advance)
     * evidence present but broken  -> ``VisionReviewError``
 """
 
@@ -93,10 +92,11 @@ class ReviewVisionEvidenceGateTests(unittest.TestCase):
         with self.assertRaises(MissingVisionEvidenceError):
             self._run(doc)
 
-    def test_legacy_pass_decision_without_evidence_passes_through(self) -> None:
+    def test_legacy_pass_decision_without_evidence_is_rejected(self) -> None:
+        # legacy_pass no longer substitutes for vision evidence.
         doc = _decision_doc(_base_decision(legacy_pass=True))
-        value = self._run(doc)
-        self.assertTrue(value["decisions"][0]["legacy_pass"])
+        with self.assertRaises(MissingVisionEvidenceError):
+            self._run(doc)
 
     def test_pass_decision_with_valid_vision_evidence_is_accepted(self) -> None:
         doc = _decision_doc(_base_decision(vision_evidence=_evidence("match")))
@@ -199,9 +199,10 @@ class EncodedReviewVisionEvidenceGateTests(unittest.TestCase):
         with self.assertRaises(MissingVisionEvidenceError):
             self._run(_encoded_doc(_encoded_decision()))
 
-    def test_encoded_legacy_pass_passes_through(self) -> None:
-        value = self._run(_encoded_doc(_encoded_decision(legacy_pass=True)))
-        self.assertTrue(value["decisions"][0]["legacy_pass"])
+    def test_encoded_legacy_pass_without_evidence_is_rejected(self) -> None:
+        # legacy_pass no longer substitutes for vision evidence in the encoded gate.
+        with self.assertRaises(MissingVisionEvidenceError):
+            self._run(_encoded_doc(_encoded_decision(legacy_pass=True)))
 
     def test_encoded_valid_vision_evidence_is_accepted(self) -> None:
         value = self._run(

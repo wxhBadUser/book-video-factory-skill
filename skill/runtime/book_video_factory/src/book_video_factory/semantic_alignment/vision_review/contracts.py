@@ -62,7 +62,7 @@ class VisionEvidence:
     prompt_sha256: str
     parity_verdict: str
     parity_reasoning: str
-    reviewed_pixels: bool = True
+    reviewed_pixels: bool = False
     legacy_pass: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -90,7 +90,7 @@ class VisionEvidence:
             prompt_sha256=str(mapping.get("prompt_sha256", "")),
             parity_verdict=str(mapping.get("parity_verdict", "")),
             parity_reasoning=str(mapping.get("parity_reasoning", "")),
-            reviewed_pixels=bool(mapping.get("reviewed_pixels", True)),
+            reviewed_pixels=bool(mapping.get("reviewed_pixels", False)),
             legacy_pass=bool(mapping.get("legacy_pass", False)),
         )
 
@@ -109,6 +109,12 @@ class VisionEvidence:
             raise VisionReviewError(
                 f"shot {self.shot_id}: a review that did not read the image pixels is not evidence"
             )
+        # The provider that reviewed the pixels must be a trusted multimodal
+        # vision model. This used to be checked only by unit tests; it is now
+        # enforced here so a text-only or image-generating provider cannot
+        # masquerade as a vision reviewer in production.
+        from .provider import validate_vision_provider
+        validate_vision_provider(self.vision_provider)
         if not self.vision_provider.strip():
             raise VisionReviewError(f"shot {self.shot_id}: vision evidence has no provider")
         if not self.call_id.strip():

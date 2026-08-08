@@ -93,6 +93,44 @@ def _named_terms(rationale: str, terms: Iterable[str]) -> tuple[str, ...]:
     return tuple(sorted(found))
 
 
+def _event_content(text: str, entities: Iterable[str]) -> str:
+    """Strip known entities and punctuation, leaving the *event* vocabulary.
+
+    Used by the ``direct``-mode seven-tuple guard: after removing the shared
+    subject and any other named entities, whatever remains is the action /
+    location / time the text is actually describing. If the image rationale's
+    event vocabulary is completely disjoint from the narration's, the image is
+    depicting a *different* event than the caption -- a shared subject alone is
+    not enough for a literal depiction.
+    """
+
+    normalized = unicodedata.normalize("NFKC", text or "")
+    for entity in entities:
+        token = unicodedata.normalize("NFKC", str(entity or "").strip())
+        if token:
+            normalized = normalized.replace(token, "")
+    return "".join(
+        char
+        for char in normalized
+        if unicodedata.category(char) not in _PUNCTUATION_CATEGORIES
+    )
+
+
+def _has_event_overlap(source_content: str, rationale_content: str) -> bool:
+    """True when the two event vocabularies share at least one 2-gram.
+
+    A 2-gram (not a single character) avoids false positives on stray function
+    characters while still catching a wholly different activity (for example
+    "出嫁" vs "雪地奔跑" share nothing; "牵着走过田埂" vs "牵着走过田埂画面给背影" share plenty).
+    """
+
+    if len(source_content) < 2 or len(rationale_content) < 2:
+        return False
+    grams_a = {source_content[i : i + 2] for i in range(len(source_content) - 1)}
+    grams_b = {rationale_content[i : i + 2] for i in range(len(rationale_content) - 1)}
+    return bool(grams_a & grams_b)
+
+
 def evaluate_semantic_bridge(
     *,
     shot_id: str,
@@ -112,14 +150,38 @@ def evaluate_semantic_bridge(
     boilerplate = is_boilerplate_rationale(rationale)
 
     if shared:
+        # Seven-tuple (subject+action+location+time+object+narrative_function+
+        # visual_focus) joint constraint on the *direct* (literal) path. A
+        # shared subject is necessary but not sufficient: the image must depict
+        # the SAME event the narration describes. When the rationale is
+        # substantive (not boilerplate) yet its event vocabulary is wholly
+        # disjoint from the narration's, the image is showing a different
+        # action/location/time -- it cannot be a literal illustration of this
+        # caption, so we reject rather than silently pass (attack A-bridge:
+        # "凤霞出嫁" + "凤霞雪地奔跑" must not be allowed as a direct bridge).
+        event_alignment = "boilerplate-skipped"
+        if not boilerplate:
+            drop = (set(image_set) | source_set | set(shared))
+            source_content = _event_content("".join(str(text) for text in caption_texts), drop)
+            rationale_content = _event_content(rationale, drop)
+            if source_content and rationale_content and not _has_event_overlap(source_content, rationale_content):
+                raise SemanticContractError(
+                    f"shot {shot_id} direct bridge: the image rationale describes a different event "
+                    f"({rationale_content!r}) than the narration ({source_content!r}); a shared subject "
+                    f"alone is not enough for a literal depiction -- re-propose as symbolic/abstract or "
+                    f"align the rationale to the narration"
+                )
+            event_alignment = "verified" if (source_content and rationale_content) else "no-content"
         return SemanticBridge(
             shot_id=shot_id,
             mode="direct",
             shared_entities=shared,
+            subject=shared[0] if shared else "",
             source_terms_named=_named_terms(rationale, sorted(source_set)),
             image_terms_named=_named_terms(rationale, image_set),
             rationale=rationale,
             rationale_is_boilerplate=boilerplate,
+            event_alignment=event_alignment,
         )
 
     # No overlap: the rationale is now the only evidence and must carry weight.
@@ -170,6 +232,7 @@ def validate_visual_proposition(
     shot_id: str,
     caption_texts: Sequence[str] = (),
     source_entities: Iterable[str] = (),
+    known_symbol_registry: Iterable[str] = (),
 ) -> VisualProposition:
     """Validate a per-shot visual proposition against its declared mode."""
     resolved = (
@@ -240,14 +303,34 @@ def validate_visual_proposition(
                 f"shot {shot_id} Symbolic proposition rationale must name both the source term and "
                 f"the surrogate it replaces"
             )
+        # Anchor existence: a Symbolic proposition must stand in for an imagery
+        # that has actually been established (a prior scene, a registered trope,
+        # or a hash-bound symbol). Pointing at an unestablished surrogate is a
+        # hallucination of meaning -- reject it so the planner re-proposes.
+        registry = {str(item).strip() for item in known_symbol_registry if str(item).strip()}
+        if registry and not (set(resolved.surrogate_objects) & registry):
+            raise SemanticContractError(
+                f"shot {shot_id} Symbolic proposition surrogate {sorted(resolved.surrogate_objects)} "
+                f"is not in the established symbol registry {sorted(registry)}; an unestablished "
+                f"imagery cannot stand in for the source term -- establish the trope first"
+            )
     else:  # Abstract
         if any(item.must_be_visible for item in resolved.entity_visibility):
             raise SemanticContractError(
                 f"shot {shot_id} Abstract proposition cannot require any entity to be visible"
             )
-        if not resolved.mood.strip() and not resolved.palette.strip():
+        # No-blank-shot rule: an Abstract fallback must never degrade into a pure
+        # empty frame. It must declare a mood AND at least one concrete rendering
+        # dimension (palette / environment / lighting). Without an anchor it is
+        # required to re-propose rather than ship a blank.
+        if not resolved.mood.strip():
             raise SemanticContractError(
-                f"shot {shot_id} Abstract proposition requires a mood or palette to be renderable"
+                f"shot {shot_id} Abstract proposition requires a mood to be renderable (no blank shot)"
+            )
+        if not (resolved.palette.strip() or resolved.environment.strip() or resolved.lighting.strip()):
+            raise SemanticContractError(
+                f"shot {shot_id} Abstract proposition requires a palette/environment/lighting to be "
+                f"renderable (no blank shot)"
             )
     return resolved
 

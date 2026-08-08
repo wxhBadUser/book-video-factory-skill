@@ -10,6 +10,11 @@
 /content-input/
 /workspace/
 /qa/
+# NOTE: /qa/ is intentionally excluded from version control. It holds local-only
+# runtime policy such as qa/vision_review_provider.json (which vision model
+# reviews image evidence). Keeping it out of VCS means a checkout can never
+# silently carry an attacker-chosen reviewer; the deployer must supply it, and
+# load_vision_review_provider() fails closed when it is missing or untrusted.
 /book_video_warehouse/
 /FINAL_BLIND_TEST/
 /HBG_PARITY_CODEX_UPGRADE_PACK/

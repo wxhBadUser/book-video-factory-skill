@@ -117,10 +117,12 @@ class SemanticBridge:
     shot_id: str
     mode: str
     shared_entities: tuple[str, ...] = ()
+    subject: str = ""
     source_terms_named: tuple[str, ...] = ()
     image_terms_named: tuple[str, ...] = ()
     rationale: str = ""
     rationale_is_boilerplate: bool = False
+    event_alignment: str = ""
     notes: tuple[str, ...] = field(default=())
 
     def to_dict(self) -> dict[str, Any]:

@@ -694,6 +694,11 @@ def finalize_audio_stage(
         preliminary_path = root / "04_audio/AUDIO_PRELIMINARY_MANIFEST.json"
         preliminary = _load_object(preliminary_path, "audio preliminary manifest")
         final_exists = final_manifest_path.is_file()
+        # L8 (BLOCKER-6): a project that opts into a Voice Performance Plan must
+        # have its per-caption voice audition explicitly approved before any
+        # narration is rendered. This is enforced before the heavy HBG work so
+        # an unapproved audition fails closed and fast.
+        _enforce_voice_audition_gate(root)
         plan_raw = _load_object(plan_path, "storyboard audio plan")
         input_path = _official_project_file(root, root / "04_audio/AUDIO_STAGE_INPUT.json", "04_audio/AUDIO_STAGE_INPUT.json", "audio stage input")
         lexicon_path = _official_project_file(root, root / "04_audio/PRONUNCIATION_LEXICON.json", "04_audio/PRONUNCIATION_LEXICON.json", "pronunciation lexicon")
@@ -924,3 +929,33 @@ def require_voice_audition_approved(approval_path: Path) -> dict[str, Any]:
 
     document = json.loads(Path(approval_path).read_text(encoding="utf-8"))
     return validate_voice_audition_approval(document)
+
+
+# Relative paths for the opt-in Voice Performance Plan and its approval. A VPP
+# opts the project into per-caption voice performance; without an explicit
+# approval the whole narration render is blocked.
+_VOICE_PERFORMANCE_PLAN_RELATIVE = "04_audio/VOICE_PERFORMANCE_PLAN.json"
+_VOICE_AUDITION_APPROVAL_RELATIVE = "04_audio/VOICE_AUDITION_APPROVAL.json"
+
+
+def _enforce_voice_audition_gate(root: Path) -> dict[str, Any] | None:
+    """Enforce the voice-audition gate for an audio finalization.
+
+    Returns the approval record when a Voice Performance Plan is present and
+    approved. Returns ``None`` when the project did not opt into a VPP, in which
+    case no audition is required. Raises ``AudioStageError`` when a VPP exists
+    but no explicit audition approval is present -- narration render is blocked
+    until the audition is approved.
+    """
+
+    vpp_path = root / _VOICE_PERFORMANCE_PLAN_RELATIVE
+    if not vpp_path.is_file():
+        return None
+    approval_path = root / _VOICE_AUDITION_APPROVAL_RELATIVE
+    if not approval_path.is_file():
+        raise AudioStageError(
+            "a Voice Performance Plan opts this project into per-caption voice "
+            "performance, but no voice audition approval exists; narration render "
+            "is blocked until the audition is explicitly approved"
+        )
+    return require_voice_audition_approved(approval_path)

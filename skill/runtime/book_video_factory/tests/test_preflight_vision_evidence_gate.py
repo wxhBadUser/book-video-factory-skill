@@ -1,10 +1,11 @@
 """Part 6: Render Preflight vision-evidence gate.
 
 ``_scene_review_vision_blockers`` is the final checkpoint before pixels are
-spent. Once a ``SCENE_REVIEW_DECISION.json`` artifact exists, every shot must
-carry authoritative vision evidence (or an explicit ``legacy_pass``) or the
-render is blocked. A missing artifact is not the preflight's responsibility
-(the scene-approval gate governs that) so it is skipped.
+spent. Every shot must carry authoritative vision evidence (a trusted
+multimodal provider that read the pixels, with a passing verdict) bound to its
+frame. The decision artifact MUST exist and be a regular file: a missing or
+symlinked decision fails closed and blocks the render ("no verified review
+means no render"). A mismatch verdict also blocks.
 """
 
 import json
@@ -76,9 +77,10 @@ class PreflightVisionEvidenceGateTests(unittest.TestCase):
         path = self._write(_decision_document(_base_decision("B01")))
         self.assertEqual(_scene_review_vision_blockers(path), ["B01"])
 
-    def test_legacy_pass_accepted(self) -> None:
+    def test_legacy_pass_without_evidence_is_blocked(self) -> None:
+        # legacy_pass no longer substitutes for vision evidence.
         path = self._write(_decision_document(_base_decision("B01", legacy_pass=True)))
-        self.assertEqual(_scene_review_vision_blockers(path), [])
+        self.assertEqual(_scene_review_vision_blockers(path), ["B01"])
 
     def test_valid_vision_evidence_accepted(self) -> None:
         path = self._write(_decision_document(
@@ -86,34 +88,40 @@ class PreflightVisionEvidenceGateTests(unittest.TestCase):
         ))
         self.assertEqual(_scene_review_vision_blockers(path), [])
 
-    def test_mismatch_verdict_still_structurally_accepted(self) -> None:
-        # The preflight gate only demands *presence* and *structure* of evidence;
-        # the verdict severity is judged later by the review stage.
+    def test_mismatch_verdict_is_a_preflight_blocker(self) -> None:
+        # With require_pass=True the preflight demands a passing verdict, not just
+        # the presence of evidence: a mismatch blocks the render.
         path = self._write(_decision_document(
             _base_decision("B01", vision_evidence=_evidence(shot_id="B01", parity_verdict="mismatch")),
         ))
-        self.assertEqual(_scene_review_vision_blockers(path), [])
+        self.assertEqual(_scene_review_vision_blockers(path), ["B01"])
 
     def test_partial_block_reports_only_unbound_shots(self) -> None:
+        # Shots carrying authoritative vision evidence are accepted; only the
+        # shot with no binding is reported. legacy_pass is no longer a binding.
         path = self._write(_decision_document(
-            _base_decision("B01", legacy_pass=True),
+            _base_decision("B01", vision_evidence=_evidence(shot_id="B01")),
             _base_decision("B02"),
             _base_decision("B03", vision_evidence=_evidence(shot_id="B03")),
         ))
         self.assertEqual(_scene_review_vision_blockers(path), ["B02"])
 
-    def test_missing_decision_artifact_skipped(self) -> None:
+    def test_missing_decision_artifact_blocks(self) -> None:
+        # Fail closed: a missing decision artifact is not silently skipped.
         missing = self.root / "06_visual_production" / "SCENE_REVIEW_DECISION.json"
-        self.assertEqual(_scene_review_vision_blockers(missing), [])
+        with self.assertRaises(RenderPreflightError):
+            _scene_review_vision_blockers(missing)
 
-    def test_symlinked_decision_skipped(self) -> None:
+    def test_symlinked_decision_blocks(self) -> None:
+        # Fail closed: a symlinked decision artifact is rejected (tamper surface).
         target = self._write(_decision_document(_base_decision("B01")))
         link = self.root / "link.json"
         try:
             link.symlink_to(target)
         except OSError:
             self.skipTest("symlink creation requires privilege on this platform")
-        self.assertEqual(_scene_review_vision_blockers(link), [])
+        with self.assertRaises(RenderPreflightError):
+            _scene_review_vision_blockers(link)
 
     def test_malformed_schema_raises(self) -> None:
         doc = _decision_document(_base_decision("B01"))
@@ -135,6 +143,30 @@ class PreflightVisionEvidenceGateTests(unittest.TestCase):
             _base_decision("B01", vision_evidence=_evidence(shot_id="B01", parity_reasoning="ok")),
         ))
         self.assertEqual(_scene_review_vision_blockers(path), ["B01"])
+
+    def test_stale_image_after_review_is_blocked(self) -> None:
+        # A-stale (BLOCKER-2 change-invalidation): a shot whose reviewed frame is
+        # swapped after the review must be blocked at the render gate, even when
+        # the decision still carries a previously-valid vision evidence record.
+        # This drives the public gate with a real on-disk artifact.
+        import hashlib
+
+        image_path = self.root / "06_visual_production" / "SCENE_ASSETS" / "B01.png"
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        image_path.write_bytes(b"original-frame-bytes-v1")
+        image_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
+
+        path = self._write(_decision_document(
+            _base_decision("B01", vision_evidence=_evidence(shot_id="B01", image_sha256=image_hash)),
+        ))
+        assets_by_task = {"B01": image_path}
+
+        # Current frame matches the stored evidence -> accepted.
+        self.assertEqual(_scene_review_vision_blockers(path, assets_by_task), [])
+
+        # Frame swapped after review -> stale evidence must block the render.
+        image_path.write_bytes(b"tampered-frame-bytes-v2-different")
+        self.assertEqual(_scene_review_vision_blockers(path, assets_by_task), ["B01"])
 
 
 if __name__ == "__main__":

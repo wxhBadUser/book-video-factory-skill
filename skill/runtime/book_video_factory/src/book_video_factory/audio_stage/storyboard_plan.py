@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import statistics
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -12,10 +13,29 @@ from book_video_factory.semantic_alignment import (
     SemanticContractError,
     evaluate_semantic_bridge,
 )
+from book_video_factory.semantic_alignment.caption_grouping import (
+    CaptionGroupingError,
+    CaptionUnit,
+    audit_shot_caption_groups,
+)
 
 
 class StoryboardPlanError(RuntimeError):
     """The Agent-authored real-audio storyboard plan is unsafe or incomplete."""
+
+
+class VisualPropositionStaleError(StoryboardPlanError):
+    """The visual proposition was frozen before the narration was last modified.
+
+    This is the §8 "visual lag" kill switch: when the narration (``audio_meta``)
+    is edited after the storyboard proposition was frozen, the imagery planned
+    for those words can no longer be trusted, so the pipeline must not advance
+    to visual production until the storyboard is re-planned.
+    """
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$")
@@ -150,6 +170,42 @@ def _window_for_shot(shot: Mapping[str, Any], captions: Mapping[str, Mapping[str
     return start, end
 
 
+# Hard boundaries that one generated image can never serve simultaneously.
+# Soft caps (duration / caption count) are allowed by design; only the hard
+# triggers are enforced here so a single picture is never asked to mean two
+# incompatible things (see audit_shot_caption_groups).
+_HARD_SPLIT_REASONS = frozenset({
+    "character_change",
+    "location_change",
+    "time_change",
+    "narrative_function_change",
+})
+
+
+def _enforce_caption_grouping(
+    shots: Sequence[Mapping[str, Any]],
+    units: Sequence[CaptionUnit],
+) -> None:
+    """Fail closed when one generated image would have to serve two meanings.
+
+    This wires the previously-unused ``audit_shot_caption_groups`` into the
+    storyboard audio plan gate. A shot that merges captions across a *hard*
+    boundary -- different on-screen characters, a different location, a
+    different time, or a different narrative register -- cannot be illustrated
+    by a single image, so the plan that proposes it is rejected here.
+    """
+
+    findings = audit_shot_caption_groups(list(shots), list(units))
+    for finding in findings:
+        if _HARD_SPLIT_REASONS & set(finding["reasons"]):
+            raise CaptionGroupingError(
+                f"shot {finding['shot_id']} merges captions "
+                f"{finding['previous_caption_id']} and {finding['boundary_caption_id']} "
+                f"across a required boundary ({', '.join(finding['reasons'])}); "
+                "one image cannot serve both"
+            )
+
+
 def validate_storyboard_audio_plan(
     project: Path,
     payload: Mapping[str, Any],
@@ -175,6 +231,7 @@ def validate_storyboard_audio_plan(
 
     captions, caption_order = _caption_index(audio_meta)
     caption_position = {caption_id: index for index, caption_id in enumerate(caption_order)}
+    caption_units = [CaptionUnit.from_mapping(captions[caption_id]) for caption_id in caption_order]
     beats, beat_order, character_ids = _beat_index(phase2_beats)
     beat_position = {beat_id: index for index, beat_id in enumerate(beat_order)}
 
@@ -314,6 +371,7 @@ def validate_storyboard_audio_plan(
         normalized.update({"relative_start": round(start, 3), "relative_end": round(end, 3), "duration": round(duration, 3)})
         normalized_shots.append(normalized); windows.append((start, end, shot_id))
 
+    _enforce_caption_grouping(normalized_shots, caption_units)
     if set(shot_ids) != set(referenced_shots):
         raise StoryboardPlanError("shot list and beat dispositions reference different shots")
     if len(used_captions) != len(set(used_captions)):
@@ -350,6 +408,9 @@ def compile_final_storyboard(
     beat_index, _, _ = _beat_index(phase2_beats)
     opening = audio_meta.get("opening")
     if not isinstance(opening, Mapping): raise StoryboardPlanError("audio_meta opening evidence is missing")
+    # §8 visual-lag kill switch: freeze the wall clock at plan time so a later
+    # narration edit can be detected as stale by validate_visual_proposition_currency.
+    frozen_at = _utcnow_iso()
     body_start = _number(opening.get("bodyStart"), "audio_meta.opening.bodyStart")
     body = audio_meta.get("body")
     body_duration = (
@@ -389,8 +450,20 @@ def compile_final_storyboard(
         except SemanticContractError as error:
             raise StoryboardPlanError(str(error)) from error
         shared = list(bridge.shared_entities)
+        # Carry the narrative register explicitly so the director stage can no
+        # longer silently collapse every scene to "plot". When the source
+        # captions do not declare a register, CaptionUnit defaults it to "plot"
+        # -- which is now an explicit value, not a missing field.
+        shot_narrative_function = (
+            CaptionUnit.from_mapping(captions[shot["caption_ids"][0]]).narrative_function
+            if shot["caption_ids"]
+            else "plot"
+        )
         final = {
             "id": shot["id"], "beatId": shot["source_beat_ids"][0],
+            "narrativeFunction": shot_narrative_function,
+            "narrative_function": shot_narrative_function,
+            "proposition_frozen_at": frozen_at,
             "sourceBeatIds": list(shot["source_beat_ids"]), "chapter": shot["chapter"],
             "cue": shot["cue"], "captionIds": list(shot["caption_ids"]),
             "description": shot["description"], "captionIntent": " / ".join(captions[c]["text"] for c in shot["caption_ids"]) or shot["hold_reason"],
@@ -431,3 +504,50 @@ def compile_final_storyboard(
         "coverage": {"caption_count": len(caption_bindings), "shot_count": len(shot_bindings), "unbound_captions": []},
     }
     return storyboard, bindings
+
+
+def validate_visual_proposition_currency(
+    storyboard: Sequence[Mapping[str, Any]],
+    audio_meta: Mapping[str, Any],
+) -> None:
+    """§8 kill switch: block advancement when narration changed after freeze.
+
+    ``storyboard`` carries a ``proposition_frozen_at`` wall-clock stamp on every
+    scene (set by ``compile_final_storyboard``). If ``audio_meta.last_modified``
+    is newer than that stamp, the planned imagery is stale relative to the words
+    it must illustrate and the pipeline must re-plan before producing visuals.
+
+    Fail-closed: a storyboard without a freeze stamp cannot certify currency,
+    so it is rejected. A missing ``audio_meta.last_modified`` means staleness
+    cannot be proven -- we do not block on an unobservable signal, but the
+    freeze stamp itself is still required.
+    """
+
+    if not storyboard:
+        return
+    frozen_raw = storyboard[0].get("proposition_frozen_at")
+    if not isinstance(frozen_raw, str) or not frozen_raw:
+        raise VisualPropositionStaleError(
+            "visual proposition has no proposition_frozen_at stamp; currency cannot be certified"
+        )
+    try:
+        frozen_dt = datetime.fromisoformat(frozen_raw)
+    except ValueError:
+        raise VisualPropositionStaleError(
+            f"proposition_frozen_at is not a valid ISO timestamp: {frozen_raw!r}"
+        )
+    last_modified = audio_meta.get("last_modified")
+    if not isinstance(last_modified, str) or not last_modified:
+        # Narration modification time is not declared; staleness is unprovable.
+        return
+    try:
+        modified_dt = datetime.fromisoformat(last_modified)
+    except ValueError:
+        raise VisualPropositionStaleError(
+            f"audio_meta.last_modified is not a valid ISO timestamp: {last_modified!r}"
+        )
+    if modified_dt > frozen_dt:
+        raise VisualPropositionStaleError(
+            f"narration was modified ({last_modified}) after the visual proposition "
+            f"was frozen ({frozen_raw}); re-plan the storyboard before visual production"
+        )

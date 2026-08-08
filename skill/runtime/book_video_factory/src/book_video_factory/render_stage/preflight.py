@@ -9,7 +9,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from book_video_factory.hbg_bridge.provenance import _verify_vendor
 from book_video_factory.hbg_bridge.runner import repository_root
@@ -19,6 +19,11 @@ from book_video_factory.semantic_alignment.vision_review import (
     MissingVisionEvidenceError,
     VisionReviewError,
     validate_review_decision,
+)
+from book_video_factory.semantic_alignment.vision_review.contracts import VisionEvidence
+from book_video_factory.semantic_alignment.vision_review.evidence import (
+    StaleVisionEvidenceError,
+    verify_evidence_current,
 )
 
 
@@ -48,10 +53,10 @@ _REPORT_FIELDS = {
 
 # §10.1 / Part 6: the render preflight re-validates the committed scene review
 # decision as a final vision-evidence gate. A shot may advance only if it carries
-# authoritative vision evidence bound to its frame, or is explicitly marked
-# ``legacy_pass``. Once the decision artifact exists, an unbound shot fails closed
-# and blocks the render -- this is defense-in-depth against a decision file being
-# stripped or tampered between review approval and render.
+# authoritative vision evidence (a trusted multimodal provider that read the
+# pixels, with a passing verdict) bound to its frame. The decision artifact MUST
+# exist and be a regular file: a missing, symlinked, or tampered decision fails
+# closed and blocks the render -- "no verified review means no render".
 _SCENE_REVIEW_DECISION_RELATIVE = "06_visual_production/SCENE_REVIEW_DECISION.json"
 _REQUIRED_DECISION_FIELDS = {
     "task_id", "semantic_review_status", "reality_review_status",
@@ -60,17 +65,27 @@ _REQUIRED_DECISION_FIELDS = {
 _OPTIONAL_DECISION_FIELDS = {"vision_evidence", "legacy_pass"}
 
 
-def _scene_review_vision_blockers(decision_path: Path) -> list[str]:
+def _scene_review_vision_blockers(
+    decision_path: Path,
+    assets_by_task: Mapping[str, Any] | None = None,
+) -> list[str]:
     """Return the task ids whose scene review decision lacks a vision binding.
 
     The decision artifact is optional at the preflight layer: when it is absent
     the scene-approval gate (a separate control) governs render eligibility. When
     it is present, every decision must carry vision evidence or a legacy mark;
     otherwise the offending task ids are returned so the preflight can block.
+
+    ``assets_by_task`` optionally maps ``task_id`` to the current on-disk image
+    path. When supplied, a shot whose stored evidence no longer matches the
+    pixels on disk (image swapped after review) is also blocked (BLOCKER-2
+    change-invalidation at the render gate).
     """
 
     if decision_path.is_symlink() or not decision_path.is_file():
-        return []
+        raise RenderPreflightError(
+            f"scene review decision is missing or symlinked: {decision_path}"
+        )
     try:
         document = json.loads(decision_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -89,9 +104,21 @@ def _scene_review_vision_blockers(decision_path: Path) -> list[str]:
             raise RenderPreflightError("scene review decision item fields are invalid")
         task_id = item.get("task_id")
         try:
-            validate_review_decision({**item, "shot_id": task_id})
+            validate_review_decision({**item, "shot_id": task_id}, require_pass=True)
         except (MissingVisionEvidenceError, VisionReviewError):
             blockers.append(task_id)
+            continue
+        if assets_by_task is not None:
+            evidence_payload = item.get("vision_evidence")
+            asset_path = assets_by_task.get(task_id)
+            if isinstance(evidence_payload, Mapping) and asset_path is not None:
+                try:
+                    verify_evidence_current(
+                        VisionEvidence.from_mapping({**evidence_payload, "shot_id": task_id}),
+                        image_path=Path(asset_path),
+                    )
+                except StaleVisionEvidenceError:
+                    blockers.append(task_id)
     return blockers
 
 
@@ -313,7 +340,20 @@ def preflight_render(
         if item["activity"] in {"active", "unsafe"} or item["belongs_to_current_job"]
     ]
     decision_path = root / _SCENE_REVIEW_DECISION_RELATIVE
-    vision_blockers = _scene_review_vision_blockers(decision_path)
+    # L4 (BLOCKER-2 change-invalidation): map each task to its current on-disk
+    # scene image so the render gate can detect a swapped frame. Only populated
+    # when the scene-asset manifest exists; otherwise image staleness is not
+    # checked here (the scene-approval gate still enforces it).
+    assets_by_task: dict[str, Any] = {}
+    scene_asset_manifest_path = root / "06_visual_production/SCENE_ASSET_MANIFEST.json"
+    if scene_asset_manifest_path.is_file():
+        scene_asset_manifest = _load(scene_asset_manifest_path, "scene asset manifest")
+        for asset in scene_asset_manifest.get("assets", []):
+            task_id = asset.get("task_id")
+            asset_rel = asset.get("path")
+            if isinstance(task_id, str) and isinstance(asset_rel, str):
+                assets_by_task[task_id] = root / asset_rel
+    vision_blockers = _scene_review_vision_blockers(decision_path, assets_by_task)
     passed = (
         bool(style_evidence["validated"])
         and bool(disk_evidence["passed"])

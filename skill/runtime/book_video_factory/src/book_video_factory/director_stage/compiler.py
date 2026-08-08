@@ -283,7 +283,18 @@ def _classifier_anchor_table(profile: Mapping[str, Any], key: str) -> dict[str, 
 
 
 def _scene_narrative_function(scene: Mapping[str, Any]) -> str:
-    raw = str(scene.get("narrativeFunction") or scene.get("narrative_function") or "plot").strip()
+    raw = scene.get("narrativeFunction") or scene.get("narrative_function")
+    if not isinstance(raw, str) or not raw.strip():
+        # Fail closed: the narrative register (theory / author_background /
+        # closing / opening / transition vs plot) must be propagated explicitly
+        # from the storyboard. Silently falling back to "plot" would erase the
+        # distinction the caption grouping and bridge layers depend on.
+        raise DirectorStageError(
+            f"scene {scene.get('id')} is missing a required narrative_function; "
+            "theory/author_background/closing distinctions must be propagated "
+            "explicitly and cannot silently fall back to 'plot'"
+        )
+    raw = raw.strip()
     if raw not in NARRATIVE_FUNCTIONS:
         raise DirectorStageError(
             f"scene {scene.get('id')} has unsupported narrativeFunction {raw!r}; "

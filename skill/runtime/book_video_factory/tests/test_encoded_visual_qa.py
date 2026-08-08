@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from PIL import Image
@@ -16,6 +17,25 @@ from book_video_factory.render_stage.encoded_visual_qa import (
     verify_encoded_frame_plan,
 )
 import test_phase7_render_stage as phase7
+
+from book_video_factory.semantic_alignment.vision_review import (
+    MissingVisionEvidenceError,
+)
+
+
+def _encoded_evidence(verdict: str = "match") -> dict[str, Any]:
+    """A structurally valid vision-evidence record bound to an encoded frame."""
+
+    return {
+        "vision_provider": "claude-sonnet-4.5",
+        "call_id": "toolu_realcall_001",
+        "image_sha256": "c" * 64,
+        "caption_sha256": "d" * 64,
+        "prompt_sha256": "e" * 64,
+        "parity_verdict": verdict,
+        "parity_reasoning": "The encoded frame matches the reviewed scene.",
+        "reviewed_pixels": True,
+    }
 
 
 class EncodedVisualQaTests(unittest.TestCase):
@@ -97,9 +117,8 @@ class EncodedVisualQaTests(unittest.TestCase):
                 "caption_status": "pass" if {"caption_bright", "caption_dark"} & set(item["categories"]) else "not_applicable",
                 "note": "Reviewed.",
                 "caption_note": "ASS caption box and subject clearance reviewed." if {"caption_bright", "caption_dark"} & set(item["categories"]) else "",
-                # §18 legacy migration: pre-visual-evidence reviews are retained
-                # as historical evidence and must be explicitly marked.
-                "legacy_pass": True,
+                # Every encoded sample must carry authoritative vision evidence.
+                "vision_evidence": _encoded_evidence("match"),
             } for item in plan["samples"]]
             decisions[0]["semantic_status"] = "fail"; decisions[0]["note"] = "Opening title does not match the approved story."
             phase7.write_json(decision_path, {

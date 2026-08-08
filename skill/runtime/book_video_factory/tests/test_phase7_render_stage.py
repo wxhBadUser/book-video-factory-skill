@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest import mock
 
 from PIL import Image
@@ -31,6 +32,29 @@ from book_video_factory.render_stage.qa import FinalVideoQaError, evaluate_final
 def write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _valid_vision_evidence(shot_id: str, *, image_sha256: str | None = None) -> dict[str, Any]:
+    """A structurally valid, authoritative vision-evidence record.
+
+    The render preflight and scene review now fail closed unless the stored
+    ``image_sha256`` matches the *current* on-disk frame (BLOCKER-2
+    change-invalidation). ``image_sha256`` must be the real hash of the
+    produced scene image; pass ``None`` only for fixtures that do not exercise
+    the currency check (e.g. encoded-master review, which re-verifies elsewhere).
+    """
+
+    return {
+        "shot_id": shot_id,
+        "vision_provider": "claude-sonnet-4.5",
+        "call_id": "toolu_realcall_001",
+        "image_sha256": image_sha256 if image_sha256 is not None else ("c" * 64),
+        "caption_sha256": "d" * 64,
+        "prompt_sha256": "e" * 64,
+        "parity_verdict": "match",
+        "parity_reasoning": "The scene image clearly illustrates the approved caption.",
+        "reviewed_pixels": True,
+    }
 
 
 def passing_preflight_runner(command: list[str], cwd: Path, env: dict[str, str] | None) -> subprocess.CompletedProcess[str]:
@@ -178,6 +202,35 @@ class RenderStageTests(unittest.TestCase):
         })
         director_path = project / "05_director/DIRECTOR_STAGE_MANIFEST.json"
         write_json(director_path, {"release_id": "r1", "output_hashes": {"05_director/DIRECTOR_TIMELINE.json": sha256_file(timeline_path)}})
+        # Faithful scene-review decision with authoritative vision evidence for
+        # every produced task. The render preflight now fails closed without it,
+        # so the happy-path fixtures must supply it (previously relied on the
+        # legacy_pass backdoor).
+        write_json(project / "06_visual_production/SCENE_REVIEW_DECISION.json", {
+            "schema_version": "scene-review-decision.v1",
+            "release_id": "r1",
+            "director_stage_manifest_sha256": sha256_file(director_path),
+            "scene_asset_manifest_sha256": sha256_file(project / "06_visual_production/SCENE_ASSET_MANIFEST.json"),
+            "reviewer": "Test Reviewer",
+            "decisions": [
+                {
+                    "task_id": "SCENE_S1",
+                    "semantic_review_status": "pass",
+                    "reality_review_status": "pass",
+                    "identity_review_status": "pass",
+                    "note": "Scene reviewed with authoritative vision evidence.",
+                    "vision_evidence": _valid_vision_evidence("SCENE_S1", image_sha256=assets[0]["sha256"]),
+                },
+                {
+                    "task_id": "SCENE_S2",
+                    "semantic_review_status": "pass",
+                    "reality_review_status": "pass",
+                    "identity_review_status": "pass",
+                    "note": "Scene reviewed with authoritative vision evidence.",
+                    "vision_evidence": _valid_vision_evidence("SCENE_S2", image_sha256=assets[1]["sha256"]),
+                },
+            ],
+        })
         director = SimpleNamespace(manifest_path=director_path)
         render_input = project / "07_render/RENDER_INPUT.json"
         write_json(render_input, {
@@ -352,8 +405,8 @@ class RenderStageTests(unittest.TestCase):
                         "caption_status": "pass" if {"caption_bright", "caption_dark"} & set(item["categories"]) else "not_applicable",
                         "note": "Reviewed.",
                         "caption_note": "ASS caption box and subject clearance reviewed." if {"caption_bright", "caption_dark"} & set(item["categories"]) else "",
-                        # §18 legacy migration marker.
-                        "legacy_pass": True,
+                        # Every encoded sample must carry authoritative vision evidence.
+                        "vision_evidence": _valid_vision_evidence(item["sample_id"]),
                     } for item in plan["samples"]],
                 })
                 reviewed = review_encoded_master(project, decision_path)

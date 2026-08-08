@@ -12,8 +12,8 @@ reading a JSON status field, never the pixels. This file pins the replacement:
   stored evidence stale;
 * a missing provider yields ``blocked_by_missing_vision_provider`` - the system
   never fabricates a verdict;
-* a review decision without vision evidence is only accepted when it is an
-  explicit ``legacy_pass``; anything else refuses to advance.
+* a review decision without vision evidence is never accepted - ``legacy_pass``
+  no longer substitutes for evidence, and anything else refuses to advance.
 """
 
 from __future__ import annotations
@@ -292,8 +292,10 @@ class DecisionGateTests(unittest.TestCase):
         }
         validate_review_decision(decision)
 
-    def test_legacy_pass_without_vision_is_accepted(self) -> None:
-        validate_review_decision({"shot_id": "s", "legacy_pass": True})
+    def test_legacy_pass_without_vision_is_rejected(self) -> None:
+        # legacy_pass no longer substitutes for vision evidence at the gate.
+        with self.assertRaises(MissingVisionEvidenceError):
+            validate_review_decision({"shot_id": "s", "legacy_pass": True})
 
     def test_missing_vision_and_no_legacy_flag_fails_closed(self) -> None:
         with self.assertRaises(MissingVisionEvidenceError):

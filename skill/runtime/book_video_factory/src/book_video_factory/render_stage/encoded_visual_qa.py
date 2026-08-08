@@ -385,8 +385,10 @@ def _review_decision(
     by_id: dict[str, dict[str, Any]] = {}
     fields = {"sample_id", "semantic_status", "visual_reality_status", "identity_status", "caption_status", "note", "caption_note"}
     # §10.2 additive fields, mirroring the per-shot scene review gate: an encoded
-    # sample may carry real vision evidence bound to the extracted frame, or be
-    # marked as historical legacy. No other keys are permitted.
+    # sample may carry real vision evidence bound to the extracted frame.
+    # ``legacy_pass`` is retained only as an inert historical marker; it no
+    # longer grants any bypass -- the evidence gate below is mandatory.
+    # No other keys are permitted.
     optional_fields = {"vision_evidence", "legacy_pass"}
     for item in decisions:
         if not isinstance(item, dict):
@@ -417,7 +419,7 @@ def _review_decision(
         if "legacy_pass" in item and not isinstance(item["legacy_pass"], bool):
             raise EncodedVisualQaError("encoded visual legacy_pass must be a boolean")
         # Fail closed: an encoded sample may not advance without authoritative
-        # vision evidence bound to the extracted frame, or an explicit legacy mark.
+        # vision evidence bound to the extracted frame. ``legacy_pass`` is inert.
         validate_review_decision({**item, "shot_id": item["sample_id"]})
         by_id[item["sample_id"]] = dict(item)
     value["decisions"] = [by_id[sample_id] for sample_id in sample_ids]
