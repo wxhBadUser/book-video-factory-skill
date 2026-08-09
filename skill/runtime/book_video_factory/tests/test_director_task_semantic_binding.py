@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from book_video_factory.director_stage.compiler import _task_for_scene
-from book_video_factory.semantic_alignment.caption_contract import CaptionVisualContract
+from book_video_factory.semantic_alignment.caption_contract import CaptionEntityEvidence, CaptionVisualContract
 from book_video_factory.semantic_alignment.models import VisualProposition
 from book_video_factory.semantic_alignment.prompting import (
     PromptBindingError,
@@ -214,6 +214,136 @@ class DirectorTaskSemanticBindingTests(unittest.TestCase):
         self.assertEqual(task["required_entities"], [])
         self.assertEqual(task["visual_proposition"]["mode"], "Abstract")
         self.assertNotIn("福贵", task["prompt"])
+
+    def test_local_role_contract_removes_unrelated_beat_identity_anchor(self) -> None:
+        """A local wife role cannot pull C003 into a literal frame's identity prompt."""
+        text = "妻子站在门口。"
+        contract = CaptionVisualContract(
+            caption_id="c-role",
+            caption_text=text,
+            caption_text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            section_id="S1",
+            source_beat_ids=("B-001",),
+            narrative_function="plot",
+            scene_state={
+                "visible_character_ids": ["ROLE_WIFE"],
+                "location_id": "",
+                "time_context": "",
+                "action_state": text,
+                "continuity_state": {"pronoun_resolutions": []},
+            },
+            must_show=(CaptionEntityEvidence("ROLE_WIFE", "妻子", "caption_local_role", {"caption_local": True}),),
+        )
+        profile = {
+            **PROFILE,
+            "character_anchors": [{
+                "character_id": "C003", "anchor_id": "CHAR_C003", "prompt_subject": "家珍，安静的女子",
+                "invariants": [], "wardrobe": [], "forbidden_changes": [],
+            }],
+        }
+        task = _task_for_scene(
+            scene(captionIds=["c-role"], anchorRefs=["C003"], requiredEntities=["家珍"]),
+            profile,
+            {"assets": [{"task_id": "ANCHOR_C003_FRONT"}]},
+            {"c-role": {"text": text}},
+            CANVAS,
+            caption_contracts={"c-role": contract},
+        )
+        self.assertEqual(task["anchor_refs"], [])
+        self.assertEqual(task["identity_reference_task_ids"], [])
+        self.assertNotIn("家珍，安静的女子", task["prompt"])
+
+    def test_persistent_contract_person_filters_scene_anchors_to_that_person(self) -> None:
+        """Only contract-approved C004 may retain its matching scene/profile anchor."""
+        text = "凤霞站在院子里。"
+        contract = CaptionVisualContract(
+            caption_id="c-c004",
+            caption_text=text,
+            caption_text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            section_id="S1",
+            source_beat_ids=("B-001",),
+            narrative_function="plot",
+            scene_state={
+                "visible_character_ids": ["C004"], "location_id": "", "time_context": "",
+                "action_state": text, "continuity_state": {"pronoun_resolutions": []},
+            },
+            must_show=(CaptionEntityEvidence("C004", "凤霞", "caption_named_entity", {"text_evidence": "凤霞"}),),
+        )
+        profile = {
+            **PROFILE,
+            "character_anchors": [
+                {"character_id": item, "anchor_id": f"CHAR_{item}", "prompt_subject": f"{item} anchor",
+                 "invariants": [], "wardrobe": [], "forbidden_changes": []}
+                for item in ("C002", "C003", "C004")
+            ],
+        }
+        assets = {"assets": [{"task_id": f"ANCHOR_{item}_FRONT"} for item in ("C002", "C003", "C004")]}
+        task = _task_for_scene(
+            scene(captionIds=["c-c004"], anchorRefs=["C002", "C003", "C004"]),
+            profile, assets, {"c-c004": {"text": text}}, CANVAS,
+            caption_contracts={"c-c004": contract},
+        )
+        self.assertEqual(task["anchor_refs"], ["C004"])
+        self.assertEqual(task["identity_reference_task_ids"], ["ANCHOR_C004_FRONT"])
+
+    def test_contract_filtered_identity_tasks_preserve_scene_anchor_order(self) -> None:
+        """Identity inputs follow filtered Beat order rather than sorted task-id order."""
+        text = "凤霞和福贵站在院子里。"
+        contract = CaptionVisualContract(
+            caption_id="c-order",
+            caption_text=text,
+            caption_text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            section_id="S1",
+            source_beat_ids=("B-001",),
+            narrative_function="plot",
+            scene_state={
+                "visible_character_ids": ["C004", "C002"], "location_id": "", "time_context": "",
+                "action_state": text, "continuity_state": {"pronoun_resolutions": []},
+            },
+            must_show=(
+                CaptionEntityEvidence("C004", "凤霞", "caption_named_entity", {"text_evidence": "凤霞"}),
+                CaptionEntityEvidence("C002", "福贵", "caption_named_entity", {"text_evidence": "福贵"}),
+            ),
+        )
+        profile = {
+            **PROFILE,
+            "character_anchors": [
+                {"character_id": item, "anchor_id": f"CHAR_{item}", "prompt_subject": f"{item} anchor",
+                 "invariants": [], "wardrobe": [], "forbidden_changes": []}
+                for item in ("C002", "C003", "C004")
+            ],
+        }
+        assets = {"assets": [{"task_id": f"ANCHOR_{item}_FRONT"} for item in ("C002", "C003", "C004")]}
+        task = _task_for_scene(
+            scene(captionIds=["c-order"], anchorRefs=["C004", "C002", "C003"]),
+            profile, assets, {"c-order": {"text": text}}, CANVAS,
+            caption_contracts={"c-order": contract},
+        )
+        self.assertEqual(task["anchor_refs"], ["C004", "C002"])
+        self.assertEqual(task["identity_reference_task_ids"], ["ANCHOR_C004_FRONT", "ANCHOR_C002_FRONT"])
+
+    def test_contract_person_without_profile_anchor_fails_closed(self) -> None:
+        """A contract-required C004 cannot silently lose its required identity anchor."""
+        text = "凤霞站在院子里。"
+        contract = CaptionVisualContract(
+            caption_id="c-missing-c004",
+            caption_text=text,
+            caption_text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            section_id="S1",
+            source_beat_ids=("B-001",),
+            narrative_function="plot",
+            scene_state={
+                "visible_character_ids": ["C004"], "location_id": "", "time_context": "",
+                "action_state": text, "continuity_state": {"pronoun_resolutions": []},
+            },
+            must_show=(CaptionEntityEvidence("C004", "凤霞", "caption_named_entity", {"text_evidence": "凤霞"}),),
+        )
+        with self.assertRaisesRegex(Exception, "C004"):
+            _task_for_scene(
+                scene(captionIds=["c-missing-c004"], anchorRefs=["C001"]),
+                PROFILE, VISUAL_ASSETS, {"c-missing-c004": {"text": text}}, CANVAS,
+                caption_contracts={"c-missing-c004": contract},
+            )
 
     def test_two_identical_scenes_produce_identical_tasks(self) -> None:
         first = self.build()

@@ -366,6 +366,48 @@ def _scene_proposition(
         ) from error
 
 
+def _persistent_contract_character_ids(contract: CaptionVisualContract) -> set[str]:
+    """Return contract-approved persistent characters and reject split authority."""
+
+    must_show_ids = {
+        item.entity_id for item in contract.must_show
+        if item.entity_id.startswith("C")
+    }
+    visible_ids = {
+        str(item) for item in contract.scene_state.get("visible_character_ids", [])
+        if str(item).startswith("C")
+    }
+    if must_show_ids and visible_ids and must_show_ids != visible_ids:
+        raise DirectorStageError(
+            f"caption contract {contract.caption_id} disagrees on persistent visible characters: "
+            f"must_show={sorted(must_show_ids)}, scene_state={sorted(visible_ids)}"
+        )
+    return must_show_ids or visible_ids
+
+
+def _contract_anchor_refs(
+    scene: Mapping[str, Any],
+    contracts: Iterable[CaptionVisualContract],
+    continuity: Mapping[str, str],
+    front_tasks: Mapping[str, str],
+) -> list[str]:
+    """Filter Beat anchors to the persistent characters explicitly approved by contracts."""
+
+    approved_ids = set().union(*(_persistent_contract_character_ids(contract) for contract in contracts))
+    scene_anchor_refs = [str(item) for item in scene.get("anchorRefs", []) if str(item).strip()]
+    missing = sorted(
+        entity_id for entity_id in approved_ids
+        if entity_id not in scene_anchor_refs
+        or entity_id not in continuity
+        or entity_id not in front_tasks
+    )
+    if missing:
+        raise DirectorStageError(
+            f"scene {scene.get('id')} lacks an approved persistent identity anchor for {missing}"
+        )
+    return [entity_id for entity_id in scene_anchor_refs if entity_id in approved_ids]
+
+
 def _task_for_scene(
     scene: Mapping[str, Any],
     profile: Mapping[str, Any],
@@ -410,9 +452,13 @@ def _task_for_scene(
         hashlib.sha256("|".join(sorted(contract_sha_inputs)).encode("utf-8")).hexdigest()
         if contract_sha_inputs else None
     )
-    anchor_refs = [] if abstract_contract_without_subject else list(scene.get("anchorRefs", []))
+    anchor_refs = (
+        _contract_anchor_refs(scene, scene_contracts, continuity, front_tasks)
+        if scene_contracts
+        else list(scene.get("anchorRefs", []))
+    )
     character_anchors = [continuity[item] for item in anchor_refs if item in continuity]
-    identity_tasks = sorted({front_tasks[item] for item in anchor_refs if item in front_tasks})
+    identity_tasks = list(dict.fromkeys(front_tasks[item] for item in anchor_refs if item in front_tasks))
     # A v2 Caption Visual Contract is authoritative over the Beat template.
     # In particular, an abstract/theory caption with no text-grounded entity
     # must not regain a Beat person as the proposition or prompt subject.
