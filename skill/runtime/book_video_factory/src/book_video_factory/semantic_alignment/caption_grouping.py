@@ -24,10 +24,9 @@ triggers fire:
     The narration switched register: 剧情(plot) ↔ 理论(theory) ↔
     作者背景(author_background) ↔ 结尾(closing) ↔ 开场(opening) ↔ 过渡(transition).
 
-Two soft triggers cap runaway groups:
+One duration trigger caps runaway groups:
 
-``duration_cap``       the group would exceed ``max_group_duration`` seconds.
-``caption_count_cap``  the group would exceed ``max_captions_per_group`` captions.
+``duration_limit``  the group would exceed 16 seconds. There is no caption-count cap.
 
 Everything in this module is pure and deterministic: same input, same output,
 no clock, no network, no model.
@@ -55,13 +54,11 @@ SPLIT_REASONS: tuple[str, ...] = (
     "location_change",
     "time_change",
     "narrative_function_change",
-    "duration_cap",
-    "caption_count_cap",
+    "duration_limit",
 )
 
-DEFAULT_MAX_GROUP_DURATION = 12.0
-DEFAULT_MAX_CAPTIONS_PER_GROUP = 3
 MAX_IMAGE_GROUP_DURATION = 16.0
+DEFAULT_MAX_GROUP_DURATION = MAX_IMAGE_GROUP_DURATION
 
 _EPSILON = 1e-6
 
@@ -281,13 +278,31 @@ def _visual_continuity_state(scene_state: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _action_context(scene_state: Mapping[str, Any]) -> tuple[str, str, set[str]]:
-    raw = scene_state.get("action_state", "")
-    declared = raw if isinstance(raw, Mapping) else {}
-    text = str(declared.get("text", "") if declared else raw).strip().lower()
-    key = str(declared.get("key") or scene_state.get("action_key") or "").strip()
-    incompatible = declared.get("incompatible_action_keys", scene_state.get("incompatible_action_keys", ()))
-    return text, key, {str(item).strip() for item in incompatible if str(item).strip()} if isinstance(incompatible, Sequence) and not isinstance(incompatible, str) else set()
+_HARD_SPLIT_EVENTS = frozenset({"none", "death", "birth", "climax", "hero", "high_risk_action", "enter_exit"})
+
+
+def _action_semantics(scene_state: Mapping[str, Any]) -> tuple[str, set[str], str, str]:
+    raw = scene_state.get("action_semantics")
+    if not isinstance(raw, Mapping):
+        raise CaptionGroupingError("caption visual contract has invalid action_semantics")
+    action_key = raw.get("action_key")
+    incompatible = raw.get("incompatible_action_keys")
+    hard_split_event = raw.get("hard_split_event")
+    event_instance_id = raw.get("event_instance_id")
+    source_evidence = raw.get("source_evidence")
+    if not isinstance(action_key, str) or not action_key.strip():
+        raise CaptionGroupingError("caption visual contract has invalid action_semantics.action_key")
+    if not isinstance(incompatible, list) or any(not isinstance(item, str) or not item.strip() for item in incompatible):
+        raise CaptionGroupingError("caption visual contract has invalid action_semantics.incompatible_action_keys")
+    if len(set(incompatible)) != len(incompatible) or action_key in incompatible:
+        raise CaptionGroupingError("caption visual contract has contradictory action_semantics.incompatible_action_keys")
+    if hard_split_event not in _HARD_SPLIT_EVENTS:
+        raise CaptionGroupingError("caption visual contract has invalid action_semantics.hard_split_event")
+    if not isinstance(event_instance_id, str) or not event_instance_id.strip():
+        raise CaptionGroupingError("caption visual contract has invalid action_semantics.event_instance_id")
+    if not isinstance(source_evidence, Mapping) or not isinstance(source_evidence.get("beat"), Mapping) or not isinstance(source_evidence.get("caption"), Mapping):
+        raise CaptionGroupingError("caption visual contract has invalid action_semantics.source_evidence")
+    return action_key.strip(), set(incompatible), hard_split_event, event_instance_id.strip()
 
 
 def _contract_split_reasons(previous: Any, following: Any) -> tuple[str, ...]:
@@ -304,32 +319,21 @@ def _contract_split_reasons(previous: Any, following: Any) -> tuple[str, ...]:
         reasons.append("location_change")
     if str(previous_state.get("time_context", "")).strip() != str(following_state.get("time_context", "")).strip():
         reasons.append("time_change")
-    previous_action, previous_key, previous_incompatible = _action_context(previous_state)
-    following_action, following_key, following_incompatible = _action_context(following_state)
+    previous_key, previous_incompatible, previous_event, previous_event_instance = _action_semantics(previous_state)
+    following_key, following_incompatible, following_event, following_event_instance = _action_semantics(following_state)
     if _visual_continuity_state(previous_state) != _visual_continuity_state(following_state):
         reasons.append("continuity_change")
-    event_markers = (
-        ("enter_or_leave", ("进入", "走进", "离开", "离去", "出现", "消失", "enter", "leave")),
-        ("climax_or_death", ("死亡", "死去", "临终", "高潮", "death", "climax")),
-        ("hero_shot", ("英雄镜头", "英雄特写", "hero shot")),
-        ("high_risk_action", ("坠落", "翻越", "跳下", "跳入", "搏斗", "爆炸", "high-risk")),
-    )
-    for reason, markers in event_markers:
-        if any(marker in following_action for marker in markers) and not any(marker in previous_action for marker in markers):
-            reasons.append(reason)
-    mutually_exclusive = (("站起", "坐下"), ("站立", "坐下"), ("躺下", "站起"), ("清醒", "昏迷"))
-    if any((left in previous_action and right in following_action) or (right in previous_action and left in following_action) for left, right in mutually_exclusive):
-        reasons.append("mutually_exclusive_action")
-    if previous_key and following_key and previous_key != following_key and (
-        following_key in previous_incompatible or previous_key in following_incompatible
-    ):
+    if previous_event != following_event:
+        reasons.append("hard_split_event")
+    elif previous_event != "none" and previous_event_instance != following_event_instance:
+        reasons.append("event_instance_change")
+    if following_key in previous_incompatible or previous_key in following_incompatible:
         reasons.append("declared_incompatible_action_key")
     same_source_context = (
         tuple(getattr(previous, "source_beat_ids", ())) == tuple(getattr(following, "source_beat_ids", ()))
         and str(getattr(previous, "section_id", "")) == str(getattr(following, "section_id", ""))
     )
-    same_declared_action = previous_key and previous_key == following_key
-    if not same_source_context and previous_action != following_action and not same_declared_action:
+    if not same_source_context and previous_key != following_key:
         reasons.append("source_beat_change")
     if str(getattr(previous, "narrative_function", "")) != str(getattr(following, "narrative_function", "")):
         reasons.append("narrative_function_change")
@@ -391,6 +395,7 @@ def derive_caption_image_groups(
         member_contract = contracts.get(member_id)
         if member_contract is None:
             raise CaptionGroupingError(f"caption {member_id or '?'} has no visual contract")
+        _action_semantics(getattr(member_contract, "scene_state", {}))
         start = float(item["start"])
         end = float(item["end"])
         if end <= start or prior_start is not None and start + _EPSILON < prior_start:
@@ -564,7 +569,6 @@ def group_captions(
     units: Sequence[CaptionUnit] | Iterable[CaptionUnit],
     *,
     max_group_duration: float = DEFAULT_MAX_GROUP_DURATION,
-    max_captions_per_group: int = DEFAULT_MAX_CAPTIONS_PER_GROUP,
 ) -> tuple[CaptionGroup, ...]:
     """Split a caption timeline into the coarsest *safe* groups."""
 
@@ -603,11 +607,9 @@ def group_captions(
     for following in ordered[1:]:
         reasons = list(required_split_reasons(current[-1], following))
         if not reasons:
-            if len(current) + 1 > max_captions_per_group:
-                reasons.append("caption_count_cap")
             projected = following.end - min(item.start for item in current)
             if projected > max_group_duration + _EPSILON:
-                reasons.append("duration_cap")
+                reasons.append("duration_limit")
         if reasons:
             flush(current_reasons)
             current = [following]
@@ -691,7 +693,6 @@ def audit_shot_caption_groups(
 
 
 __all__ = [
-    "DEFAULT_MAX_CAPTIONS_PER_GROUP",
     "DEFAULT_MAX_GROUP_DURATION",
     "MAX_IMAGE_GROUP_DURATION",
     "NARRATIVE_FUNCTIONS",

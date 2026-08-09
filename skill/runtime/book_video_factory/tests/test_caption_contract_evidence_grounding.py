@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from book_video_factory.semantic_alignment.caption_contract import (
     CaptionContractError,
     CaptionVisualContract,
     _build_project_entity_metadata,
+    build_caption_visual_contract_document,
     enrich_captions_to_contracts,
 )
 
@@ -22,7 +24,15 @@ def _section(*, narrative_function: str, text: str) -> dict[str, str]:
     return {"section_id": "S1", "narrative_function": narrative_function, "text": text}
 
 
-def _beat(*, cue: str, required_entities: list[str], narrative_function: str | None = None) -> dict:
+def _beat(
+    *,
+    cue: str,
+    required_entities: list[str],
+    narrative_function: str | None = None,
+    risk_flags: list[str] | None = None,
+    high_risk: bool = False,
+    generation_mode: str = "2x2",
+) -> dict:
     beat = {
         "beatId": "B1",
         "sectionId": "S1",
@@ -30,10 +40,81 @@ def _beat(*, cue: str, required_entities: list[str], narrative_function: str | N
         "description": cue,
         "requiredEntities": required_entities,
         "forbiddenEntities": [],
+        "riskFlags": risk_flags or [],
+        "highRisk": high_risk,
+        "generationMode": generation_mode,
     }
     if narrative_function is not None:
         beat["narrative_function"] = narrative_function
     return beat
+
+
+def test_contract_derives_structured_action_semantics_from_locked_beat_evidence() -> None:
+    """A locked death/climax risk becomes a controlled event, never a text guess."""
+    contracts = enrich_captions_to_contracts(
+        script_sections=[_section(narrative_function="plot", text="A neutral caption.")],
+        beats=[
+            _beat(
+                cue="A neutral caption.",
+                required_entities=[],
+                risk_flags=["death_climax"],
+                high_risk=True,
+                generation_mode="single",
+            )
+        ],
+        captions=[{"caption_id": "c1", "text": "A neutral caption.", "shot_ids": ["shot-b1"]}],
+    )
+
+    semantics = contracts[0].scene_state["action_semantics"]
+    assert semantics["action_key"] == "event:climax:B1"
+    assert semantics["incompatible_action_keys"] == []
+    assert semantics["hard_split_event"] == "climax"
+    assert semantics["event_instance_id"] == "beat:B1"
+    assert semantics["source_evidence"] == {
+        "beat": {"beat_id": "B1", "risk_flags": ["death_climax"], "high_risk": True, "generation_mode": "single"},
+        "caption": {"caption_id": "c1", "shot_ids": ["shot-b1"], "semantic_rationale": ""},
+    }
+
+
+def test_unclassified_caption_text_does_not_create_a_hard_event_without_locked_evidence() -> None:
+    """Words alone cannot invent a death, birth, hero, or high-risk event."""
+    contracts = enrich_captions_to_contracts(
+        script_sections=[_section(narrative_function="plot", text="gunshot murdered drowning suicide birth hero")],
+        beats=[_beat(cue="gunshot murdered drowning suicide birth hero", required_entities=[])],
+        captions=[{"caption_id": "c1", "text": "gunshot murdered drowning suicide birth hero"}],
+    )
+
+    semantics = contracts[0].scene_state["action_semantics"]
+    assert semantics["action_key"] == "same_scene_sequence"
+    assert semantics["hard_split_event"] == "none"
+    assert semantics["event_instance_id"] == "sequence:B1"
+
+
+def test_v2_contract_with_missing_structured_action_semantics_is_rejected() -> None:
+    """Persisted v2 cannot silently recover a missing compatibility declaration."""
+    contract = enrich_captions_to_contracts(
+        script_sections=[_section(narrative_function="plot", text="A locked caption.")],
+        beats=[_beat(cue="A locked caption.", required_entities=[])],
+        captions=[{"caption_id": "c1", "text": "A locked caption."}],
+    )[0]
+    raw = contract.to_dict()
+    raw["scene_state"].pop("action_semantics")
+
+    with pytest.raises(CaptionContractError, match="action_semantics"):
+        CaptionVisualContract.from_mapping(raw)
+
+
+def test_new_v2_document_cannot_serialize_a_contract_without_action_semantics() -> None:
+    """The document writer must not create a nonconforming v2 artifact."""
+    contract = enrich_captions_to_contracts(
+        script_sections=[_section(narrative_function="plot", text="A locked caption.")],
+        beats=[_beat(cue="A locked caption.", required_entities=[])],
+        captions=[{"caption_id": "c1", "text": "A locked caption."}],
+    )[0]
+    invalid = replace(contract, scene_state={key: value for key, value in contract.scene_state.items() if key != "action_semantics"})
+
+    with pytest.raises(CaptionContractError, match="action_semantics"):
+        build_caption_visual_contract_document(release_id="r1", contracts=[invalid])
 
 
 def test_beat_character_not_named_by_caption_stays_out_of_must_show() -> None:

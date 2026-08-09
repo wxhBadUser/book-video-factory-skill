@@ -152,7 +152,7 @@ class TestGrouping:
         second = [g.to_dict() for g in group_captions(units)]
         assert first == second
 
-    def test_duration_cap_splits_a_long_run(self) -> None:
+    def test_duration_limit_splits_a_long_run(self) -> None:
         units = [
             unit(f"c{i}", f"第{i}句", float(i) * 4.0, float(i) * 4.0 + 4.0, characters=("福贵",), location="田埂")
             for i in range(6)
@@ -161,15 +161,15 @@ class TestGrouping:
         assert len(groups) > 1
         for group in groups:
             assert group.end - group.start <= 9.0 + 1e-6
-        assert any("duration_cap" in group.split_reasons for group in groups[1:])
+        assert any("duration_limit" in group.split_reasons for group in groups[1:])
 
-    def test_caption_count_cap_splits_a_long_run(self) -> None:
+    def test_caption_count_never_forces_a_split(self) -> None:
         units = [
             unit(f"c{i}", f"第{i}句", float(i), float(i) + 1.0, characters=("福贵",), location="田埂")
             for i in range(7)
         ]
-        groups = group_captions(units, max_captions_per_group=3, max_group_duration=1000.0)
-        assert [len(g.caption_ids) for g in groups] == [3, 3, 1]
+        groups = group_captions(units)
+        assert [len(g.caption_ids) for g in groups] == [7]
 
     def test_group_ids_are_stable_and_ordered(self) -> None:
         units = [

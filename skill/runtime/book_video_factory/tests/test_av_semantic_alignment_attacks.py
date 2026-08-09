@@ -131,6 +131,16 @@ def _write_contract(root: Path, release_id: str, caption_ids, *, narrative_funct
                     "time_context": "",
                     "action_state": text,
                     "continuity_state": {"pronoun_resolutions": []},
+                    "action_semantics": {
+                        "action_key": "same_scene_sequence",
+                        "incompatible_action_keys": [],
+                        "hard_split_event": "none",
+                        "event_instance_id": "sequence:B1",
+                        "source_evidence": {
+                            "beat": {"beat_id": "B1", "risk_flags": [], "high_risk": False, "generation_mode": "2x2"},
+                            "caption": {"caption_id": cid, "shot_ids": [], "semantic_rationale": "test evidence"},
+                        },
+                    },
                 },
                 must_show=(CaptionEntityEvidence(
                     entity_id="C1",

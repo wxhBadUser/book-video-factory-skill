@@ -48,10 +48,42 @@ from .caption_grouping import NARRATIVE_FUNCTIONS, normalize_script_register
 # abstract, but only through the established symbol registry.
 _LITERAL_FUNCTIONS = {"opening", "plot"}
 _SYMBOLIC_ALLOWED_FUNCTIONS = {"theory", "author_background", "transition", "closing"}
+_HARD_SPLIT_EVENTS = frozenset({"none", "death", "birth", "climax", "hero", "high_risk_action", "enter_exit"})
 
 
 class CaptionContractError(RuntimeError):
     """A caption cannot be given a defensible visual contract."""
+
+
+def _validated_action_semantics(raw: Any, *, caption_id: str) -> dict[str, Any]:
+    """Validate the required, source-evidenced action compatibility declaration."""
+
+    if not isinstance(raw, Mapping):
+        raise CaptionContractError(f"contract for {caption_id} has invalid action_semantics")
+    action_key = raw.get("action_key")
+    incompatible = raw.get("incompatible_action_keys")
+    hard_split_event = raw.get("hard_split_event")
+    event_instance_id = raw.get("event_instance_id")
+    source_evidence = raw.get("source_evidence")
+    if not isinstance(action_key, str) or not action_key.strip():
+        raise CaptionContractError(f"contract for {caption_id} has invalid action_semantics.action_key")
+    if not isinstance(incompatible, list) or any(not isinstance(item, str) or not item.strip() for item in incompatible):
+        raise CaptionContractError(f"contract for {caption_id} has invalid action_semantics.incompatible_action_keys")
+    if len(set(incompatible)) != len(incompatible) or action_key in incompatible:
+        raise CaptionContractError(f"contract for {caption_id} has contradictory action_semantics.incompatible_action_keys")
+    if hard_split_event not in _HARD_SPLIT_EVENTS:
+        raise CaptionContractError(f"contract for {caption_id} has invalid action_semantics.hard_split_event")
+    if not isinstance(event_instance_id, str) or not event_instance_id.strip():
+        raise CaptionContractError(f"contract for {caption_id} has invalid action_semantics.event_instance_id")
+    if not isinstance(source_evidence, Mapping) or not isinstance(source_evidence.get("beat"), Mapping) or not isinstance(source_evidence.get("caption"), Mapping):
+        raise CaptionContractError(f"contract for {caption_id} has invalid action_semantics.source_evidence")
+    return {
+        "action_key": action_key.strip(),
+        "incompatible_action_keys": list(incompatible),
+        "hard_split_event": hard_split_event,
+        "event_instance_id": event_instance_id.strip(),
+        "source_evidence": {"beat": dict(source_evidence["beat"]), "caption": dict(source_evidence["caption"])},
+    }
 
 
 def _norm(text: str) -> str:
@@ -209,6 +241,12 @@ class CaptionVisualContract:
             "visible_character_ids", "location_id", "time_context", "action_state", "continuity_state"
         }.issubset(scene_state):
             raise CaptionContractError(f"contract for {raw.get('caption_id')} has invalid scene_state")
+        if "action_semantics" not in scene_state:
+            raise CaptionContractError(f"contract for {raw.get('caption_id')} has missing action_semantics")
+        normalized_scene_state = dict(scene_state)
+        normalized_scene_state["action_semantics"] = _validated_action_semantics(
+            scene_state["action_semantics"], caption_id=str(raw.get("caption_id", ""))
+        )
         nf = raw.get("narrative_function")
         if nf not in NARRATIVE_FUNCTIONS:
             raise CaptionContractError(f"contract for {raw.get('caption_id')} has invalid narrative_function {nf!r}")
@@ -224,7 +262,7 @@ class CaptionVisualContract:
             location=str(raw.get("location", "")),
             time_context=str(raw.get("time_context", "")),
             story_objects=tuple(str(item) for item in raw.get("story_objects", []) if str(item).strip()),
-            scene_state=dict(scene_state),
+            scene_state=normalized_scene_state,
             must_show=tuple(CaptionEntityEvidence.from_mapping(item) for item in raw.get("must_show", [])),
             may_show=tuple(CaptionEntityEvidence.from_mapping(item) for item in raw.get("may_show", [])),
             must_not_show_as_primary=tuple(
@@ -812,6 +850,78 @@ def _entity_evidence(
     )
 
 
+def _derive_action_semantics(
+    *,
+    caption: Mapping[str, Any],
+    caption_id: str,
+    section_id: str,
+    beat: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Derive grouping semantics solely from locked Beat and caption metadata."""
+
+    beat = beat or {}
+    beat_id = str(beat.get("beatId") or beat.get("id") or "").strip()
+    raw_risk_flags = beat.get("riskFlags", [])
+    if not isinstance(raw_risk_flags, list) or any(not isinstance(item, str) or not item.strip() for item in raw_risk_flags):
+        raise CaptionContractError(f"caption {caption_id} has invalid Beat riskFlags")
+    risk_flags = [item.strip() for item in raw_risk_flags]
+    raw_high_risk = beat.get("highRisk", False)
+    if not isinstance(raw_high_risk, bool):
+        raise CaptionContractError(f"caption {caption_id} has invalid Beat highRisk")
+    generation_mode = str(beat.get("generationMode") or "").strip()
+
+    raw_caption_event = caption.get("event_evidence", {})
+    if raw_caption_event is None:
+        raw_caption_event = {}
+    if not isinstance(raw_caption_event, Mapping):
+        raise CaptionContractError(f"caption {caption_id} has invalid event_evidence")
+    explicit_event = raw_caption_event.get("hard_split_event")
+    if explicit_event is not None and explicit_event not in _HARD_SPLIT_EVENTS - {"none"}:
+        raise CaptionContractError(f"caption {caption_id} has invalid event_evidence.hard_split_event")
+    beat_event = beat.get("hardSplitEvent")
+    if beat_event is not None and beat_event not in _HARD_SPLIT_EVENTS - {"none"}:
+        raise CaptionContractError(f"caption {caption_id} has invalid Beat hardSplitEvent")
+    risk_event = "climax" if "death_climax" in risk_flags else "high_risk_action" if raw_high_risk or risk_flags else "none"
+    hard_split_event = str(explicit_event or beat_event or risk_event)
+    if explicit_event and beat_event and explicit_event != beat_event:
+        raise CaptionContractError(f"caption {caption_id} caption event evidence conflicts with Beat hardSplitEvent")
+
+    raw_action_key = raw_caption_event.get("action_key")
+    if raw_action_key is not None and (not isinstance(raw_action_key, str) or not raw_action_key.strip()):
+        raise CaptionContractError(f"caption {caption_id} has invalid event_evidence.action_key")
+    action_key = str(raw_action_key).strip() if raw_action_key else (
+        f"event:{hard_split_event}:{beat_id or section_id}" if hard_split_event != "none" else "same_scene_sequence"
+    )
+    raw_incompatible = raw_caption_event.get("incompatible_action_keys", [])
+    if not isinstance(raw_incompatible, list) or any(not isinstance(item, str) or not item.strip() for item in raw_incompatible):
+        raise CaptionContractError(f"caption {caption_id} has invalid event_evidence.incompatible_action_keys")
+    incompatible_action_keys = [item.strip() for item in raw_incompatible]
+    if len(set(incompatible_action_keys)) != len(incompatible_action_keys) or action_key in incompatible_action_keys:
+        raise CaptionContractError(f"caption {caption_id} has contradictory event_evidence.incompatible_action_keys")
+    raw_instance_id = raw_caption_event.get("event_instance_id")
+    if raw_instance_id is not None and (not isinstance(raw_instance_id, str) or not raw_instance_id.strip()):
+        raise CaptionContractError(f"caption {caption_id} has invalid event_evidence.event_instance_id")
+    event_instance_id = str(raw_instance_id).strip() if raw_instance_id else (
+        f"beat:{beat_id}" if hard_split_event != "none" else f"sequence:{beat_id or section_id}"
+    )
+    raw_shot_ids = caption.get("shot_ids", [])
+    if not isinstance(raw_shot_ids, list) or any(not isinstance(item, str) or not item.strip() for item in raw_shot_ids):
+        raise CaptionContractError(f"caption {caption_id} has invalid shot_ids")
+    source_evidence: dict[str, Any] = {
+        "beat": {"beat_id": beat_id, "risk_flags": risk_flags, "high_risk": raw_high_risk, "generation_mode": generation_mode},
+        "caption": {"caption_id": caption_id, "shot_ids": [item.strip() for item in raw_shot_ids], "semantic_rationale": str(caption.get("semantic_rationale") or "")},
+    }
+    if raw_caption_event:
+        source_evidence["caption"]["event_evidence"] = dict(raw_caption_event)
+    return {
+        "action_key": action_key,
+        "incompatible_action_keys": incompatible_action_keys,
+        "hard_split_event": hard_split_event,
+        "event_instance_id": event_instance_id,
+        "source_evidence": source_evidence,
+    }
+
+
 def enrich_captions_to_contracts(
     *,
     script_sections: Sequence[Mapping[str, Any]],
@@ -1205,6 +1315,12 @@ def enrich_captions_to_contracts(
                 "time_context": str(beat_context.get("time_context") or section.get("time_context") or ""),
                 "action_state": text,
                 "continuity_state": {"pronoun_resolutions": pronoun_evidence},
+                "action_semantics": _derive_action_semantics(
+                    caption=caption,
+                    caption_id=caption_id,
+                    section_id=section_id,
+                    beat=beat,
+                ),
             },
             must_show=tuple(must_show),
             may_show=may_show,
@@ -1244,11 +1360,12 @@ def build_caption_visual_contract_document(
 ) -> dict[str, Any]:
     """Serialize the contract set as the ``04_audio/CAPTION_VISUAL_CONTRACT.json`` artifact."""
 
+    validated = [CaptionVisualContract.from_mapping(contract.to_dict()) for contract in contracts]
     return {
         "schema_version": "caption-visual-contract.v2",
         "release_id": str(release_id),
-        "caption_count": len(contracts),
-        "contracts": {c.caption_id: c.to_dict() for c in contracts},
+        "caption_count": len(validated),
+        "contracts": {contract.caption_id: contract.to_dict() for contract in validated},
     }
 
 
