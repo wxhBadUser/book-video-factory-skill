@@ -35,7 +35,10 @@ no clock, no network, no model.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import hashlib
+import json
+from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 NARRATIVE_FUNCTIONS: tuple[str, ...] = (
@@ -58,6 +61,7 @@ SPLIT_REASONS: tuple[str, ...] = (
 
 DEFAULT_MAX_GROUP_DURATION = 12.0
 DEFAULT_MAX_CAPTIONS_PER_GROUP = 3
+MAX_IMAGE_GROUP_DURATION = 16.0
 
 _EPSILON = 1e-6
 
@@ -224,6 +228,15 @@ class CaptionGroup:
     location: str = ""
     time_of_day: str = ""
     split_reasons: tuple[str, ...] = ()
+    scene_state_signature: str = ""
+    contract_bindings: tuple[Mapping[str, str], ...] = ()
+    split_from_previous: Mapping[str, Any] = field(
+        default_factory=lambda: {"required": False, "reasons": []}
+    )
+
+    @property
+    def duration(self) -> float:
+        return self.end - self.start
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -231,12 +244,291 @@ class CaptionGroup:
             "caption_ids": list(self.caption_ids),
             "start": self.start,
             "end": self.end,
+            "duration": self.duration,
             "narrative_function": self.narrative_function,
             "characters": list(self.characters),
             "location": self.location,
             "time_of_day": self.time_of_day,
             "split_reasons": list(self.split_reasons),
+            "scene_state_signature": self.scene_state_signature,
+            "contract_bindings": [dict(item) for item in self.contract_bindings],
+            "split_from_previous": dict(self.split_from_previous),
         }
+
+
+def _scene_state_signature(contract: Any) -> str:
+    state = getattr(contract, "scene_state", {})
+    payload = {
+        "visible_character_ids": sorted(str(item) for item in state.get("visible_character_ids", [])),
+        "location_id": str(state.get("location_id", "")),
+        "time_context": str(state.get("time_context", "")),
+        "continuity_state": _visual_continuity_state(state),
+        "narrative_function": str(getattr(contract, "narrative_function", "")),
+        "visual_mode": str(getattr(contract, "visual_mode", "")),
+    }
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _visual_continuity_state(scene_state: Mapping[str, Any]) -> dict[str, Any]:
+    continuity = scene_state.get("continuity_state", {})
+    if not isinstance(continuity, Mapping):
+        return {"raw": continuity}
+    return {
+        str(key): value
+        for key, value in continuity.items()
+        if str(key) != "pronoun_resolutions"
+    }
+
+
+def _action_context(scene_state: Mapping[str, Any]) -> tuple[str, str, set[str]]:
+    raw = scene_state.get("action_state", "")
+    declared = raw if isinstance(raw, Mapping) else {}
+    text = str(declared.get("text", "") if declared else raw).strip().lower()
+    key = str(declared.get("key") or scene_state.get("action_key") or "").strip()
+    incompatible = declared.get("incompatible_action_keys", scene_state.get("incompatible_action_keys", ()))
+    return text, key, {str(item).strip() for item in incompatible if str(item).strip()} if isinstance(incompatible, Sequence) and not isinstance(incompatible, str) else set()
+
+
+def _contract_split_reasons(previous: Any, following: Any) -> tuple[str, ...]:
+    previous_state = getattr(previous, "scene_state", {})
+    following_state = getattr(following, "scene_state", {})
+    reasons: list[str] = []
+    if {
+        str(item) for item in previous_state.get("visible_character_ids", [])
+    } != {
+        str(item) for item in following_state.get("visible_character_ids", [])
+    }:
+        reasons.append("character_change")
+    if str(previous_state.get("location_id", "")).strip() != str(following_state.get("location_id", "")).strip():
+        reasons.append("location_change")
+    if str(previous_state.get("time_context", "")).strip() != str(following_state.get("time_context", "")).strip():
+        reasons.append("time_change")
+    previous_action, previous_key, previous_incompatible = _action_context(previous_state)
+    following_action, following_key, following_incompatible = _action_context(following_state)
+    if _visual_continuity_state(previous_state) != _visual_continuity_state(following_state):
+        reasons.append("continuity_change")
+    event_markers = (
+        ("enter_or_leave", ("进入", "走进", "离开", "离去", "出现", "消失", "enter", "leave")),
+        ("climax_or_death", ("死亡", "死去", "临终", "高潮", "death", "climax")),
+        ("hero_shot", ("英雄镜头", "英雄特写", "hero shot")),
+        ("high_risk_action", ("坠落", "翻越", "跳下", "跳入", "搏斗", "爆炸", "high-risk")),
+    )
+    for reason, markers in event_markers:
+        if any(marker in following_action for marker in markers) and not any(marker in previous_action for marker in markers):
+            reasons.append(reason)
+    mutually_exclusive = (("站起", "坐下"), ("站立", "坐下"), ("躺下", "站起"), ("清醒", "昏迷"))
+    if any((left in previous_action and right in following_action) or (right in previous_action and left in following_action) for left, right in mutually_exclusive):
+        reasons.append("mutually_exclusive_action")
+    if previous_key and following_key and previous_key != following_key and (
+        following_key in previous_incompatible or previous_key in following_incompatible
+    ):
+        reasons.append("declared_incompatible_action_key")
+    same_source_context = (
+        tuple(getattr(previous, "source_beat_ids", ())) == tuple(getattr(following, "source_beat_ids", ()))
+        and str(getattr(previous, "section_id", "")) == str(getattr(following, "section_id", ""))
+    )
+    same_declared_action = previous_key and previous_key == following_key
+    if not same_source_context and previous_action != following_action and not same_declared_action:
+        reasons.append("source_beat_change")
+    if str(getattr(previous, "narrative_function", "")) != str(getattr(following, "narrative_function", "")):
+        reasons.append("narrative_function_change")
+    if str(getattr(previous, "visual_mode", "")) != str(getattr(following, "visual_mode", "")):
+        reasons.append("visual_mode_change")
+    previous_must_show = {str(item.entity_id) for item in getattr(previous, "must_show", ())}
+    previous_prohibited = {str(item.entity_id) for item in getattr(previous, "must_not_show_as_primary", ())}
+    following_must_show = {str(item.entity_id) for item in getattr(following, "must_show", ())}
+    following_prohibited = {str(item.entity_id) for item in getattr(following, "must_not_show_as_primary", ())}
+    if previous_must_show & following_prohibited or following_must_show & previous_prohibited:
+        reasons.append("must_show_prohibition_conflict")
+    return tuple(reasons)
+
+
+def _image_group(
+    group_id: str,
+    members: Sequence[tuple[Mapping[str, Any], Any]],
+    split_reasons: tuple[str, ...],
+) -> CaptionGroup:
+    first_caption, first_contract = members[0]
+    state = getattr(first_contract, "scene_state", {})
+    return CaptionGroup(
+        group_id=group_id,
+        caption_ids=tuple(str(item.get("caption_id") or item.get("id") or "") for item, _contract in members),
+        start=float(first_caption["start"]),
+        end=float(members[-1][0]["end"]),
+        narrative_function=str(first_contract.narrative_function),
+        characters=tuple(str(item) for item in state.get("visible_character_ids", [])),
+        location=str(state.get("location_id", "")),
+        time_of_day=str(state.get("time_context", "")),
+        split_reasons=split_reasons,
+        scene_state_signature=_scene_state_signature(first_contract),
+        contract_bindings=tuple(
+            {
+                "caption_id": str(item.get("caption_id") or item.get("id") or ""),
+                "caption_visual_contract_sha256": str(contract.content_sha256()),
+            }
+            for item, contract in members
+        ),
+        split_from_previous={"required": bool(split_reasons), "reasons": list(split_reasons)},
+    )
+
+
+def derive_caption_image_groups(
+    captions: Sequence[Mapping[str, Any]],
+    contracts: Mapping[str, Any],
+) -> tuple[CaptionGroup, ...]:
+    """Derive a metadata-only image group for ordered caption contracts."""
+
+    if not captions:
+        raise CaptionGroupingError("cannot group an empty caption timeline")
+    resolved: list[tuple[Mapping[str, Any], Any]] = []
+    prior_start: float | None = None
+    seen: set[str] = set()
+    for item in captions:
+        member_id = str(item.get("caption_id") or item.get("id") or "")
+        if not member_id or member_id in seen:
+            raise CaptionGroupingError("caption IDs must be present and unique")
+        member_contract = contracts.get(member_id)
+        if member_contract is None:
+            raise CaptionGroupingError(f"caption {member_id or '?'} has no visual contract")
+        start = float(item["start"])
+        end = float(item["end"])
+        if end <= start or prior_start is not None and start + _EPSILON < prior_start:
+            raise CaptionGroupingError(f"caption {member_id} has an invalid timeline position")
+        seen.add(member_id)
+        prior_start = start
+        resolved.append((item, member_contract))
+
+    groups: list[CaptionGroup] = []
+    current: list[tuple[Mapping[str, Any], Any]] = [resolved[0]]
+    reasons_for_current: tuple[str, ...] = ()
+    for following in resolved[1:]:
+        reasons = _contract_split_reasons(current[-1][1], following[1])
+        if not reasons and float(following[0]["end"]) - float(current[0][0]["start"]) > MAX_IMAGE_GROUP_DURATION + _EPSILON:
+            reasons = ("duration_limit",)
+        if reasons:
+            groups.append(_image_group(f"G{len(groups) + 1:03d}", current, reasons_for_current))
+            current = [following]
+            reasons_for_current = reasons
+        else:
+            current.append(following)
+    groups.append(_image_group(f"G{len(groups) + 1:03d}", current, reasons_for_current))
+    return tuple(groups)
+
+
+def build_caption_grouping_audit_document(
+    *,
+    release_id: str,
+    captions: Sequence[Mapping[str, Any]],
+    contracts: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build the complete adjacent-boundary audit from computed image groups."""
+
+    groups = derive_caption_image_groups(captions, contracts)
+    group_by_caption = {
+        caption_id: group
+        for group in groups
+        for caption_id in group.caption_ids
+    }
+    ordered_ids = [str(item.get("caption_id") or item.get("id") or "") for item in captions]
+    boundaries: list[dict[str, Any]] = []
+    for previous_id, following_id in zip(ordered_ids, ordered_ids[1:]):
+        previous_group = group_by_caption[previous_id]
+        following_group = group_by_caption[following_id]
+        split = previous_group.group_id != following_group.group_id
+        split_from_previous = following_group.split_from_previous if split else {}
+        boundaries.append({
+            "previous_caption_id": previous_id,
+            "following_caption_id": following_id,
+            "decision": "split" if split else "merge",
+            "required": bool(split_from_previous.get("required", False)),
+            "reasons": list(split_from_previous.get("reasons", [])),
+        })
+    reason_distribution: dict[str, int] = {}
+    for boundary in boundaries:
+        for reason in boundary["reasons"]:
+            reason_distribution[reason] = reason_distribution.get(reason, 0) + 1
+    return {
+        "schema_version": "caption-grouping-audit.v1",
+        "release_id": str(release_id),
+        "caption_count": len(captions),
+        "boundary_count": len(boundaries),
+        "merge_count": sum(1 for item in boundaries if item["decision"] == "merge"),
+        "split_count": sum(1 for item in boundaries if item["decision"] == "split"),
+        "required_split_count": sum(1 for item in boundaries if item["required"]),
+        "reason_distribution": dict(sorted(reason_distribution.items())),
+        "groups": [group.to_dict() for group in groups],
+        "boundaries": boundaries,
+    }
+
+
+def build_caption_grouping_from_project(
+    root: str | Path,
+    *,
+    validate_only: bool = False,
+) -> Path | dict[str, Any]:
+    """Build or validate grouping metadata from the existing audio contracts."""
+
+    from .caption_contract import (
+        CaptionContractError,
+        CaptionVisualContract,
+        build_caption_visual_contract_from_project,
+        load_caption_visual_contract_document,
+    )
+
+    def current_contracts() -> dict[str, Any]:
+        try:
+            derived = build_caption_visual_contract_from_project(
+                root,
+                release_id=str(bindings.get("release_id") or "unknown"),
+                validate_only=True,
+            )
+            return {
+                caption_id: CaptionVisualContract.from_mapping(payload)
+                for caption_id, payload in derived["contracts"].items()
+            }
+        except (CaptionContractError, OSError, ValueError) as error:
+            raise CaptionGroupingError(
+                f"current caption visual contract cannot be derived: {error}"
+            ) from error
+
+    root = Path(root)
+    bindings_path = root / "04_audio" / "CAPTION_BINDINGS.json"
+    contracts_path = root / "04_audio" / "CAPTION_VISUAL_CONTRACT.json"
+    try:
+        bindings = json.loads(bindings_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise CaptionGroupingError(f"caption bindings are unreadable: {error}") from error
+    raw_captions = bindings.get("captions")
+    captions = list(raw_captions.values()) if isinstance(raw_captions, Mapping) else raw_captions
+    if not isinstance(captions, list) or not captions:
+        raise CaptionGroupingError("CAPTION_BINDINGS.json contains no captions")
+    try:
+        contracts = load_caption_visual_contract_document(contracts_path)
+    except (CaptionContractError, OSError, ValueError) as error:
+        if not validate_only:
+            raise CaptionGroupingError(f"caption visual contract is unreadable: {error}") from error
+        contracts = current_contracts()
+    else:
+        current = current_contracts()
+        stale = set(contracts) != set(current) or any(
+            contracts[caption_id].content_sha256() != current[caption_id].content_sha256()
+            for caption_id in contracts
+        )
+        if stale:
+            if not validate_only:
+                raise CaptionGroupingError("persisted caption visual contract is stale")
+            contracts = current
+    document = build_caption_grouping_audit_document(
+        release_id=str(bindings.get("release_id") or "unknown"),
+        captions=captions,
+        contracts=contracts,
+    )
+    if validate_only:
+        return document
+    output_path = root / "04_audio" / "CAPTION_GROUPING_AUDIT.json"
+    output_path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return output_path
 
 
 def _check_unit(unit: CaptionUnit) -> None:
@@ -401,6 +693,7 @@ def audit_shot_caption_groups(
 __all__ = [
     "DEFAULT_MAX_CAPTIONS_PER_GROUP",
     "DEFAULT_MAX_GROUP_DURATION",
+    "MAX_IMAGE_GROUP_DURATION",
     "NARRATIVE_FUNCTIONS",
     "SPLIT_REASONS",
     "CaptionGroup",
@@ -409,6 +702,9 @@ __all__ = [
     "CaptionUnit",
     "assign_caption_registers",
     "audit_shot_caption_groups",
+    "build_caption_grouping_audit_document",
+    "build_caption_grouping_from_project",
+    "derive_caption_image_groups",
     "group_captions",
     "normalize_script_register",
     "required_split_reasons",
