@@ -31,6 +31,10 @@ from .hbg_adapter import (
 from .media_probe import MediaValidationError, VttCue, parse_vtt, probe_audio, validate_vtt
 from .pronunciation import PronunciationError, SpokenCompilation, SpokenSegment, compile_spoken_script
 from .provenance import tool_provenance
+from ..semantic_alignment.caption_grouping import (
+    CaptionSectionRegister,
+    normalize_script_register,
+)
 
 
 class AudioStageError(RuntimeError):
@@ -152,22 +156,37 @@ def _lexicon_for_chapter(lexicon: Mapping[str, Any], chapter: int) -> dict[str, 
     return {"schema_version":"pronunciation-lexicon.v1","release_id":lexicon["release_id"],"entries":entries}
 
 
-def _combine(compilations: Sequence[SpokenCompilation]) -> SpokenCompilation:
-    display_parts=[]; spoken_parts=[]; segments=[]
+def _combine(compilations: Sequence[SpokenCompilation]) -> tuple[SpokenCompilation, list[tuple[float, float]]]:
+    display_parts=[]; spoken_parts=[]; segments=[]; content_spans=[]
     d_off=0; s_off=0
-    for index, comp in enumerate(compilations):
-        if index:
+    for comp in compilations:
+        if display_parts:
             display_parts.append("\n"); spoken_parts.append("\n")
             segments.append(SpokenSegment(d_off,d_off+1,s_off,s_off+1,None)); d_off+=1; s_off+=1
+        content_start = d_off
         display_parts.append(comp.display_text); spoken_parts.append(comp.spoken_text)
         for seg in comp.segments:
             segments.append(SpokenSegment(seg.display_start+d_off,seg.display_end+d_off,seg.spoken_start+s_off,seg.spoken_end+s_off,seg.entry_id))
         d_off+=len(comp.display_text); s_off+=len(comp.spoken_text)
+        content_spans.append((content_start, d_off))
+    # Each chapter's register span runs from its content start to the next
+    # chapter's content start (the inter-chapter separator is folded into the
+    # preceding chapter's trailing caption by restore_display_captions, because
+    # normalize_text drops punctuation and the trailing ".\n" lands on the last
+    # content character's display span) and the final chapter runs to its
+    # content end. This keeps every restored caption covered by exactly one
+    # section register instead of being rejected for straddling a boundary.
+    chapter_ranges=[]
+    for index,(cstart,cend) in enumerate(content_spans):
+        if index + 1 < len(content_spans):
+            chapter_ranges.append((cstart, content_spans[index + 1][0]))
+        else:
+            chapter_ranges.append((cstart, cend))
     display="".join(display_parts); spoken="".join(spoken_parts)
-    return SpokenCompilation(display,spoken,tuple(segments),_sha_bytes(display.encode()),_sha_bytes(spoken.encode()),"body")
+    return SpokenCompilation(display,spoken,tuple(segments),_sha_bytes(display.encode()),_sha_bytes(spoken.encode()),"body"), chapter_ranges
 
 
-def _compile_scripts(script: str, lexicon: Mapping[str, Any]) -> tuple[str, SpokenCompilation, list[str]]:
+def _compile_scripts(script: str, lexicon: Mapping[str, Any]) -> tuple[str, SpokenCompilation, list[str], list[tuple[float, float]]]:
     prefix, chapters=_parse_script(script)
     comps=[]; rendered=[prefix.rstrip()+"\n\n"]
     display_chapters=[]
@@ -175,7 +194,77 @@ def _compile_scripts(script: str, lexicon: Mapping[str, Any]) -> tuple[str, Spok
         comp=compile_spoken_script(body,_lexicon_for_chapter(lexicon,index),scope="body")
         comps.append(comp); display_chapters.append(body)
         rendered.append(f"## 第{index}章｜{title}\n\n{comp.spoken_text}\n\n")
-    return "".join(rendered).rstrip()+"\n",_combine(comps),display_chapters
+    compiled, chapter_ranges=_combine(comps)
+    return "".join(rendered).rstrip()+"\n", compiled, display_chapters, chapter_ranges
+
+
+def _load_script_package(root: Path) -> dict[str, Any]:
+    """Locate the script package that carries each section's narrative_function."""
+
+    candidates = [
+        root / "SCRIPT_PACKAGE.json",
+        root / "02_story_script_故事脚本" / "SCRIPT_PACKAGE.json",
+        root / "02_script" / "SCRIPT_PACKAGE.json",
+    ]
+    for path in candidates:
+        if path.is_file():
+            return _load_object(path, "script package")
+    raise AudioStageError(
+        "SCRIPT_PACKAGE.json is required to tag caption registers but was not found in the project"
+    )
+
+
+def _extract_script_sections(package: Mapping[str, Any]) -> list[Mapping[str, Any]] | None:
+    """Find the per-section register source of truth across SCRIPT_PACKAGE schemas.
+
+    Two layouts exist in the wild: the canonical top-level
+    ``performance_version.sections`` and the older ``script.performance_version.sections``
+    used by shipped book projects. Both are accepted; an unknown layout (or one
+    without a usable section list) is rejected so caption tagging cannot fall
+    back to a silent "plot".
+    """
+
+    top = package.get("performance_version")
+    if isinstance(top, dict) and isinstance(top.get("sections"), list) and top["sections"]:
+        return top["sections"]
+    nested = (package.get("script") or {}).get("performance_version")
+    if isinstance(nested, dict) and isinstance(nested.get("sections"), list) and nested["sections"]:
+        return nested["sections"]
+    return None
+
+
+def _build_section_register(
+    root: Path, chapter_ranges: list[tuple[float, float]]
+) -> list[CaptionSectionRegister]:
+    """Deterministically map each compiled chapter to its script-section register.
+
+    The script package's ``performance_version.sections`` carry the real
+    narrative_function (and any characters/location/time_of_day) per section,
+    in the same order as the compiled chapters. This is the B06/B07 source of
+    truth: production captions are tagged with their *real* register instead of
+    being left empty and silently collapsed to "plot".
+    """
+
+    package = _load_script_package(root)
+    sections = _extract_script_sections(package)
+    if not sections:
+        raise AudioStageError("SCRIPT_PACKAGE.json has no performance_version.sections to tag captions")
+    if len(sections) != len(chapter_ranges):
+        raise AudioStageError(
+            f"SCRIPT_PACKAGE sections ({len(sections)}) do not match compiled chapters "
+            f"({len(chapter_ranges)}); caption tagging cannot be deterministic"
+        )
+    register: list[CaptionSectionRegister] = []
+    for (start, end), section in zip(chapter_ranges, sections):
+        register.append(CaptionSectionRegister(
+            display_start=start,
+            display_end=end,
+            narrative_function=normalize_script_register(str(section.get("narrative_function") or "")),
+            characters=tuple(str(item) for item in (section.get("characters") or ())),
+            location=str(section.get("location") or ""),
+            time_of_day=str(section.get("timeOfDay") or section.get("time_of_day") or ""),
+        ))
+    return register
 
 
 def _compilation_json(comp: SpokenCompilation) -> dict[str, Any]:
@@ -240,6 +329,7 @@ def _ensure_media(
     lead_comp: SpokenCompilation,
     reveal_comp: SpokenCompilation,
     raw_metadata_path: Path | None = None,
+    section_register: Sequence[CaptionSectionRegister] | None = None,
 ) -> tuple[dict[str, Any],list[dict[str,Any]],dict[str,Any]]:
     audio=staging/"assets/audio"
     body_text_path=audio/"narration-full.txt"
@@ -270,7 +360,7 @@ def _ensure_media(
         try: cap_cues.append(VttCue(float(item["start"]),float(item["end"]),str(item["text"])))
         except (KeyError,TypeError,ValueError) as error: raise AudioStageError("HBG caption record is invalid") from error
         if item.get("allowShort") is True: allow.add(i)
-    restored=restore_display_captions(cap_cues,comp,min_chars=int(input_data["caption_min_chars"]),max_chars=int(input_data["caption_max_chars"]),min_duration=float(input_data["caption_min_duration"]),allow_short_cues=allow)
+    restored=restore_display_captions(cap_cues,comp,min_chars=int(input_data["caption_min_chars"]),max_chars=int(input_data["caption_max_chars"]),min_duration=float(input_data["caption_min_duration"]),allow_short_cues=allow,section_register=section_register)
     def evidence(item, relative):
         return {
             "path": relative,
@@ -497,12 +587,19 @@ def generate_audio_stage(project:Path,input_path:Path,lexicon_path:Path,*,runner
     try:
         input_path=_official_project_file(root,input_path,"04_audio/AUDIO_STAGE_INPUT.json","audio stage input")
         lexicon_path=_official_project_file(root,lexicon_path,"04_audio/PRONUNCIATION_LEXICON.json","pronunciation lexicon")
+        # L8 (BLOCKER-6): fail closed fast -- a project that opts into a VPP must
+        # have its per-caption voice audition explicitly approved (and pinned to
+        # the exact VPP bytes) before ANY narration render, including the
+        # preliminary pass. A VPP edited after approval invalidates the prior
+        # approval and blocks both preliminary and final narration.
+        _enforce_voice_audition_gate(root)
         input_raw=_load_object(input_path,"audio stage input"); lex_raw=_load_object(lexicon_path,"pronunciation lexicon")
         input_data=validate_audio_stage_input(root,input_raw); lexicon=validate_pronunciation_lexicon(root,lex_raw)
         if input_data["release_id"]!=lexicon["release_id"]: raise AudioStageError("input and lexicon release mismatch")
         prior=verify_phase4_prerequisites(root,input_data["release_id"])
         original_script=(root/"SCRIPT.md").read_text(encoding="utf-8")
-        spoken_script,comp,display_chapters=_compile_scripts(original_script,lexicon)
+        spoken_script,comp,display_chapters,chapter_ranges=_compile_scripts(original_script,lexicon)
+        section_register=_build_section_register(root,chapter_ranges)
         lead_comp=compile_spoken_script(input_data["lead_text"],lexicon,scope="lead")
         reveal_comp=compile_spoken_script(input_data["reveal_text"],lexicon,scope="reveal")
         staging_input=dict(input_data); staging_input["lead_text"]=lead_comp.spoken_text; staging_input["reveal_text"]=reveal_comp.spoken_text
@@ -511,7 +608,7 @@ def generate_audio_stage(project:Path,input_path:Path,lexicon_path:Path,*,runner
         manifest_relative="04_audio/AUDIO_PRELIMINARY_MANIFEST.json"
         existing_path=root/manifest_relative
         if existing_path.is_file():
-            _raw_existing, _captions_existing, expected_media_report = _ensure_media(root, comp, input_data, lead_comp=lead_comp, reveal_comp=reveal_comp, raw_metadata_path=root/"04_audio/raw/audio_meta.hbg.json")
+            _raw_existing, _captions_existing, expected_media_report = _ensure_media(root, comp, input_data, lead_comp=lead_comp, reveal_comp=reveal_comp, raw_metadata_path=root/"04_audio/raw/audio_meta.hbg.json", section_register=section_register)
             expected_provenance = tool_provenance(external_edge_service_exercised=runner is None)
             stage_path=_verify_existing_preliminary(
                 root,
@@ -531,7 +628,7 @@ def generate_audio_stage(project:Path,input_path:Path,lexicon_path:Path,*,runner
                 if not _edge_tts_available(): raise AudioStageError("edge-tts is missing; install it before Phase 4")
                 run_hbg_narration(staging); run_hbg_caption_audit(staging); run_hbg_density_audit(staging)
             else: runner(staging)
-            raw,captions,media_report=_ensure_media(staging,comp,input_data,lead_comp=lead_comp,reveal_comp=reveal_comp)
+            raw,captions,media_report=_ensure_media(staging,comp,input_data,lead_comp=lead_comp,reveal_comp=reveal_comp,section_register=section_register)
             display_meta,storyboard=_display_outputs(staging,raw,captions,comp,display_chapters)
             gaps=_gap_report(storyboard,captions)
             payloads=_collect_audio_payloads(staging)
@@ -708,7 +805,8 @@ def finalize_audio_stage(
             raise AudioStageError("Phase 4 release IDs disagree")
         prior = verify_phase4_prerequisites(root, input_data["release_id"])
         original_script = (root / "SCRIPT.md").read_text(encoding="utf-8")
-        spoken_script, compilation, display_chapters = _compile_scripts(original_script, lexicon)
+        spoken_script, compilation, display_chapters, chapter_ranges = _compile_scripts(original_script, lexicon)
+        section_register = _build_section_register(root, chapter_ranges)
         lead_comp = compile_spoken_script(input_data["lead_text"], lexicon, scope="lead")
         reveal_comp = compile_spoken_script(input_data["reveal_text"], lexicon, scope="reveal")
         preliminary_input_digest = _sha_bytes(_canonical({
@@ -717,7 +815,7 @@ def finalize_audio_stage(
             "prior": prior,
             "spoken": compilation.spoken_sha256,
         }))
-        _raw_verified, _captions_verified, expected_preliminary_media = _ensure_media(root, compilation, input_data, lead_comp=lead_comp, reveal_comp=reveal_comp, raw_metadata_path=root/"04_audio/raw/audio_meta.hbg.json")
+        _raw_verified, _captions_verified, expected_preliminary_media = _ensure_media(root, compilation, input_data, lead_comp=lead_comp, reveal_comp=reveal_comp, raw_metadata_path=root/"04_audio/raw/audio_meta.hbg.json", section_register=section_register)
         preliminary_external = preliminary.get("external_edge_service_exercised")
         if not isinstance(preliminary_external, bool):
             raise AudioStageError("preliminary Edge-service provenance is invalid")
@@ -807,6 +905,24 @@ def finalize_audio_stage(
                 "audio_meta.json": _pretty(final_meta),
                 "STORYBOARD.json": _pretty(final_storyboard),
             }
+            # Build the Caption Visual Contract (the authoritative per-caption
+            # source of truth the Director and Render stages consume) as a
+            # Phase-4 artifact when the locked inputs exist. Fail-closed: an
+            # unbindable caption rejects the whole audio stage rather than
+            # shipping a frame with no semantic contract. Only added on a fresh
+            # finalize so already-finalized manifests are not retro-modified.
+            contract_rel = "04_audio/CAPTION_VISUAL_CONTRACT.json"
+            if (
+                (root / "02_story_script_故事脚本/SCRIPT_PACKAGE.json").is_file()
+                and (root / "STORYBOARD_BASE.json").is_file()
+                and (root / "04_audio/CAPTION_BINDINGS.json").is_file()
+                and (root / "03_images_生成图片/BOOK_VISUAL_PROFILE.json").is_file()
+            ):
+                from book_video_factory.semantic_alignment.caption_contract import (
+                    build_caption_visual_contract_from_project,
+                )
+                build_caption_visual_contract_from_project(root, release_id=input_data["release_id"])
+                final_payloads[contract_rel] = (root / contract_rel).read_bytes()
             final_output_hashes = {path: _sha_bytes(data) for path, data in final_payloads.items()}
             stage_relative = f"manifests/stages/audio_final/audio-final-{input_digest[:16]}.json"
             stage = {
@@ -866,7 +982,7 @@ def finalize_audio_stage(
                 )
             final_payloads["04_audio/AUDIO_STAGE_MANIFEST.json"] = manifest_bytes
             for relative in final_payloads:
-                if relative in {"audio_meta.json", "STORYBOARD.json"}:
+                if relative in {"audio_meta.json", "STORYBOARD.json", "04_audio/CAPTION_VISUAL_CONTRACT.json"}:
                     continue
                 if (root / relative).exists():
                     raise AudioStageConflict(f"refusing to overwrite pre-existing final Phase 4 output: {relative}")
@@ -938,19 +1054,36 @@ _VOICE_PERFORMANCE_PLAN_RELATIVE = "04_audio/VOICE_PERFORMANCE_PLAN.json"
 _VOICE_AUDITION_APPROVAL_RELATIVE = "04_audio/VOICE_AUDITION_APPROVAL.json"
 
 
+def _voice_performance_plan_sha256(root: Path) -> str:
+    """SHA-256 of the project's ``VOICE_PERFORMANCE_PLAN.json``.
+
+    The audition approval is pinned to this digest, so a VPP edited after
+    approval (even a one-character change) invalidates the approval and blocks
+    narration until a fresh audition is recorded against the new plan.
+    """
+
+    path = root / _VOICE_PERFORMANCE_PLAN_RELATIVE
+    if not path.is_file():
+        raise AudioStageError(f"Voice Performance Plan is missing: {path}")
+    return sha256_file(path)
+
+
 def _enforce_voice_audition_gate(root: Path) -> dict[str, Any] | None:
-    """Enforce the voice-audition gate for an audio finalization.
+    """Enforce the voice-audition gate for an audio stage.
 
     Returns the approval record when a Voice Performance Plan is present and
-    approved. Returns ``None`` when the project did not opt into a VPP, in which
-    case no audition is required. Raises ``AudioStageError`` when a VPP exists
-    but no explicit audition approval is present -- narration render is blocked
-    until the audition is approved.
+    approved against the *exact current* VPP bytes. Returns ``None`` when the
+    project did not opt into a VPP, in which case no audition is required.
+    Raises ``AudioStageError`` when a VPP exists but no explicit audition
+    approval is present, or the approval is pinned to a different VPP digest --
+    narration render (preliminary and final) is blocked until the audition is
+    re-approved against the current plan.
     """
 
     vpp_path = root / _VOICE_PERFORMANCE_PLAN_RELATIVE
     if not vpp_path.is_file():
         return None
+    current_sha = sha256_file(vpp_path)
     approval_path = root / _VOICE_AUDITION_APPROVAL_RELATIVE
     if not approval_path.is_file():
         raise AudioStageError(
@@ -958,4 +1091,12 @@ def _enforce_voice_audition_gate(root: Path) -> dict[str, Any] | None:
             "performance, but no voice audition approval exists; narration render "
             "is blocked until the audition is explicitly approved"
         )
-    return require_voice_audition_approved(approval_path)
+    approval = require_voice_audition_approved(approval_path)
+    approved_sha = approval.get("voice_performance_plan_sha256")
+    if approved_sha != current_sha:
+        raise AudioStageError(
+            "the voice audition approval is pinned to a different VOICE_PERFORMANCE_PLAN.json "
+            f"(approved={approved_sha}, current={current_sha}); narration render is blocked "
+            "until the audition is re-approved against the current plan"
+        )
+    return approval

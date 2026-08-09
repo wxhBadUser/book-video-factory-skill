@@ -32,6 +32,7 @@ of them drifts, so an edited caption can never be served by a stale image.
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any, Iterable, Mapping, Sequence
 
 from book_video_factory.semantic_alignment.caption_grouping import NARRATIVE_FUNCTIONS
@@ -112,8 +113,17 @@ def build_aligned_prompt_blocks(
     style: Mapping[str, Any],
     forbidden_entities: Sequence[str] | Iterable[str] = (),
     anchors: Sequence[str] | Iterable[str] = (),
+    must_show: Sequence[str] | Iterable[str] = (),
+    must_not_show: Sequence[str] | Iterable[str] = (),
 ) -> tuple[str, ...]:
-    """Return the numbered prompt blocks in strict priority order."""
+    """Return the numbered prompt blocks in strict priority order.
+
+    ``must_show`` / ``must_not_show`` come from the authoritative Caption Visual
+    Contract: the referents the frame MUST depict (or must NOT depict as the
+    primary subject) for the exact caption on screen. They are asserted in
+    addition to the proposition-derived visible entities so a boilerplate or
+    mismatched proposition cannot silently drop a named character or event.
+    """
 
     caption = caption_text.strip()
     if not caption:
@@ -162,8 +172,18 @@ def build_aligned_prompt_blocks(
         blocks.append(
             f"[3/9 REQUIRED VISIBLE] Must be clearly recognisable in frame: {described}."
         )
+    contract_must_show = [str(item).strip() for item in must_show if str(item).strip()]
+    if contract_must_show:
+        blocks.append(
+            "[3/9 REQUIRED VISIBLE] Per the Caption Visual Contract, this frame MUST show: "
+            + ", ".join(contract_must_show)
+            + ". If a named character or object above is missing, the frame fails the contract."
+        )
 
     forbidden = [str(item).strip() for item in forbidden_entities if str(item).strip()]
+    contract_must_not = [str(item).strip() for item in must_not_show if str(item).strip()]
+    if contract_must_not:
+        forbidden = forbidden + contract_must_not
     blocks.append(
         "[4/9 FORBIDDEN] Must not appear: "
         + (", ".join(forbidden) if forbidden else "no shot-specific prohibitions")
@@ -210,8 +230,17 @@ def compute_prompt_binding(
     scene_id: str,
     beat_ids: Sequence[str] | Iterable[str],
     shot_id: str,
+    caption_visual_contract_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Bind a prompt to the caption, proposition, scene and beats it came from."""
+    """Bind a prompt to the caption, proposition, scene and beats it came from.
+
+    ``caption_visual_contract_sha256`` is the hash of the authoritative Caption
+    Visual Contract the caption was illustrated against. It is bound whenever a
+    contract is in force (every remediated release) so an edited caption can
+    never be served by a stale image that was built against a different
+    contract. It is optional only for legacy projects that predate the
+    contract; remediated releases always supply it.
+    """
 
     ids = [str(item).strip() for item in caption_ids if str(item).strip()]
     beats = [str(item).strip() for item in beat_ids if str(item).strip()]
@@ -227,7 +256,7 @@ def compute_prompt_binding(
         raise PromptSpecError("prompt binding requires nonempty caption text")
     if not prompt.strip():
         raise PromptSpecError("prompt binding requires a nonempty prompt")
-    return {
+    binding: dict[str, Any] = {
         "shot_id": str(shot_id),
         "scene_id": str(scene_id),
         "beat_ids": beats,
@@ -236,6 +265,11 @@ def compute_prompt_binding(
         "proposition_sha256": proposition.content_sha256(),
         "prompt_sha256": _sha256_text(prompt),
     }
+    if caption_visual_contract_sha256 is not None:
+        if not isinstance(caption_visual_contract_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", caption_visual_contract_sha256):
+            raise PromptSpecError("caption_visual_contract_sha256 must be a 64-char hex digest when supplied")
+        binding["caption_visual_contract_sha256"] = caption_visual_contract_sha256
+    return binding
 
 
 def verify_prompt_binding(
@@ -244,8 +278,17 @@ def verify_prompt_binding(
     caption_text: str,
     proposition: VisualProposition,
     prompt: str,
+    caption_visual_contract_sha256: str | None = None,
 ) -> None:
-    """Fail closed when the caption, proposition or prompt drifted from the binding."""
+    """Fail closed when the caption, proposition, prompt, or contract drifted.
+
+    When ``caption_visual_contract_sha256`` is supplied it must match the value
+    bound into the prompt binding -- an edited contract (or a frame built
+    against a different contract) fails closed. When the binding carries the
+    field but no expected value is supplied, the field is left unverified (this
+    only happens for legacy bindings predating the contract; remediated
+    releases always pass the expected value).
+    """
 
     missing = [field for field in _BINDING_FIELDS if field not in binding]
     if missing:
@@ -268,6 +311,13 @@ def verify_prompt_binding(
             f"prompt body changed since it was bound "
             f"(binding {binding['prompt_sha256'][:12]}, actual {expected_prompt[:12]})"
         )
+    if caption_visual_contract_sha256 is not None:
+        bound = binding.get("caption_visual_contract_sha256")
+        if bound != caption_visual_contract_sha256:
+            raise PromptBindingError(
+                f"caption visual contract changed since the prompt was built "
+                f"(binding {str(bound)[:12]}, actual {caption_visual_contract_sha256[:12]})"
+            )
 
 
 __all__ = [

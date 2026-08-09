@@ -20,6 +20,9 @@ from book_video_factory.semantic_alignment.vision_review import (
     VisionReviewError,
     validate_review_decision,
 )
+from book_video_factory.semantic_alignment.caption_contract import (
+    load_caption_visual_contract_document,
+)
 from book_video_factory.semantic_alignment.vision_review.contracts import VisionEvidence
 from book_video_factory.semantic_alignment.vision_review.evidence import (
     StaleVisionEvidenceError,
@@ -47,7 +50,8 @@ _REPORT_FIELDS = {
     "opening_mix_approval_sha256", "hbg_vendor_lock_sha256", "workspace", "chosen_renderer",
     "render_job_id", "expected_work_dir", "free_disk_bytes", "free_disk_gib", "required_disk_bytes",
     "required_disk_gib", "style_validation", "hbg_disk_preflight", "existing_work_dirs",
-    "recovery_commands", "vision_review_decision_present", "vision_review_blockers",
+    "recovery_commands",     "vision_review_decision_present", "vision_review_blockers",
+    "caption_visual_contract_in_force", "caption_visual_contract_blockers",
     "recorded_at", "status", "next_stage_status",
 }
 
@@ -58,6 +62,7 @@ _REPORT_FIELDS = {
 # exist and be a regular file: a missing, symlinked, or tampered decision fails
 # closed and blocks the render -- "no verified review means no render".
 _SCENE_REVIEW_DECISION_RELATIVE = "06_visual_production/SCENE_REVIEW_DECISION.json"
+_CONTRACT_RELATIVE = "04_audio/CAPTION_VISUAL_CONTRACT.json"
 _REQUIRED_DECISION_FIELDS = {
     "task_id", "semantic_review_status", "reality_review_status",
     "identity_review_status", "note",
@@ -68,6 +73,7 @@ _OPTIONAL_DECISION_FIELDS = {"vision_evidence", "legacy_pass"}
 def _scene_review_vision_blockers(
     decision_path: Path,
     assets_by_task: Mapping[str, Any] | None = None,
+    root: Path | None = None,
 ) -> list[str]:
     """Return the task ids whose scene review decision lacks a vision binding.
 
@@ -78,8 +84,11 @@ def _scene_review_vision_blockers(
 
     ``assets_by_task`` optionally maps ``task_id`` to the current on-disk image
     path. When supplied, a shot whose stored evidence no longer matches the
-    pixels on disk (image swapped after review) is also blocked (BLOCKER-2
-    change-invalidation at the render gate).
+    *current* pixels, caption prose, or image prompt is also blocked
+    (BLOCKER-2 / BLOCKER-4 change-invalidation at the render gate). The
+    authoritative caption/prompt are sourced from the director task queue
+    (IMAGE_TASKS.jsonl) -- the same source the evidence was minted over. When
+    that source cannot be loaded for a shot, the gate fails closed and blocks.
     """
 
     if decision_path.is_symlink() or not decision_path.is_file():
@@ -96,6 +105,21 @@ def _scene_review_vision_blockers(
     if not isinstance(decisions, list):
         raise RenderPreflightError("scene review decision has no decisions")
     blockers: list[str] = []
+    caption_prompt_by_task: Mapping[str, tuple[str, str]] | None = None
+    if assets_by_task is not None:
+        search_root = root if root is not None else decision_path.parent.parent
+        try:
+            from book_video_factory.production_visuals.registry import _tasks as _load_tasks
+
+            task_map = _load_tasks(search_root)
+            caption_prompt_by_task = {
+                str(tid): (str(t.get("caption_text", "")), str(t.get("prompt", "")))
+                for tid, t in task_map.items()
+                if isinstance(t, Mapping)
+            }
+        except Exception:
+            # Cannot source the authoritative caption/prompt -> fail closed below.
+            caption_prompt_by_task = None
     for item in decisions:
         if not isinstance(item, dict):
             raise RenderPreflightError("scene review decision item is invalid")
@@ -112,13 +136,89 @@ def _scene_review_vision_blockers(
             evidence_payload = item.get("vision_evidence")
             asset_path = assets_by_task.get(task_id)
             if isinstance(evidence_payload, Mapping) and asset_path is not None:
+                pair = caption_prompt_by_task.get(task_id) if caption_prompt_by_task is not None else None
+                if pair is None:
+                    # No authoritative caption/prompt available -> cannot prove
+                    # the approval is current, so the render is blocked.
+                    blockers.append(task_id)
+                    continue
                 try:
                     verify_evidence_current(
                         VisionEvidence.from_mapping({**evidence_payload, "shot_id": task_id}),
                         image_path=Path(asset_path),
+                        caption_text=pair[0],
+                        prompt_text=pair[1],
                     )
                 except StaleVisionEvidenceError:
                     blockers.append(task_id)
+    return blockers
+
+
+def _contract_currency_blockers(contract_path: Path, root: Path, release_id: str | None = None) -> list[str]:
+    """When the Caption Visual Contract is in force, every production image task
+    must bind the contract's current hash, or the render is blocked.
+
+    This is the final fail-closed link in the chain
+    ``Caption -> Caption Visual Contract -> Shot Grouping -> Visual Proposition
+    -> Image Prompt -> Actual Image -> Visual Alignment Review -> Render Gate``:
+    an edited caption, recomputed proposition, or regenerated prompt changes the
+    contract's ``content_sha256``, which invalidates the task's bound
+    ``caption_visual_contract_sha256``, which blocks the render. The contract is
+    the single source of truth; nothing downstream may outlive a contract change.
+
+    Fail-closed: a missing / symlinked / invalid / tampered / release-mismatched
+    contract blocks the entire render rather than proceeding with a stale image
+    set.
+    """
+
+    if contract_path.is_symlink() or not contract_path.is_file():
+        raise RenderPreflightError(f"caption visual contract is missing or symlinked: {contract_path}")
+    try:
+        raw = json.loads(contract_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RenderPreflightError(f"caption visual contract is unreadable: {error}") from error
+    if isinstance(release_id, str) and raw.get("release_id") is not None and str(raw.get("release_id")) != release_id:
+        raise RenderPreflightError(
+            f"caption visual contract release {raw.get('release_id')!r} does not match "
+            f"render release {release_id!r}"
+        )
+    # load_caption_visual_contract_document fail-closed-validates every contract
+    # (caption_text sha256 + narrative_function), so a tampered contract blocks.
+    try:
+        contracts = load_caption_visual_contract_document(contract_path)
+    except Exception as error:
+        raise RenderPreflightError(f"caption visual contract is invalid: {error}") from error
+    if not contracts:
+        raise RenderPreflightError("caption visual contract contains no contracts")
+
+    content_sha = {cid: c.content_sha256() for cid, c in contracts.items()}
+    try:
+        from book_video_factory.production_visuals.registry import _tasks as _load_tasks
+
+        task_map = _load_tasks(root)
+    except Exception as error:
+        raise RenderPreflightError(
+            f"cannot load production image tasks for contract currency: {error}"
+        ) from error
+
+    blockers: list[str] = []
+    for tid, task in task_map.items():
+        if not isinstance(task, Mapping):
+            continue
+        caption_ids = task.get("caption_ids") or []
+        if not caption_ids:
+            # identity / style-reference tasks are not bound to the contract.
+            continue
+        bound = task.get("caption_visual_contract_sha256")
+        expected_inputs = sorted(content_sha[cid] for cid in caption_ids if cid in content_sha)
+        if not expected_inputs:
+            # The contract covers none of this task's captions -> the contract is
+            # incomplete relative to the production tasks, so the bind is unsafe.
+            blockers.append(str(tid))
+            continue
+        expected = hashlib.sha256("|".join(expected_inputs).encode("utf-8")).hexdigest()
+        if bound is None or bound != expected:
+            blockers.append(str(tid))
     return blockers
 
 
@@ -354,12 +454,21 @@ def preflight_render(
             if isinstance(task_id, str) and isinstance(asset_rel, str):
                 assets_by_task[task_id] = root / asset_rel
     vision_blockers = _scene_review_vision_blockers(decision_path, assets_by_task)
+    # L5: when the Caption Visual Contract is in force, the prompt binding of every
+    # production image task must carry its current hash; a stale or missing bind
+    # blocks the render (fail-closed). Skipped when the contract is absent so
+    # pre-contract projects/tests are unaffected.
+    contract_path = root / _CONTRACT_RELATIVE
+    contract_blockers: list[str] = []
+    if contract_path.is_file():
+        contract_blockers = _contract_currency_blockers(contract_path, root, manifest.get("release_id"))
     passed = (
         bool(style_evidence["validated"])
         and bool(disk_evidence["passed"])
         and usage.free >= required_bytes
         and not blockers
         and not vision_blockers
+        and not contract_blockers
     )
     render_manifest_sha = sha256_file(prepared.render_manifest_path)
     job_id = hashlib.sha256(f"{render_manifest_sha}:{manifest['output_name']}".encode("utf-8")).hexdigest()[:20]
@@ -384,6 +493,8 @@ def preflight_render(
         "recovery_commands": [item["remove_command"] for item in work_dirs if item["remove_command"]],
         "vision_review_decision_present": decision_path.is_file(),
         "vision_review_blockers": vision_blockers,
+        "caption_visual_contract_in_force": contract_path.is_file(),
+        "caption_visual_contract_blockers": contract_blockers,
         "recorded_at": _now(),
         "status": "pass" if passed else "blocked",
         "next_stage_status": "ready_for_hbg_render" if passed else "blocked_by_render_preflight",

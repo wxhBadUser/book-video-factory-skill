@@ -4,7 +4,6 @@ import hashlib
 import json
 import re
 import statistics
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -34,8 +33,15 @@ class VisualPropositionStaleError(StoryboardPlanError):
     """
 
 
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _audio_meta_sha256(audio_meta: Mapping[str, Any]) -> str:
+    # Deterministic, content-based fingerprint of the narration the visual
+    # proposition was planned against. No wall-clock is involved, so recompiling
+    # the same narration always yields the same hash and therefore a byte-identical
+    # storyboard (the previous wall-clock ``proposition_frozen_at`` stamp broke that).
+    canonical = json.dumps(
+        audio_meta, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$")
@@ -408,9 +414,11 @@ def compile_final_storyboard(
     beat_index, _, _ = _beat_index(phase2_beats)
     opening = audio_meta.get("opening")
     if not isinstance(opening, Mapping): raise StoryboardPlanError("audio_meta opening evidence is missing")
-    # §8 visual-lag kill switch: freeze the wall clock at plan time so a later
-    # narration edit can be detected as stale by validate_visual_proposition_currency.
-    frozen_at = _utcnow_iso()
+    # §8 visual-lag kill switch: bind the storyboard to a content hash of the
+    # narration it was planned against. A later narration edit changes the hash,
+    # which validate_visual_proposition_currency detects as stale. No wall-clock
+    # is used, so recompiling identical inputs yields a byte-identical storyboard.
+    audio_meta_sha256 = _audio_meta_sha256(audio_meta)
     body_start = _number(opening.get("bodyStart"), "audio_meta.opening.bodyStart")
     body = audio_meta.get("body")
     body_duration = (
@@ -463,7 +471,7 @@ def compile_final_storyboard(
             "id": shot["id"], "beatId": shot["source_beat_ids"][0],
             "narrativeFunction": shot_narrative_function,
             "narrative_function": shot_narrative_function,
-            "proposition_frozen_at": frozen_at,
+            "audio_meta_sha256": audio_meta_sha256,
             "sourceBeatIds": list(shot["source_beat_ids"]), "chapter": shot["chapter"],
             "cue": shot["cue"], "captionIds": list(shot["caption_ids"]),
             "description": shot["description"], "captionIntent": " / ".join(captions[c]["text"] for c in shot["caption_ids"]) or shot["hold_reason"],
@@ -510,44 +518,30 @@ def validate_visual_proposition_currency(
     storyboard: Sequence[Mapping[str, Any]],
     audio_meta: Mapping[str, Any],
 ) -> None:
-    """§8 kill switch: block advancement when narration changed after freeze.
+    """§8 kill switch: block advancement when narration content changed after freeze.
 
-    ``storyboard`` carries a ``proposition_frozen_at`` wall-clock stamp on every
-    scene (set by ``compile_final_storyboard``). If ``audio_meta.last_modified``
-    is newer than that stamp, the planned imagery is stale relative to the words
-    it must illustrate and the pipeline must re-plan before producing visuals.
+    ``compile_final_storyboard`` embeds the content hash of the narration
+    (``audio_meta``) it planned against into every scene as ``audio_meta_sha256``.
+    If the current ``audio_meta`` hashes to a different value, the narration was
+    edited after the visual proposition was frozen and the imagery can no longer
+    be trusted, so the pipeline must re-plan before producing visuals.
 
-    Fail-closed: a storyboard without a freeze stamp cannot certify currency,
-    so it is rejected. A missing ``audio_meta.last_modified`` means staleness
-    cannot be proven -- we do not block on an unobservable signal, but the
-    freeze stamp itself is still required.
+    Fail-closed: a storyboard without a valid ``audio_meta_sha256`` stamp cannot
+    certify currency, so it is rejected. The check is purely content-based -- no
+    wall-clock is involved -- so it is reproducible and cannot be defeated by
+    clock drift or a hand-edited ``last_modified`` field.
     """
 
     if not storyboard:
         return
-    frozen_raw = storyboard[0].get("proposition_frozen_at")
-    if not isinstance(frozen_raw, str) or not frozen_raw:
+    embedded = storyboard[0].get("audio_meta_sha256")
+    if not isinstance(embedded, str) or not _SHA_RE.fullmatch(embedded):
         raise VisualPropositionStaleError(
-            "visual proposition has no proposition_frozen_at stamp; currency cannot be certified"
+            "visual proposition has no valid audio_meta_sha256 stamp; currency cannot be certified"
         )
-    try:
-        frozen_dt = datetime.fromisoformat(frozen_raw)
-    except ValueError:
+    current = _audio_meta_sha256(audio_meta)
+    if current != embedded:
         raise VisualPropositionStaleError(
-            f"proposition_frozen_at is not a valid ISO timestamp: {frozen_raw!r}"
-        )
-    last_modified = audio_meta.get("last_modified")
-    if not isinstance(last_modified, str) or not last_modified:
-        # Narration modification time is not declared; staleness is unprovable.
-        return
-    try:
-        modified_dt = datetime.fromisoformat(last_modified)
-    except ValueError:
-        raise VisualPropositionStaleError(
-            f"audio_meta.last_modified is not a valid ISO timestamp: {last_modified!r}"
-        )
-    if modified_dt > frozen_dt:
-        raise VisualPropositionStaleError(
-            f"narration was modified ({last_modified}) after the visual proposition "
-            f"was frozen ({frozen_raw}); re-plan the storyboard before visual production"
+            "narration content (audio_meta) changed after the visual proposition "
+            "was frozen; re-plan the storyboard before visual production"
         )

@@ -57,21 +57,20 @@ class SevenTupleDirectTests(unittest.TestCase):
         self.assertEqual(bridge.subject, "福贵")
         self.assertEqual(bridge.event_alignment, "verified")
 
-    def test_direct_boilerplate_rationale_not_rejected(self) -> None:
-        # Boilerplate rationale predates the event-alignment guard; it is still
-        # allowed in direct mode (recorded, not fatal) and must not trip the
-        # seven-tuple rule. This pins the existing behavior so the upgrade is
-        # additive, not a silent regression.
-        bridge = evaluate_semantic_bridge(
-            shot_id="as-bp",
-            required_entities=["凤霞"],
-            source_entities=["凤霞"],
-            rationale="字幕与画面共享当前场景",
-            caption_texts=["凤霞出嫁那天，唢呐声盖过了哭声"],
-        )
-        self.assertEqual(bridge.mode, "direct")
-        self.assertTrue(bridge.rationale_is_boilerplate)
-        self.assertEqual(bridge.event_alignment, "boilerplate-skipped")
+    def test_boilerplate_rationale_cannot_launder_a_mismatched_event(self) -> None:
+        # A-bridge attack: caption says 凤霞出嫁, the image actually depicts
+        # 凤霞雪地奔跑, and the rationale is template boilerplate that asserts
+        # alignment without demonstrating it. Boilerplate is weak evidence, not
+        # an exemption -- it must still clear the different-event check, so this
+        # mismatched-event bridge is rejected.
+        with self.assertRaises(SemanticContractError):
+            evaluate_semantic_bridge(
+                shot_id="as-bp",
+                required_entities=["凤霞"],
+                source_entities=["凤霞"],
+                rationale="字幕与画面共享当前场景",
+                caption_texts=["凤霞出嫁那天，唢呐声盖过了哭声"],
+            )
 
 
 class SymbolicAnchorTests(unittest.TestCase):
@@ -115,15 +114,17 @@ class SymbolicAnchorTests(unittest.TestCase):
             known_symbol_registry=("老牛", "盐路"),
         )
 
-    def test_symbolic_without_registry_still_requires_naming(self) -> None:
-        # Backward compatible: when no registry is supplied the stricter anchor
-        # check is skipped, but the existing name-both-sides rule still holds.
+    def test_symbolic_without_registry_is_rejected(self) -> None:
+        # G8/G9 fail-closed: when no symbol registry is supplied, no surrogate can
+        # be established, so a Symbolic proposition must be rejected -- the anchor
+        # check is NOT silently skipped.
         prop = self._symbolic(
             surrogate="老牛",
             source="福贵",
             rationale="画面给福贵与老牛",  # names both sides
         )
-        validate_visual_proposition(prop, shot_id="as-sym")  # no raise
+        with self.assertRaises(SemanticContractError):
+            validate_visual_proposition(prop, shot_id="as-sym")
 
 
 class AbstractNoBlankTests(unittest.TestCase):

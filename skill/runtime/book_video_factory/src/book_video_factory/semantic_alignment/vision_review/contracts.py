@@ -8,6 +8,8 @@ asserts a pass without this record cannot advance the pipeline.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping
@@ -41,6 +43,63 @@ class UntrustedProviderError(VisionReviewError):
     """The named provider is not allowed to act as a vision reviewer."""
 
 
+# --- Cryptographic binding between a vision review and the adapter that minted it.
+#
+# A ``VisionEvidence`` is no longer a JSON anyone can hand-author. It can only be
+# produced by a ``BaseVisionProvider`` adapter that (a) actually received the
+# image bytes and (b) holds a signing secret for its ``vision_provider`` name.
+# The signature binds the provider identity to the exact image/caption/prompt
+# hashes, verdict and reasoning, so a record cannot be forged, replayed under a
+# different provider, or silently edited after the fact. ``verify`` fails closed
+# when no key is registered for the named provider -- which is the honest state
+# whenever a real, keyed vision adapter has not been wired in.
+PROVIDER_VERIFICATION_KEYS: dict[str, str] = {}
+
+
+def register_provider_key(provider: str, key: str) -> None:
+    """Register the public verification key for a trusted vision reviewer.
+
+    In production the key is the public half of the adapter's signing secret,
+    loaded from the secrets backend. A test/CI adapter registers its own key so
+    the deterministic path can be exercised without a live model.
+    """
+
+    PROVIDER_VERIFICATION_KEYS[str(provider)] = str(key)
+
+
+def _hmac_sign(key: str, payload: str) -> str:
+    return hmac.new(key.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _evidence_signature(
+    *,
+    provider: str,
+    call_id: str,
+    image_sha256: str,
+    caption_sha256: str,
+    prompt_sha256: str,
+    parity_verdict: str,
+    parity_reasoning: str,
+    reviewed_pixels: bool,
+    key: str,
+) -> str:
+    """Deterministic signature over the fields that define one review."""
+
+    payload = "\n".join(
+        [
+            str(provider),
+            str(call_id),
+            str(image_sha256),
+            str(caption_sha256),
+            str(prompt_sha256),
+            str(parity_verdict),
+            str(parity_reasoning),
+            "1" if reviewed_pixels else "0",
+        ]
+    )
+    return _hmac_sign(key, payload)
+
+
 @dataclass(frozen=True)
 class ParityResult:
     """What a provider returns for one image/caption pair."""
@@ -64,6 +123,7 @@ class VisionEvidence:
     parity_reasoning: str
     reviewed_pixels: bool = False
     legacy_pass: bool = False
+    provider_signature: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -77,6 +137,7 @@ class VisionEvidence:
             "parity_reasoning": self.parity_reasoning,
             "reviewed_pixels": self.reviewed_pixels,
             "legacy_pass": self.legacy_pass,
+            "provider_signature": self.provider_signature,
         }
 
     @classmethod
@@ -92,10 +153,48 @@ class VisionEvidence:
             parity_reasoning=str(mapping.get("parity_reasoning", "")),
             reviewed_pixels=bool(mapping.get("reviewed_pixels", False)),
             legacy_pass=bool(mapping.get("legacy_pass", False)),
+            provider_signature=str(mapping.get("provider_signature", "")),
         )
 
     def is_pass(self) -> bool:
         return self.parity_verdict in PASSING_VERDICTS
+
+    def verify(self) -> None:
+        """Fail closed unless the record is cryptographically bound to a keyed adapter.
+
+        Structural ``validate`` only checks shape. ``verify`` additionally proves
+        the record was minted by a ``BaseVisionProvider`` that held the signing
+        secret for ``vision_provider`` and processed exactly these pixels,
+        caption and prompt. A hand-authored dict (even one with valid-looking
+        fields) has no valid signature and is rejected -- this is what closes the
+        "any JSON can claim Claude saw it" gap.
+        """
+
+        self.validate()
+        key = PROVIDER_VERIFICATION_KEYS.get(self.vision_provider)
+        if key is None:
+            raise VisionReviewError(
+                f"shot {self.shot_id}: no verification key is registered for provider "
+                f"{self.vision_provider!r}; the vision evidence was not minted by a "
+                f"trusted, keyed vision adapter"
+            )
+        expected = _evidence_signature(
+            provider=self.vision_provider,
+            call_id=self.call_id,
+            image_sha256=self.image_sha256,
+            caption_sha256=self.caption_sha256,
+            prompt_sha256=self.prompt_sha256,
+            parity_verdict=self.parity_verdict,
+            parity_reasoning=self.parity_reasoning,
+            reviewed_pixels=self.reviewed_pixels,
+            key=key,
+        )
+        if not hmac.compare_digest(self.provider_signature, expected):
+            raise VisionReviewError(
+                f"shot {self.shot_id}: vision evidence signature is invalid; it was "
+                f"not produced by {self.vision_provider!r} reviewing these exact "
+                f"pixels/caption/prompt (forged or tampered evidence)"
+            )
 
     def validate(self) -> None:
         """Fail closed on any structural defect.

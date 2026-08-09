@@ -46,7 +46,7 @@ def _project(base: Path) -> tuple[Path, dict, dict, list[dict]]:
         "captions": [
             {"id": f"caption-{i:04d}", "start": round((i - 1) * 0.8, 3), "end": round(i * 0.8, 3),
              "duration": 0.8, "text": f"字幕{i}", "text_sha256": _sha(f"字幕{i}".encode()),
-             "restoration_status": "display-restored", "allowShort": True}
+             "restoration_status": "display-restored", "allowShort": True, "narrative_function": "plot"}
             for i in range(1, 17)
         ],
     }
@@ -71,7 +71,7 @@ def _extend_meta(meta: dict, count: int, *, cue_duration: float = 0.8) -> dict:
         {"id": f"caption-{i:04d}", "start": round((i - 1) * cue_duration, 3),
          "end": round(i * cue_duration, 3), "duration": cue_duration, "text": f"字幕{i}",
          "text_sha256": _sha(f"字幕{i}".encode()), "restoration_status": "display-restored",
-         "allowShort": True}
+         "allowShort": True, "narrative_function": "plot"}
         for i in range(1, count + 1)
     ]
     return result

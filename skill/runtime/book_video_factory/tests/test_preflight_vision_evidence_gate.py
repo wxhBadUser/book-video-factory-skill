@@ -1,25 +1,95 @@
 """Part 6: Render Preflight vision-evidence gate.
 
 ``_scene_review_vision_blockers`` is the final checkpoint before pixels are
-spent. Every shot must carry authoritative vision evidence (a trusted
-multimodal provider that read the pixels, with a passing verdict) bound to its
-frame. The decision artifact MUST exist and be a regular file: a missing or
-symlinked decision fails closed and blocks the render ("no verified review
-means no render"). A mismatch verdict also blocks.
+spent. Every shot must carry authoritative, cryptographically-signed vision
+evidence (a trusted, keyed multimodal provider that read the pixels, with a
+passing verdict) bound to its frame. The decision artifact MUST exist and be a
+regular file: a missing or symlinked decision fails closed and blocks the render
+("no verified review means no render"). A mismatch verdict also blocks.
+
+The vision_evidence payload is no longer a hand-authored dict: it is minted by a
+real, keyed ``LocalVisionProvider`` through ``review_shot``, so the gate is
+exercised against verifiable evidence -- and a forged/stale record is rejected.
 """
 
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from book_video_factory.render_stage.preflight import (
-    RenderPreflightError,
-    _scene_review_vision_blockers,
+from book_video_factory.semantic_alignment.vision_review import (
+    LocalVisionProvider,
+    ParityResult,
+    review_shot,
 )
 
 
-def _evidence(**overrides: object) -> dict:
+CAPTION = "CAP"
+PROMPT = "PROMPT"
+
+
+class _KeyedStubProvider(LocalVisionProvider):
+    """A local, keyed stub that returns a caller-chosen verdict.
+
+    Inherits the real signing machinery from ``LocalVisionProvider`` (its secret
+    is registered at import), so the evidence it mints is genuinely verifiable.
+    """
+
+    name = "local-vision-stub"
+
+    def __init__(self, verdict: str = "match", reasoning: str = "The image clearly shows the subject described in the caption.") -> None:
+        self.verdict = verdict
+        self.reasoning = reasoning
+
+    def _review(self, *, image_bytes: bytes, caption_text: str, prompt_text: str) -> ParityResult:
+        call_id = hashlib.sha256(image_bytes + str(caption_text).encode("utf-8")).hexdigest()[:24]
+        return ParityResult(verdict=self.verdict, reasoning=self.reasoning, call_id=call_id)
+
+
+def _signed_evidence(
+    verdict: str = "match",
+    *,
+    shot_id: str = "B01",
+    image_path: Path | None = None,
+    caption_text: str = CAPTION,
+    prompt_text: str = PROMPT,
+    **overrides: object,
+) -> dict:
+    """Mint a real, signed vision-evidence dict via the keyed local provider.
+
+    The image must stay on disk for the duration of ``review_shot`` (it reads the
+    bytes and hashes them), so the temp directory is only cleaned up afterwards.
+    The caption/prompt default to the fixture task queue's values so the gate's
+    re-verification against that queue passes until an artifact is actually
+    edited.
+    """
+
+    if image_path is None:
+        tmp = tempfile.TemporaryDirectory()
+        raw = Path(tmp.name)
+        img = raw / "frame.png"
+        img.write_bytes(b"\x89PNG\r\n\x1a\nfake-pixels")
+        image_path = img
+    else:
+        tmp = None
+    try:
+        evidence = review_shot(
+            shot_id=shot_id, image_path=image_path,
+            caption_text=caption_text, prompt_text=prompt_text,
+            provider=_KeyedStubProvider(verdict=verdict),
+        )
+    finally:
+        if tmp is not None:
+            tmp.cleanup()
+    payload = evidence.to_dict()
+    payload.update(overrides)
+    return payload
+
+
+def _hand_evidence(**overrides: object) -> dict:
+    """An intentionally *unsigned* hand-authored dict (used to prove rejection)."""
+
     base = {
         "shot_id": "B01",
         "vision_provider": "claude-sonnet-4.5",
@@ -63,9 +133,28 @@ class PreflightVisionEvidenceGateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="preflight-gate-")
         self.root = Path(self.temp.name)
+        # The gate re-verifies vision evidence against the director task queue,
+        # so every fixture that enters the stale-check path needs a real queue.
+        self._write_tasks("B01", "B02", "B03")
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+    def _write_tasks(self, *ids: str) -> Path:
+        path = self.root / "05_director" / "IMAGE_TASKS.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            json.dumps({
+                "schema_version": "production-image-task.v1",
+                "task_id": tid,
+                "scene_id": tid,
+                "caption_text": CAPTION,
+                "prompt": PROMPT,
+            }, ensure_ascii=False)
+            for tid in ids
+        ]
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return path
 
     def _write(self, document: dict) -> Path:
         path = self.root / "06_visual_production" / "SCENE_REVIEW_DECISION.json"
@@ -84,25 +173,33 @@ class PreflightVisionEvidenceGateTests(unittest.TestCase):
 
     def test_valid_vision_evidence_accepted(self) -> None:
         path = self._write(_decision_document(
-            _base_decision("B01", vision_evidence=_evidence(shot_id="B01")),
+            _base_decision("B01", vision_evidence=_signed_evidence("match", shot_id="B01")),
         ))
         self.assertEqual(_scene_review_vision_blockers(path), [])
+
+    def test_forged_claude_evidence_is_rejected(self) -> None:
+        # The historical forgery shortcut (a JSON naming claude-sonnet-4.5 with
+        # no signature) must fail closed at the gate.
+        path = self._write(_decision_document(
+            _base_decision("B01", vision_evidence=_hand_evidence(shot_id="B01")),
+        ))
+        self.assertEqual(_scene_review_vision_blockers(path), ["B01"])
 
     def test_mismatch_verdict_is_a_preflight_blocker(self) -> None:
         # With require_pass=True the preflight demands a passing verdict, not just
         # the presence of evidence: a mismatch blocks the render.
         path = self._write(_decision_document(
-            _base_decision("B01", vision_evidence=_evidence(shot_id="B01", parity_verdict="mismatch")),
+            _base_decision("B01", vision_evidence=_signed_evidence("mismatch", shot_id="B01")),
         ))
         self.assertEqual(_scene_review_vision_blockers(path), ["B01"])
 
     def test_partial_block_reports_only_unbound_shots(self) -> None:
-        # Shots carrying authoritative vision evidence are accepted; only the
+        # Shots carrying authoritative signed evidence are accepted; only the
         # shot with no binding is reported. legacy_pass is no longer a binding.
         path = self._write(_decision_document(
-            _base_decision("B01", vision_evidence=_evidence(shot_id="B01")),
+            _base_decision("B01", vision_evidence=_signed_evidence("match", shot_id="B01")),
             _base_decision("B02"),
-            _base_decision("B03", vision_evidence=_evidence(shot_id="B03")),
+            _base_decision("B03", vision_evidence=_signed_evidence("match", shot_id="B03")),
         ))
         self.assertEqual(_scene_review_vision_blockers(path), ["B02"])
 
@@ -139,34 +236,103 @@ class PreflightVisionEvidenceGateTests(unittest.TestCase):
 
     def test_thin_reasoning_evidence_blocks_shot(self) -> None:
         # Evidence that did not read pixels or is too thin is not evidence.
+        # (A real provider can never mint this: validate() rejects it first.)
         path = self._write(_decision_document(
-            _base_decision("B01", vision_evidence=_evidence(shot_id="B01", parity_reasoning="ok")),
+            _base_decision("B01", vision_evidence=_hand_evidence(shot_id="B01", parity_reasoning="ok")),
         ))
         self.assertEqual(_scene_review_vision_blockers(path), ["B01"])
 
     def test_stale_image_after_review_is_blocked(self) -> None:
         # A-stale (BLOCKER-2 change-invalidation): a shot whose reviewed frame is
         # swapped after the review must be blocked at the render gate, even when
-        # the decision still carries a previously-valid vision evidence record.
-        # This drives the public gate with a real on-disk artifact.
-        import hashlib
-
+        # the decision still carries a previously-valid (signed) vision record.
         image_path = self.root / "06_visual_production" / "SCENE_ASSETS" / "B01.png"
         image_path.parent.mkdir(parents=True, exist_ok=True)
         image_path.write_bytes(b"original-frame-bytes-v1")
-        image_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
 
+        # Mint real, signed evidence bound to the current frame + the fixture
+        # task queue's caption/prompt.
+        evidence = review_shot(
+            shot_id="B01", image_path=image_path,
+            caption_text=CAPTION, prompt_text=PROMPT, provider=_KeyedStubProvider("match"),
+        )
         path = self._write(_decision_document(
-            _base_decision("B01", vision_evidence=_evidence(shot_id="B01", image_sha256=image_hash)),
+            _base_decision("B01", vision_evidence=evidence.to_dict()),
         ))
         assets_by_task = {"B01": image_path}
 
-        # Current frame matches the stored evidence -> accepted.
+        # Current frame + caption + prompt match the stored (signed) evidence -> accepted.
         self.assertEqual(_scene_review_vision_blockers(path, assets_by_task), [])
 
         # Frame swapped after review -> stale evidence must block the render.
         image_path.write_bytes(b"tampered-frame-bytes-v2-different")
         self.assertEqual(_scene_review_vision_blockers(path, assets_by_task), ["B01"])
+
+    def test_stale_caption_after_review_is_blocked(self) -> None:
+        # B-stale (BLOCKER-4): an edited caption must invalidate the previously
+        # approved, signed evidence even when the image and prompt are unchanged.
+        image_path = self.root / "06_visual_production" / "SCENE_ASSETS" / "B01.png"
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        image_path.write_bytes(b"original-frame-bytes-v1")
+
+        evidence = review_shot(
+            shot_id="B01", image_path=image_path,
+            caption_text=CAPTION, prompt_text=PROMPT, provider=_KeyedStubProvider("match"),
+        )
+        path = self._write(_decision_document(
+            _base_decision("B01", vision_evidence=evidence.to_dict()),
+        ))
+        assets_by_task = {"B01": image_path}
+
+        # Current caption matches -> accepted.
+        self.assertEqual(_scene_review_vision_blockers(path, assets_by_task), [])
+
+        # Caption edited after review -> stale evidence must block the render.
+        # Rewrite only B01's caption; B02/B03 are unchanged so they stay valid.
+        p = self.root / "05_director" / "IMAGE_TASKS.jsonl"
+        p.write_text("\n".join([
+            json.dumps({"schema_version": "production-image-task.v1", "task_id": "B01", "scene_id": "B01", "caption_text": "EDITED-CAPTION", "prompt": PROMPT}, ensure_ascii=False),
+            json.dumps({"schema_version": "production-image-task.v1", "task_id": "B02", "scene_id": "B02", "caption_text": CAPTION, "prompt": PROMPT}, ensure_ascii=False),
+            json.dumps({"schema_version": "production-image-task.v1", "task_id": "B03", "scene_id": "B03", "caption_text": CAPTION, "prompt": PROMPT}, ensure_ascii=False),
+        ]) + "\n", encoding="utf-8")
+        self.assertEqual(_scene_review_vision_blockers(path, assets_by_task), ["B01"])
+
+    def test_stale_prompt_after_review_is_blocked(self) -> None:
+        # C-stale (BLOCKER-4): a changed image prompt must invalidate the
+        # previously approved, signed evidence even when the image and caption
+        # are unchanged.
+        image_path = self.root / "06_visual_production" / "SCENE_ASSETS" / "B01.png"
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        image_path.write_bytes(b"original-frame-bytes-v1")
+
+        evidence = review_shot(
+            shot_id="B01", image_path=image_path,
+            caption_text=CAPTION, prompt_text=PROMPT, provider=_KeyedStubProvider("match"),
+        )
+        path = self._write(_decision_document(
+            _base_decision("B01", vision_evidence=evidence.to_dict()),
+        ))
+        assets_by_task = {"B01": image_path}
+
+        # Current prompt matches -> accepted.
+        self.assertEqual(_scene_review_vision_blockers(path, assets_by_task), [])
+
+        # Prompt edited after review -> stale evidence must block the render.
+        p = self.root / "05_director" / "IMAGE_TASKS.jsonl"
+        p.write_text("\n".join([
+            json.dumps({"schema_version": "production-image-task.v1", "task_id": "B01", "scene_id": "B01", "caption_text": CAPTION, "prompt": "EDITED-PROMPT"}, ensure_ascii=False),
+            json.dumps({"schema_version": "production-image-task.v1", "task_id": "B02", "scene_id": "B02", "caption_text": CAPTION, "prompt": PROMPT}, ensure_ascii=False),
+            json.dumps({"schema_version": "production-image-task.v1", "task_id": "B03", "scene_id": "B03", "caption_text": CAPTION, "prompt": PROMPT}, ensure_ascii=False),
+        ]) + "\n", encoding="utf-8")
+        self.assertEqual(_scene_review_vision_blockers(path, assets_by_task), ["B01"])
+
+
+# Imported at the bottom so the module-level helpers above are defined first and
+# the import cost is only paid when the test class is collected.
+from book_video_factory.render_stage.preflight import (  # noqa: E402
+    RenderPreflightError,
+    _scene_review_vision_blockers,
+)
 
 
 if __name__ == "__main__":

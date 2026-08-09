@@ -6,6 +6,11 @@ from typing import Any, Sequence
 
 from .media_probe import VttCue, normalize_text
 from .pronunciation import PronunciationError, SpokenCompilation, map_spoken_interval_to_display
+from ..semantic_alignment.caption_grouping import (
+    CaptionGroupingError,
+    CaptionSectionRegister,
+    assign_caption_registers,
+)
 
 
 class CaptionAlignmentError(RuntimeError):
@@ -39,7 +44,18 @@ def restore_display_captions(
     max_chars: int,
     min_duration: float,
     allow_short_cues: set[int] | None = None,
+    section_register: Sequence[CaptionSectionRegister] | None = None,
 ) -> list[dict[str, Any]]:
+    """Restore display captions and (optionally) tag them with real registers.
+
+    When ``section_register`` is supplied, every restored caption is
+    deterministically tagged with the narrative register (and any
+    characters/location/time_of_day) of the script section it falls within.
+    This is the B06/B07 fix: production captions carry their *real* section
+    register instead of being left empty and silently collapsed to "plot" by
+    ``CaptionUnit.from_mapping``. Callers that omit the register produce
+    untagged captions, which the storyboard gate then rejects (fail closed).
+    """
     if not cues:
         raise CaptionAlignmentError("raw VTT contains no cues")
     spoken_normalized, spoken_spans = _normalized_with_spans(compilation.spoken_text)
@@ -85,6 +101,12 @@ def restore_display_captions(
         else:
             merged.append(dict(item))
 
+    if section_register is not None:
+        try:
+            merged = assign_caption_registers(merged, section_register)
+        except CaptionGroupingError as error:
+            raise CaptionAlignmentError(f"caption register tagging failed: {error}") from error
+
     captions: list[dict[str, Any]] = []
     for index, item in enumerate(merged, start=1):
         text = compilation.display_text[item["display_start"]:item["display_end"]].strip()
@@ -98,7 +120,7 @@ def restore_display_captions(
             raise CaptionAlignmentError(
                 f"restored caption {index} duration {duration:.3f}s is below {min_duration:.3f}s"
             )
-        captions.append({
+        caption: dict[str, Any] = {
             "id": f"caption-{index:04d}",
             "start": round(float(item["start"]), 3),
             "end": round(float(item["end"]), 3),
@@ -108,7 +130,16 @@ def restore_display_captions(
             "restoration_status": "display-restored",
             "allowShort": bool(item.get("allow_short")),
             "rawCueIndexes": list(item["raw_indexes"]),
-        })
+        }
+        # Only emit the register fields when they were actually tagged. Untagged
+        # captions must omit them so CaptionUnit.from_mapping fails closed
+        # (a missing register is an error, never a silent "plot").
+        if "narrative_function" in item:
+            caption["narrative_function"] = item["narrative_function"]
+            caption["characters"] = list(item.get("characters", ()))
+            caption["location"] = item.get("location", "")
+            caption["time_of_day"] = item.get("time_of_day", "")
+        captions.append(caption)
     restored = "".join(normalize_text(item["text"]) for item in captions)
     expected = normalize_text(compilation.display_text)
     if restored != expected:

@@ -34,27 +34,58 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def _valid_vision_evidence(shot_id: str, *, image_sha256: str | None = None) -> dict[str, Any]:
-    """A structurally valid, authoritative vision-evidence record.
+def _signed_scene_evidence(project: Path, asset_rel: str, shot_id: str) -> dict[str, Any]:
+    """Mint real, signed vision evidence bound to the produced scene image.
 
     The render preflight and scene review now fail closed unless the stored
-    ``image_sha256`` matches the *current* on-disk frame (BLOCKER-2
-    change-invalidation). ``image_sha256`` must be the real hash of the
-    produced scene image; pass ``None`` only for fixtures that do not exercise
-    the currency check (e.g. encoded-master review, which re-verifies elsewhere).
+    evidence is cryptographically signed AND its ``image_sha256`` matches the
+    *current* on-disk frame AND its caption/prompt hashes match the *current*
+    director task queue (BLOCKER-1 + BLOCKER-2 + BLOCKER-4). So the fixture must
+    run a real ``review_shot`` over the actual asset image using the *real*
+    caption and prompt from the task queue -- the same source the gate
+    re-verifies against -- which both signs the record and binds the correct
+    hashes.
     """
 
-    return {
-        "shot_id": shot_id,
-        "vision_provider": "claude-sonnet-4.5",
-        "call_id": "toolu_realcall_001",
-        "image_sha256": image_sha256 if image_sha256 is not None else ("c" * 64),
-        "caption_sha256": "d" * 64,
-        "prompt_sha256": "e" * 64,
-        "parity_verdict": "match",
-        "parity_reasoning": "The scene image clearly illustrates the approved caption.",
-        "reviewed_pixels": True,
-    }
+    from book_video_factory.production_visuals.registry import _tasks
+    from book_video_factory.semantic_alignment.vision_review import LocalVisionProvider, review_shot
+
+    task_map = _tasks(project)
+    task = task_map.get(shot_id)
+    if not isinstance(task, dict) or "caption_text" not in task or "prompt" not in task:
+        raise AssertionError(f"fixture task queue missing caption/prompt for {shot_id}")
+    evidence = review_shot(
+        shot_id=shot_id, image_path=project / asset_rel,
+        caption_text=str(task["caption_text"]), prompt_text=str(task["prompt"]),
+        provider=LocalVisionProvider(),
+    )
+    return evidence.to_dict()
+
+
+def _signed_encoded_evidence(sample_id: str) -> dict[str, Any]:
+    """Mint real, signed vision evidence for an encoded frame (no on-disk frame)."""
+
+    import hashlib
+    import tempfile
+    from book_video_factory.semantic_alignment.vision_review import (
+        LocalVisionProvider, ParityResult, review_shot,
+    )
+
+    class _KeyedStubProvider(LocalVisionProvider):
+        name = "local-vision-stub"
+
+        def _review(self, *, image_bytes: bytes, caption_text: str, prompt_text: str) -> ParityResult:
+            call_id = hashlib.sha256(image_bytes + str(caption_text).encode("utf-8")).hexdigest()[:24]
+            return ParityResult(verdict="match", reasoning="The encoded frame matches the reviewed scene.", call_id=call_id)
+
+    with tempfile.TemporaryDirectory() as raw:
+        img = Path(raw) / "frame.png"
+        img.write_bytes(b"\x89PNG\r\n\x1a\nfake-pixels")
+        evidence = review_shot(
+            shot_id=sample_id, image_path=img, caption_text=sample_id, prompt_text=sample_id,
+            provider=_KeyedStubProvider(),
+        )
+    return evidence.to_dict()
 
 
 def passing_preflight_runner(command: list[str], cwd: Path, env: dict[str, str] | None) -> subprocess.CompletedProcess[str]:
@@ -191,6 +222,22 @@ class RenderStageTests(unittest.TestCase):
         write_json(project / "06_visual_production/SCENE_ASSET_MANIFEST.json", scene_manifest)
         write_json(project / "06_visual_production/SCENE_ASSET_APPROVAL.json", approval)
         write_json(project / "04_audio/AUDIO_STAGE_MANIFEST.json", {"release_id": "r1"})
+        # Director task queue: the authoritative caption/prompt source that the
+        # render-preflight and scene-review gates re-verify vision evidence
+        # against (BLOCKER-4). The fixture must carry real caption_text/prompt so
+        # the signed evidence minted in the scene-review decision stays current.
+        task_queue_path = project / "05_director/IMAGE_TASKS.jsonl"
+        task_queue_path.parent.mkdir(parents=True, exist_ok=True)
+        task_lines = []
+        for task in tasks.values():
+            task_lines.append(json.dumps({
+                "schema_version": "production-image-task.v1",
+                "task_id": task["task_id"],
+                "scene_id": task["scene_id"],
+                "caption_text": f"caption for {task['task_id']}",
+                "prompt": f"prompt for {task['task_id']}",
+            }, ensure_ascii=False))
+        task_queue_path.write_text("\n".join(task_lines) + "\n", encoding="utf-8")
         timeline_path = project / "05_director/DIRECTOR_TIMELINE.json"
         write_json(timeline_path, {
             "schema_version": "director-timeline.v1", "release_id": "r1", "body_start": 2.0,
@@ -219,7 +266,7 @@ class RenderStageTests(unittest.TestCase):
                     "reality_review_status": "pass",
                     "identity_review_status": "pass",
                     "note": "Scene reviewed with authoritative vision evidence.",
-                    "vision_evidence": _valid_vision_evidence("SCENE_S1", image_sha256=assets[0]["sha256"]),
+                    "vision_evidence": _signed_scene_evidence(project, assets[0]["path"], "SCENE_S1"),
                 },
                 {
                     "task_id": "SCENE_S2",
@@ -227,7 +274,7 @@ class RenderStageTests(unittest.TestCase):
                     "reality_review_status": "pass",
                     "identity_review_status": "pass",
                     "note": "Scene reviewed with authoritative vision evidence.",
-                    "vision_evidence": _valid_vision_evidence("SCENE_S2", image_sha256=assets[1]["sha256"]),
+                    "vision_evidence": _signed_scene_evidence(project, assets[1]["path"], "SCENE_S2"),
                 },
             ],
         })
@@ -405,8 +452,8 @@ class RenderStageTests(unittest.TestCase):
                         "caption_status": "pass" if {"caption_bright", "caption_dark"} & set(item["categories"]) else "not_applicable",
                         "note": "Reviewed.",
                         "caption_note": "ASS caption box and subject clearance reviewed." if {"caption_bright", "caption_dark"} & set(item["categories"]) else "",
-                        # Every encoded sample must carry authoritative vision evidence.
-                        "vision_evidence": _valid_vision_evidence(item["sample_id"]),
+                        # Every encoded sample must carry authoritative, signed vision evidence.
+                        "vision_evidence": _signed_encoded_evidence(item["sample_id"]),
                     } for item in plan["samples"]],
                 })
                 reviewed = review_encoded_master(project, decision_path)

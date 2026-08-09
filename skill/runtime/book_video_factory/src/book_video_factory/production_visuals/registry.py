@@ -40,7 +40,7 @@ _SCENE_PROVIDERS = {"host-imagegen", "gemini-web", "flow-web"}
 
 _ASSET_FIELDS = {
     "task_id", "scene_id", "path", "sha256", "bytes", "width", "height", "mode",
-    "prompt_sha256", "provider", "tool_call_id", "style_reference_evidence",
+    "prompt_sha256", "provider", "generation_lane", "tool_call_id", "style_reference_evidence",
     "identity_reference_evidence", "machine_diagnostic", "semantic_review_status",
     "reality_review_status", "identity_review_status", "human_review_status", "registered_at",
 }
@@ -137,6 +137,17 @@ def _manifest(root: Path, release_id: str, director_sha: str, count: int, provid
             raise SceneAssetError(f"registered scene asset was modified: {item['task_id']}")
         if item.get("provider") not in _SCENE_PROVIDERS:
             raise SceneAssetError(f"scene asset provider is invalid: {item.get('task_id')}")
+        # Final-manifest invariant (Item 6): an asset's registered provider must
+        # equal the production task's generation lane. A manifest that records a
+        # valid-but-mismatched provider (e.g. gemini-web under a host-imagegen
+        # lane) is rejected here even though both providers are individually
+        # sanctioned, so cross-lane provenance laundering cannot survive the
+        # manifest boundary.
+        if item.get("provider") != item.get("generation_lane"):
+            raise SceneAssetError(
+                f"scene asset {item.get('task_id')} provider {item.get('provider')!r} "
+                f"does not match its generation_lane {item.get('generation_lane')!r}"
+            )
         seen.add(item["task_id"]); hashes.add(item["sha256"])
     asset_providers = {item.get("provider") for item in assets}
     if manifest_provider == "mixed":
@@ -164,6 +175,22 @@ def _exact_ids(declared: list[str], expected: list[str], label: str) -> list[str
     return declared
 
 
+def _validate_asset_provider(provider: str, generation_lane: str | None) -> None:
+    # Chain 5 (#24): the asset's provider must be the exact generation lane the
+    # production task was planned for. A mismatch (e.g. a gemini-web asset
+    # logged under a host-imagegen lane) is rejected so provenance cannot be
+    # laundered across lanes. ``generation_lane`` is required and must equal
+    # the registered provider.
+    if provider not in _SCENE_PROVIDERS:
+        raise SceneAssetError("scene asset provider is invalid")
+    if generation_lane is None:
+        raise SceneAssetError("production task is missing its generation_lane; provenance cannot be verified")
+    if provider != generation_lane:
+        raise SceneAssetError(
+            f"scene asset provider {provider!r} does not match the task generation_lane {generation_lane!r}"
+        )
+
+
 def register_scene_asset(
     project: Path,
     *,
@@ -184,8 +211,7 @@ def register_scene_asset(
     if task is None:
         raise SceneAssetError(f"unknown production image task: {task_id}")
     _call_id(tool_call_id)
-    if provider not in _SCENE_PROVIDERS:
-        raise SceneAssetError("scene asset provider is invalid")
+    _validate_asset_provider(provider, task.get("generation_lane"))
     _exact_ids(style_reference_ids, list(task["style_reference_ids"]), "style_reference_ids")
     _exact_ids(identity_reference_task_ids, list(task["identity_reference_task_ids"]), "identity_reference_task_ids")
     phase3 = _phase3_assets(root)
@@ -268,6 +294,7 @@ def register_scene_asset(
         "mode": media["mode"],
         "prompt_sha256": task["prompt_sha256"],
         "provider": provider,
+        "generation_lane": task.get("generation_lane"),
         "tool_call_id": tool_call_id,
         "style_reference_evidence": style_evidence,
         "identity_reference_evidence": identity_evidence,

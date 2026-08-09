@@ -73,17 +73,30 @@ def review_shot(
             f"shot {shot_id}: vision provider returned no call id; refusing unverifiable evidence"
         )
 
+    image_sha256 = _sha_bytes(image_bytes)
+    caption_sha256 = _sha_text(caption_text)
+    prompt_sha256 = _sha_text(prompt_text)
+    provider_signature = provider._sign_evidence(
+        image_sha256=image_sha256,
+        caption_sha256=caption_sha256,
+        prompt_sha256=prompt_sha256,
+        verdict=result.verdict,
+        reasoning=result.reasoning,
+        call_id=str(result.call_id),
+        reviewed_pixels=True,
+    )
     evidence = VisionEvidence(
         shot_id=str(shot_id),
         vision_provider=provider.name,
         call_id=str(result.call_id),
-        image_sha256=_sha_bytes(image_bytes),
-        caption_sha256=_sha_text(caption_text),
-        prompt_sha256=_sha_text(prompt_text),
+        image_sha256=image_sha256,
+        caption_sha256=caption_sha256,
+        prompt_sha256=prompt_sha256,
         parity_verdict=result.verdict,
         parity_reasoning=result.reasoning,
         reviewed_pixels=True,
         legacy_pass=False,
+        provider_signature=provider_signature,
     )
-    evidence.validate()
+    evidence.verify()
     return evidence

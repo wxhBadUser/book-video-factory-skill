@@ -12,12 +12,17 @@ from typing import Any, Iterable, Mapping
 from book_video_factory.audio_stage.status import audio_stage_status
 from book_video_factory.manifests import safe_project_output, sha256_file
 from book_video_factory.orientation import OrientationError, validate_orientation_contract
+from book_video_factory.semantic_alignment.caption_contract import CaptionVisualContract
 from book_video_factory.semantic_alignment.caption_grouping import NARRATIVE_FUNCTIONS
 from book_video_factory.semantic_alignment.classifier import (
     PropositionClassifierError,
     classify_proposition,
 )
 from book_video_factory.semantic_alignment.models import VisualProposition
+from book_video_factory.semantic_alignment.validation import (
+    SemanticContractError,
+    validate_visual_proposition,
+)
 from book_video_factory.semantic_alignment.prompting import (
     PromptSpecError,
     build_aligned_prompt_blocks,
@@ -309,6 +314,9 @@ def _scene_proposition(
     caption_texts: list[str],
     required: list[str],
     light: Mapping[str, Any],
+    *,
+    narrative_function: str = "",
+    known_symbol_registry: Iterable[str] = (),
 ) -> VisualProposition:
     """Return the frozen visual proposition this scene's image must satisfy.
 
@@ -317,10 +325,27 @@ def _scene_proposition(
     description and the registered anchors. The scene's template
     ``semanticRationale`` is never used as the proposition rationale, because it
     is boilerplate and cannot justify anything.
+
+    An Agent-authored proposition receives NO special bypass (C-bridge): it is
+    validated through the same seven-tuple contract as a derived one, against
+    the current caption texts, source entities and the established symbol
+    registry. A malformed or ungrounded authored proposition is rejected.
     """
     authored = scene.get("visualProposition") or scene.get("visual_proposition")
     if isinstance(authored, Mapping):
-        return VisualProposition.from_mapping(authored)
+        prop = VisualProposition.from_mapping(authored)
+        try:
+            return validate_visual_proposition(
+                prop,
+                shot_id=str(scene.get("id", "")),
+                caption_texts=caption_texts,
+                source_entities=required,
+                known_symbol_registry=known_symbol_registry,
+            )
+        except SemanticContractError as error:
+            raise DirectorStageError(
+                f"scene {scene.get('id')} agent-authored visual proposition is invalid: {error}"
+            ) from error
     try:
         return classify_proposition(
             shot_id=str(scene.get("id", "")),
@@ -333,6 +358,7 @@ def _scene_proposition(
             object_anchors=_classifier_anchor_table(profile, "object_anchors"),
             lighting=str(light.get("lighting_id", "DUSK_SOFT")),
             palette=str(profile["palette_profiles"][0].get("palette_id", "EARTH_DUSK")),
+            narrative_function=narrative_function,
         )
     except PropositionClassifierError as error:
         raise DirectorStageError(
@@ -346,11 +372,40 @@ def _task_for_scene(
     visual_assets: Mapping[str, Any],
     captions: Mapping[str, Mapping[str, Any]],
     canvas: Mapping[str, Any],
+    *,
+    known_symbol_registry: Iterable[str] = (),
+    caption_contracts: Mapping[str, CaptionVisualContract] | None = None,
 ) -> dict[str, Any]:
     continuity, front_tasks = _anchor_context(profile, visual_assets)
     caption_ids = list(scene["captionIds"])
     caption_texts = [str(captions[item]["text"]) for item in caption_ids]
     caption_text = " / ".join(caption_texts)
+    # The Caption Visual Contract is the authoritative record of what the frame
+    # MUST show. When it is in force (every remediated release carries
+    # 04_audio/CAPTION_VISUAL_CONTRACT.json) we inject its must_show /
+    # must_not_show into the prompt and bind its hash into the task so a caption
+    # cannot be illustrated by a frame that ignores a named character or event.
+    scene_contracts: list[CaptionVisualContract] = []
+    if caption_contracts:
+        for cid in caption_ids:
+            contract = caption_contracts.get(str(cid))
+            if contract is not None:
+                scene_contracts.append(contract)
+    must_show: list[str] = []
+    must_not_show: list[str] = []
+    contract_sha_inputs: list[str] = []
+    for contract in scene_contracts:
+        for item in contract.must_show:
+            if item and item not in must_show:
+                must_show.append(item)
+        for item in contract.must_not_show_as_primary:
+            if item and item not in must_not_show:
+                must_not_show.append(item)
+        contract_sha_inputs.append(contract.content_sha256())
+    caption_visual_contract_sha256 = (
+        hashlib.sha256("|".join(sorted(contract_sha_inputs)).encode("utf-8")).hexdigest()
+        if contract_sha_inputs else None
+    )
     anchor_refs = list(scene.get("anchorRefs", []))
     character_anchors = [continuity[item] for item in anchor_refs if item in continuity]
     identity_tasks = sorted({front_tasks[item] for item in anchor_refs if item in front_tasks})
@@ -367,7 +422,15 @@ def _task_for_scene(
             f"scene {scene.get('id')} declares no sourceBeatIds; the image task cannot be bound"
         )
     narrative_function = _scene_narrative_function(scene)
-    proposition = _scene_proposition(scene, profile, caption_texts, required, light)
+    proposition = _scene_proposition(
+        scene,
+        profile,
+        caption_texts,
+        required,
+        light,
+        narrative_function=narrative_function,
+        known_symbol_registry=known_symbol_registry,
+    )
     shot = {
         "shot_id": "SHOT_" + str(scene["id"]).upper().replace("-", "_").replace(".", "_"),
         "asset_tier": "narrative_scene",
@@ -420,6 +483,8 @@ def _task_for_scene(
             },
             forbidden_entities=forbidden,
             anchors=character_anchors,
+            must_show=must_show,
+            must_not_show=must_not_show,
         )
     except PromptSpecError as error:
         raise DirectorStageError(
@@ -463,7 +528,11 @@ def _task_for_scene(
             scene_id=str(scene["id"]),
             beat_ids=beat_ids,
             shot_id=shot["shot_id"],
+            caption_visual_contract_sha256=caption_visual_contract_sha256,
         ),
+        "caption_visual_contract_sha256": caption_visual_contract_sha256,
+        "contract_must_show": must_show,
+        "contract_must_not_show": must_not_show,
         "output_target": f"assets/generated/scenes/{scene['id']}.png",
         "status": "planned",
     }
@@ -528,6 +597,21 @@ def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
         "visual_assets": _project_file(root, "03_images_生成图片/VISUAL_ASSET_MANIFEST.json", "visual asset manifest"),
         "hbg_style": _project_file(root, "HBG_STYLE.json", "HBG style"),
     }
+    # The Caption Visual Contract is the authoritative per-caption source of
+    # truth. When it exists (every remediated release carries it) it is loaded
+    # and threaded into every image task; its presence also enters the input
+    # digest so an edited contract forces the director to recompute. When it
+    # is absent the director falls back to the pre-contract behaviour so legacy
+    # projects that predate the contract are not blocked.
+    caption_contracts: Mapping[str, CaptionVisualContract] | None = None
+    if (root / "04_audio/CAPTION_VISUAL_CONTRACT.json").is_file():
+        paths["caption_visual_contract"] = _project_file(
+            root, "04_audio/CAPTION_VISUAL_CONTRACT.json", "caption visual contract"
+        )
+        from book_video_factory.semantic_alignment.caption_contract import (
+            load_caption_visual_contract_document,
+        )
+        caption_contracts = load_caption_visual_contract_document(paths["caption_visual_contract"])
     audio_manifest = _load_json(paths["audio_manifest"], "audio stage manifest")
     audio_meta = _load_json(paths["audio_meta"], "audio metadata")
     storyboard = _validate_storyboard(_load_json(paths["storyboard"], "storyboard"), audio_meta)
@@ -549,6 +633,12 @@ def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
     captions = _caption_map(audio_meta)
     scenes: list[dict[str, Any]] = []
     tasks: list[dict[str, Any]] = []
+    # Established symbol registry: surrogates declared by PRIOR scenes become
+    # legitimate stand-ins for later Symbolic propositions (G8/G9). An empty
+    # registry fails any Symbolic proposition, so order matters and the first
+    # occurrence of a trope must be seeded by a registered trope / hash-bound
+    # symbol upstream of this loop.
+    established_symbols: set[str] = set()
     for scene in storyboard:
         missing = [item for item in scene["captionIds"] if item not in captions]
         if missing:
@@ -574,7 +664,18 @@ def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
             "motion": str(scene["motion"]),
             "generation_mode": "single" if scene.get("riskFlags") else str(scene.get("generationMode", "single")),
         })
-        tasks.append(_task_for_scene(scene, profile, visual_assets, captions, canvas))
+        task = _task_for_scene(
+            scene,
+            profile,
+            visual_assets,
+            captions,
+            canvas,
+            known_symbol_registry=tuple(established_symbols),
+            caption_contracts=caption_contracts,
+        )
+        tasks.append(task)
+        vp = task.get("visual_proposition") or {}
+        established_symbols.update(str(item) for item in (vp.get("surrogate_objects") or ()))
     durations = [item["duration"] for item in scenes]
     timeline = {
         "schema_version": "director-timeline.v1",
@@ -582,6 +683,9 @@ def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
         "audio_stage_manifest_sha256": sha256_file(paths["audio_manifest"]),
         "audio_meta_sha256": sha256_file(paths["audio_meta"]),
         "caption_bindings_sha256": sha256_file(paths["bindings"]),
+        "caption_visual_contract_sha256": (
+            sha256_file(paths["caption_visual_contract"]) if "caption_visual_contract" in paths else None
+        ),
         "visual_profile_sha256": sha256_file(paths["visual_profile"]),
         "visual_approval_sha256": sha256_file(paths["visual_approval"]),
         "scene_count": len(scenes),

@@ -159,19 +159,22 @@ def evaluate_semantic_bridge(
         # action/location/time -- it cannot be a literal illustration of this
         # caption, so we reject rather than silently pass (attack A-bridge:
         # "凤霞出嫁" + "凤霞雪地奔跑" must not be allowed as a direct bridge).
-        event_alignment = "boilerplate-skipped"
-        if not boilerplate:
-            drop = (set(image_set) | source_set | set(shared))
-            source_content = _event_content("".join(str(text) for text in caption_texts), drop)
-            rationale_content = _event_content(rationale, drop)
-            if source_content and rationale_content and not _has_event_overlap(source_content, rationale_content):
-                raise SemanticContractError(
-                    f"shot {shot_id} direct bridge: the image rationale describes a different event "
-                    f"({rationale_content!r}) than the narration ({source_content!r}); a shared subject "
-                    f"alone is not enough for a literal depiction -- re-propose as symbolic/abstract or "
-                    f"align the rationale to the narration"
-                )
-            event_alignment = "verified" if (source_content and rationale_content) else "no-content"
+        # Boilerplate rationales are *weak* evidence, never an exemption. Even
+        # when a shared entity exists, a boilerplate rationale must still clear
+        # the different-event check below: a template line such as
+        # "字幕与画面共享当前场景" must not launder a mismatched event
+        # (attack A-bridge: 凤霞出嫁 caption + 凤霞雪地奔跑 image must fail).
+        drop = (set(image_set) | source_set | set(shared))
+        source_content = _event_content("".join(str(text) for text in caption_texts), drop)
+        rationale_content = _event_content(rationale, drop)
+        if source_content and rationale_content and not _has_event_overlap(source_content, rationale_content):
+            raise SemanticContractError(
+                f"shot {shot_id} direct bridge: the image rationale describes a different event "
+                f"({rationale_content!r}) than the narration ({source_content!r}); a shared subject "
+                f"alone is not enough for a literal depiction -- re-propose as symbolic/abstract or "
+                f"align the rationale to the narration"
+            )
+        event_alignment = "verified" if (source_content and rationale_content) else "no-content"
         return SemanticBridge(
             shot_id=shot_id,
             mode="direct",
@@ -307,8 +310,10 @@ def validate_visual_proposition(
         # that has actually been established (a prior scene, a registered trope,
         # or a hash-bound symbol). Pointing at an unestablished surrogate is a
         # hallucination of meaning -- reject it so the planner re-proposes.
+        # Fail-closed (G8/G9): an empty registry means NO surrogate can be
+        # established, so the proposition is rejected rather than silently skipped.
         registry = {str(item).strip() for item in known_symbol_registry if str(item).strip()}
-        if registry and not (set(resolved.surrogate_objects) & registry):
+        if not (set(resolved.surrogate_objects) & registry):
             raise SemanticContractError(
                 f"shot {shot_id} Symbolic proposition surrogate {sorted(resolved.surrogate_objects)} "
                 f"is not in the established symbol registry {sorted(registry)}; an unestablished "

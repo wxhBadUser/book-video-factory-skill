@@ -180,11 +180,14 @@ def build_scene_asset_review(
         release_id=manifest["release_id"], director_sha=director_sha,
         asset_sha=asset_sha, task_ids=list(tasks),
     )
-    # L4 (BLOCKER-2 change-invalidation): re-hash the *current* on-disk frame
-    # for every shot that carries vision evidence and fail closed if the stored
-    # evidence no longer matches the pixels on disk. A swapped or regenerated
-    # image must never ride a stale approval. Caption/prompt prose is not
-    # available at this gate, so only the authoritative image is re-verified.
+    # L4 (BLOCKER-2 / BLOCKER-4 change-invalidation): re-bind the *current*
+    # on-disk frame, the *current* caption prose and the *current* image prompt
+    # for every shot that carries vision evidence, and fail closed if any of the
+    # three drifts from the stored, cryptographically-signed record. A swapped
+    # image, an edited caption, or a changed prompt must each invalidate the
+    # previously-approved evidence so a stale approval can never ride a changed
+    # artifact. The authoritative caption/prompt come from the director task
+    # queue (IMAGE_TASKS.jsonl) -- the same source the evidence was minted over.
     for item in decision["decisions"]:
         evidence_payload = item.get("vision_evidence")
         if not isinstance(evidence_payload, Mapping):
@@ -193,9 +196,16 @@ def build_scene_asset_review(
         asset = by_task.get(task_id)
         if asset is None:
             continue
+        task = tasks.get(task_id)
+        if not isinstance(task, Mapping) or "caption_text" not in task or "prompt" not in task:
+            raise SceneAssetError(
+                f"scene task {task_id} has no current caption/prompt to re-verify its vision evidence"
+            )
         verify_evidence_current(
             VisionEvidence.from_mapping({**evidence_payload, "shot_id": task_id}),
             image_path=root / asset["path"],
+            caption_text=task["caption_text"],
+            prompt_text=task["prompt"],
         )
     output = safe_project_output(root, Path("06_visual_production/SCENE_CONTACT_SHEET.jpg"))
     report_path = safe_project_output(root, Path("06_visual_production/SCENE_REVIEW_REPORT.json"))

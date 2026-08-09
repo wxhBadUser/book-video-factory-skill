@@ -19,23 +19,43 @@ from book_video_factory.render_stage.encoded_visual_qa import (
 import test_phase7_render_stage as phase7
 
 from book_video_factory.semantic_alignment.vision_review import (
+    LocalVisionProvider,
     MissingVisionEvidenceError,
+    ParityResult,
+    review_shot,
 )
 
 
-def _encoded_evidence(verdict: str = "match") -> dict[str, Any]:
-    """A structurally valid vision-evidence record bound to an encoded frame."""
+def _signed_encoded_evidence(verdict: str = "match") -> dict[str, Any]:
+    """A real, cryptographically-signed vision-evidence record for an encoded frame.
 
-    return {
-        "vision_provider": "claude-sonnet-4.5",
-        "call_id": "toolu_realcall_001",
-        "image_sha256": "c" * 64,
-        "caption_sha256": "d" * 64,
-        "prompt_sha256": "e" * 64,
-        "parity_verdict": verdict,
-        "parity_reasoning": "The encoded frame matches the reviewed scene.",
-        "reviewed_pixels": True,
-    }
+    Minted through ``review_shot`` with the keyed local provider, so the encoded
+    gate (which verifies the signature) accepts it. The old hand-authored dict
+    naming claude-sonnet-4.5 would now be rejected by the gate.
+    """
+
+    import hashlib
+    import tempfile
+    from pathlib import Path
+
+    class _KeyedStubProvider(LocalVisionProvider):
+        name = "local-vision-stub"
+
+        def __init__(self, v: str = "match") -> None:
+            self.verdict = v
+
+        def _review(self, *, image_bytes: bytes, caption_text: str, prompt_text: str) -> ParityResult:
+            call_id = hashlib.sha256(image_bytes + str(caption_text).encode("utf-8")).hexdigest()[:24]
+            return ParityResult(verdict=self.verdict, reasoning="The encoded frame matches the reviewed scene.", call_id=call_id)
+
+    with tempfile.TemporaryDirectory() as raw:
+        img = Path(raw) / "frame.png"
+        img.write_bytes(b"\x89PNG\r\n\x1a\nfake-pixels")
+        evidence = review_shot(
+            shot_id="encoded", image_path=img, caption_text=verdict, prompt_text=verdict,
+            provider=_KeyedStubProvider(verdict),
+        )
+    return evidence.to_dict()
 
 
 class EncodedVisualQaTests(unittest.TestCase):
@@ -117,8 +137,8 @@ class EncodedVisualQaTests(unittest.TestCase):
                 "caption_status": "pass" if {"caption_bright", "caption_dark"} & set(item["categories"]) else "not_applicable",
                 "note": "Reviewed.",
                 "caption_note": "ASS caption box and subject clearance reviewed." if {"caption_bright", "caption_dark"} & set(item["categories"]) else "",
-                # Every encoded sample must carry authoritative vision evidence.
-                "vision_evidence": _encoded_evidence("match"),
+                # Every encoded sample must carry authoritative, signed vision evidence.
+                "vision_evidence": _signed_encoded_evidence("match"),
             } for item in plan["samples"]]
             decisions[0]["semantic_status"] = "fail"; decisions[0]["note"] = "Opening title does not match the approved story."
             phase7.write_json(decision_path, {

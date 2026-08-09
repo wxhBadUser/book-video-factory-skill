@@ -173,7 +173,10 @@ class PropositionValidationTests(unittest.TestCase):
         }
         good = dict(base, rationale_text="旁白说老牛已经走了，画面改用墙上的空木轭作为替身")
         self.assertEqual(
-            validate_visual_proposition(good, shot_id="shot-2").mode, "Symbolic"
+            validate_visual_proposition(
+                good, shot_id="shot-2", known_symbol_registry=["空木轭"]
+            ).mode,
+            "Symbolic",
         )
         only_source = dict(base, rationale_text="旁白说老牛已经走了，这里留一个安静的空镜头")
         with self.assertRaises(SemanticContractError):
@@ -273,7 +276,8 @@ class ClassifierTests(unittest.TestCase):
             with self.subTest(caption=caption):
                 result = self._classify(caption, source_entities=entities)
                 validate_visual_proposition(
-                    result, shot_id="shot-x", source_entities=list(entities)
+                    result, shot_id="shot-x", source_entities=list(entities),
+                    known_symbol_registry=list(result.surrogate_objects),
                 )
 
     def test_missing_source_entities_is_a_hard_error(self) -> None:
@@ -398,7 +402,10 @@ class RealWorldAnchorShapeTests(unittest.TestCase):
         for caption, entities in captions:
             with self.subTest(caption=caption):
                 result = self._classify(caption, source_entities=entities)
-                validate_visual_proposition(result, shot_id="shot-real")
+                validate_visual_proposition(
+                    result, shot_id="shot-real",
+                    known_symbol_registry=list(result.surrogate_objects),
+                )
 
 
 class BridgeTests(unittest.TestCase):

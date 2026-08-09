@@ -16,6 +16,7 @@ from __future__ import annotations
 from .contracts import (
     PARITY_VERDICTS,
     PASSING_VERDICTS,
+    PROVIDER_VERIFICATION_KEYS,
     MissingVisionEvidenceError,
     ParityResult,
     StaleVisionEvidenceError,
@@ -23,6 +24,7 @@ from .contracts import (
     VisionEvidence,
     VisionProviderError,
     VisionReviewError,
+    register_provider_key,
 )
 from .evaluator import review_shot
 from .evidence import (
@@ -38,8 +40,11 @@ from .provider import (
     VISION_REVIEW_PROVIDER_RELATIVE,
     VISION_REVIEW_PROVIDER_SCHEMA,
     BaseVisionProvider,
+    ClaudeVisionProvider,
+    LocalVisionProvider,
     NullVisionProvider,
     load_vision_review_provider,
+    register_claude_provider,
     validate_vision_provider,
 )
 
@@ -51,9 +56,14 @@ __all__ = [
     "VISION_REVIEW_PROVIDER_RELATIVE",
     "VISION_REVIEW_PROVIDER_SCHEMA",
     "FORBIDDEN_VISION_PROVIDERS",
+    "PROVIDER_VERIFICATION_KEYS",
     "BaseVisionProvider",
+    "LocalVisionProvider",
+    "ClaudeVisionProvider",
     "NullVisionProvider",
     "load_vision_review_provider",
+    "register_provider_key",
+    "register_claude_provider",
     "ParityResult",
     "VisionEvidence",
     "VisionReviewError",

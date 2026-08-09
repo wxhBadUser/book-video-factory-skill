@@ -151,6 +151,7 @@ def classify_proposition(
     object_anchors: Mapping[str, Mapping[str, Any]] | None = None,
     lighting: str = DEFAULT_LIGHTING,
     palette: str = DEFAULT_PALETTE,
+    narrative_function: str = "",
 ) -> VisualProposition:
     """Classify one shot into a Literal / Symbolic / Abstract visual proposition."""
     captions = [str(text).strip() for text in caption_texts if str(text).strip()]
@@ -263,6 +264,25 @@ def classify_proposition(
                 source_terms=tuple(entities),
             )
 
+    # Concrete-event captions must NOT silently degrade into an Abstract
+    # "atmosphere" shot when no anchor/trope matches. A plot/opening/character
+    # beat that the classifier cannot ground as Literal/Symbolic must be
+    # re-proposed (the planner should supply an anchor or trope), not shipped
+    # as a blank mood frame. Only genuine meta narration -- theory,
+    # author_background, transition, closing -- is permitted to fall back to
+    # Abstract (it has no concrete referent to depict).
+    ABSTRACT_ALLOWED_NARRATIVE_FUNCTIONS = {
+        "theory",
+        "author_background",
+        "transition",
+        "closing",
+    }
+    if narrative_function and narrative_function not in ABSTRACT_ALLOWED_NARRATIVE_FUNCTIONS:
+        raise PropositionClassifierError(
+            f"shot {shot_id} caption narrative_function {narrative_function!r} is a concrete event "
+            f"but no Literal/Symbolic proposition could be derived; refuse Abstract atmosphere and "
+            f"re-propose with a grounding anchor or registered trope"
+        )
     return VisualProposition(
         mode="Abstract",
         subject="纯气氛，无叙事指称",
