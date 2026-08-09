@@ -234,7 +234,10 @@ def _extract_script_sections(package: Mapping[str, Any]) -> list[Mapping[str, An
 
 
 def _build_section_register(
-    root: Path, chapter_ranges: list[tuple[float, float]]
+    root: Path,
+    chapter_ranges: list[tuple[float, float]],
+    *,
+    display_text: str | None = None,
 ) -> list[CaptionSectionRegister]:
     """Deterministically map each compiled chapter to its script-section register.
 
@@ -249,13 +252,44 @@ def _build_section_register(
     sections = _extract_script_sections(package)
     if not sections:
         raise AudioStageError("SCRIPT_PACKAGE.json has no performance_version.sections to tag captions")
-    if len(sections) != len(chapter_ranges):
+    if display_text is None and len(sections) != len(chapter_ranges):
         raise AudioStageError(
             f"SCRIPT_PACKAGE sections ({len(sections)}) do not match compiled chapters "
             f"({len(chapter_ranges)}); caption tagging cannot be deterministic"
         )
+    if display_text is None:
+        section_ranges = chapter_ranges
+    else:
+        compact_chars: list[str] = []
+        compact_to_display: list[int] = []
+        for index, char in enumerate(display_text):
+            if not char.isspace():
+                compact_chars.append(char)
+                compact_to_display.append(index)
+        compact = "".join(compact_chars)
+        cursor = 0
+        starts: list[int] = []
+        for section in sections:
+            needle = "".join(char for char in str(section.get("text") or "") if not char.isspace())
+            if not needle:
+                raise AudioStageError("SCRIPT_PACKAGE section text is empty; caption tagging cannot be deterministic")
+            found = compact.find(needle, cursor)
+            if found < 0:
+                raise AudioStageError(
+                    "SCRIPT_PACKAGE section text does not occur in the compiled display script in order"
+                )
+            starts.append(compact_to_display[found])
+            cursor = found + len(needle)
+        if starts[0] != 0 or cursor != len(compact):
+            raise AudioStageError(
+                "SCRIPT_PACKAGE sections do not exactly cover the compiled display script"
+            )
+        section_ranges = [
+            (start, starts[index + 1] if index + 1 < len(starts) else len(display_text))
+            for index, start in enumerate(starts)
+        ]
     register: list[CaptionSectionRegister] = []
-    for (start, end), section in zip(chapter_ranges, sections):
+    for (start, end), section in zip(section_ranges, sections):
         register.append(CaptionSectionRegister(
             display_start=start,
             display_end=end,
@@ -599,7 +633,7 @@ def generate_audio_stage(project:Path,input_path:Path,lexicon_path:Path,*,runner
         prior=verify_phase4_prerequisites(root,input_data["release_id"])
         original_script=(root/"SCRIPT.md").read_text(encoding="utf-8")
         spoken_script,comp,display_chapters,chapter_ranges=_compile_scripts(original_script,lexicon)
-        section_register=_build_section_register(root,chapter_ranges)
+        section_register=_build_section_register(root, chapter_ranges, display_text=comp.display_text)
         lead_comp=compile_spoken_script(input_data["lead_text"],lexicon,scope="lead")
         reveal_comp=compile_spoken_script(input_data["reveal_text"],lexicon,scope="reveal")
         staging_input=dict(input_data); staging_input["lead_text"]=lead_comp.spoken_text; staging_input["reveal_text"]=reveal_comp.spoken_text
@@ -806,7 +840,9 @@ def finalize_audio_stage(
         prior = verify_phase4_prerequisites(root, input_data["release_id"])
         original_script = (root / "SCRIPT.md").read_text(encoding="utf-8")
         spoken_script, compilation, display_chapters, chapter_ranges = _compile_scripts(original_script, lexicon)
-        section_register = _build_section_register(root, chapter_ranges)
+        section_register = _build_section_register(
+            root, chapter_ranges, display_text=compilation.display_text
+        )
         lead_comp = compile_spoken_script(input_data["lead_text"], lexicon, scope="lead")
         reveal_comp = compile_spoken_script(input_data["reveal_text"], lexicon, scope="reveal")
         preliminary_input_digest = _sha_bytes(_canonical({
@@ -873,7 +909,14 @@ def finalize_audio_stage(
                 run_hbg_caption_audit(staging)
             else:
                 runner(staging)
-            raw_final, restored_captions, media_report = _ensure_media(staging, compilation, input_data, lead_comp=lead_comp, reveal_comp=reveal_comp)
+            raw_final, restored_captions, media_report = _ensure_media(
+                staging,
+                compilation,
+                input_data,
+                lead_comp=lead_comp,
+                reveal_comp=reveal_comp,
+                section_register=section_register,
+            )
             fresh_meta, _hbg_storyboard = _display_outputs(
                 staging, raw_final, restored_captions, compilation, display_chapters
             )

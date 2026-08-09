@@ -12,11 +12,11 @@ Slot    Block                       Why it is where it is
 ======  ==========================  ====================================
 1       caption                     The line the viewer reads right now.
 2       proposition                 The factual claim the frame asserts.
-3       required_visible            The referents that must be on screen.
-4       forbidden                   The referents that must not be.
-5       narrative_function          plot / theory / author background / ...
-6       camera                      Framing, lens, depth.
-7       anchors                     Character continuity.
+3       required_scene              The required situation, action and register.
+4       required_visible            The referents that must be on screen.
+5       anchors                     Character continuity references.
+6       forbidden                   The referents that must not be.
+7       camera                      Framing, lens, depth and subtitle-safe zone.
 8       style                       Palette, texture, visual world.
 9       symbolic_explanation        Only for Symbolic mode, and last.
 ======  ==========================  ====================================
@@ -41,11 +41,11 @@ from book_video_factory.semantic_alignment.models import VisualProposition
 PROMPT_BLOCK_ORDER: tuple[str, ...] = (
     "caption",
     "proposition",
+    "required_scene",
     "required_visible",
-    "forbidden",
-    "narrative_function",
-    "camera",
     "anchors",
+    "forbidden",
+    "camera",
     "style",
     "symbolic_explanation",
 )
@@ -67,6 +67,11 @@ _BINDING_FIELDS: tuple[str, ...] = (
     "caption_text_sha256",
     "proposition_sha256",
     "prompt_sha256",
+)
+_GROUP_BINDING_FIELDS: tuple[str, ...] = (
+    "group_id",
+    "caption_contract_bindings",
+    "caption_group_sha256",
 )
 
 
@@ -159,49 +164,51 @@ def build_aligned_prompt_blocks(
         f"{proposition.action}. Setting: {proposition.environment}. Mood: {proposition.mood}."
     )
 
+    blocks.append(
+        f"[3/9 REQUIRED SCENE] Required situation/action: {proposition.action or proposition.subject}. "
+        f"Environment: {proposition.environment or 'approved atmospheric setting only'}. "
+        f"Narrative function: {narrative_function} — {NARRATIVE_FUNCTION_GUIDANCE[narrative_function]}."
+    )
+
     if proposition.mode == "Abstract":
-        blocks.append(
-            "[3/9 REQUIRED VISIBLE] This frame claims no narrative referent. Show atmosphere "
-            "only; do not introduce identifiable story characters or plot objects."
+        required_visible = (
+            "This frame claims no narrative referent. Show atmosphere only; do not introduce "
+            "identifiable story characters or plot objects."
         )
     else:
         described = "; ".join(
             f"{item.entity_id} ({item.natural_language})" if item.natural_language else item.entity_id
             for item in visible
         ) or "; ".join(proposition.surrogate_objects)
-        blocks.append(
-            f"[3/9 REQUIRED VISIBLE] Must be clearly recognisable in frame: {described}."
-        )
+        required_visible = f"Must be clearly recognisable in frame: {described}."
     contract_must_show = [str(item).strip() for item in must_show if str(item).strip()]
     if contract_must_show:
-        blocks.append(
-            "[3/9 REQUIRED VISIBLE] Per the Caption Visual Contract, this frame MUST show: "
+        required_visible += (
+            " Per the Caption Visual Contract, this frame MUST show: "
             + ", ".join(contract_must_show)
             + ". If a named character or object above is missing, the frame fails the contract."
         )
+    blocks.append(f"[4/9 REQUIRED VISIBLE] {required_visible}")
+
+    anchor_list = [str(item).strip() for item in anchors if str(item).strip()]
+    blocks.append(
+        "[5/9 IDENTITY REFERENCES] Character continuity identity references and current variants: "
+        + ("; ".join(anchor_list) if anchor_list else "no recurring character in this frame")
+        + "."
+    )
 
     forbidden = [str(item).strip() for item in forbidden_entities if str(item).strip()]
     contract_must_not = [str(item).strip() for item in must_not_show if str(item).strip()]
     if contract_must_not:
         forbidden = forbidden + contract_must_not
     blocks.append(
-        "[4/9 FORBIDDEN] Must not appear: "
+        "[6/9 FORBIDDEN] Must not appear or become primary: "
         + (", ".join(forbidden) if forbidden else "no shot-specific prohibitions")
         + ". Never include text, captions, logo, watermark, UI or border."
     )
 
     blocks.append(
-        f"[5/9 NARRATIVE FUNCTION] Narrative function: {narrative_function} — "
-        f"{NARRATIVE_FUNCTION_GUIDANCE[narrative_function]}."
-    )
-
-    blocks.append(f"[6/9 CAMERA] {_camera_text(camera)}.")
-
-    anchor_list = [str(item).strip() for item in anchors if str(item).strip()]
-    blocks.append(
-        "[7/9 ANCHORS] Character continuity anchors: "
-        + ("; ".join(anchor_list) if anchor_list else "no recurring character in this frame")
-        + "."
+        f"[7/9 CAMERA] {_camera_text(camera)}. Keep the declared subtitle-safe zone visually quiet."
     )
 
     blocks.append(
@@ -231,6 +238,9 @@ def compute_prompt_binding(
     beat_ids: Sequence[str] | Iterable[str],
     shot_id: str,
     caption_visual_contract_sha256: str | None = None,
+    group_id: str | None = None,
+    caption_contract_bindings: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]] = (),
+    caption_group_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Bind a prompt to the caption, proposition, scene and beats it came from.
 
@@ -269,6 +279,26 @@ def compute_prompt_binding(
         if not isinstance(caption_visual_contract_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", caption_visual_contract_sha256):
             raise PromptSpecError("caption_visual_contract_sha256 must be a 64-char hex digest when supplied")
         binding["caption_visual_contract_sha256"] = caption_visual_contract_sha256
+    contract_bindings = [dict(item) for item in caption_contract_bindings]
+    group_values = (group_id, caption_group_sha256, bool(contract_bindings))
+    if any(value is not None and value is not False for value in group_values) and not all(group_values):
+        raise PromptSpecError("group prompt binding requires group_id, contract bindings and group SHA")
+    if group_id is not None:
+        if not isinstance(group_id, str) or not group_id.strip():
+            raise PromptSpecError("group_id must be nonempty")
+        if not isinstance(caption_group_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", caption_group_sha256):
+            raise PromptSpecError("caption_group_sha256 must be a 64-char hex digest")
+        bound_ids = [str(item.get("caption_id", "")).strip() for item in contract_bindings]
+        bound_hashes = [str(item.get("caption_visual_contract_sha256", "")) for item in contract_bindings]
+        if bound_ids != ids or len(set(bound_ids)) != len(bound_ids):
+            raise PromptSpecError("caption contract bindings must exactly match ordered caption ids")
+        if any(not re.fullmatch(r"[0-9a-f]{64}", item) for item in bound_hashes):
+            raise PromptSpecError("caption contract bindings require 64-char content hashes")
+        binding.update({
+            "group_id": group_id,
+            "caption_contract_bindings": contract_bindings,
+            "caption_group_sha256": caption_group_sha256,
+        })
     return binding
 
 
@@ -279,6 +309,9 @@ def verify_prompt_binding(
     proposition: VisualProposition,
     prompt: str,
     caption_visual_contract_sha256: str | None = None,
+    group_id: str | None = None,
+    caption_contract_bindings: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]] | None = None,
+    caption_group_sha256: str | None = None,
 ) -> None:
     """Fail closed when the caption, proposition, prompt, or contract drifted.
 
@@ -318,6 +351,20 @@ def verify_prompt_binding(
                 f"caption visual contract changed since the prompt was built "
                 f"(binding {str(bound)[:12]}, actual {caption_visual_contract_sha256[:12]})"
             )
+    has_group_fields = [field in binding for field in _GROUP_BINDING_FIELDS]
+    if any(has_group_fields) and not all(has_group_fields):
+        raise PromptBindingError("prompt binding has a partial caption group binding")
+    if group_id is not None or caption_contract_bindings is not None or caption_group_sha256 is not None:
+        if not all(has_group_fields):
+            raise PromptBindingError("prompt binding is missing caption group fields")
+        if binding["group_id"] != group_id or binding["caption_group_sha256"] != caption_group_sha256:
+            raise PromptBindingError("caption group changed since the prompt was built")
+        expected_bindings = [dict(item) for item in caption_contract_bindings or ()]
+        if binding["caption_contract_bindings"] != expected_bindings:
+            raise PromptBindingError("caption contract bindings changed since the prompt was built")
+        bound_ids = [str(item.get("caption_id", "")).strip() for item in expected_bindings]
+        if bound_ids != binding["caption_ids"]:
+            raise PromptBindingError("caption contract binding IDs do not match ordered caption IDs")
 
 
 __all__ = [

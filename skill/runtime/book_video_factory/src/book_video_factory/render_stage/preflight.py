@@ -23,6 +23,12 @@ from book_video_factory.semantic_alignment.vision_review import (
 from book_video_factory.semantic_alignment.caption_contract import (
     load_caption_visual_contract_document,
 )
+from book_video_factory.semantic_alignment.caption_grouping import (
+    CaptionGroupingError,
+    load_current_caption_grouping_document,
+)
+from book_video_factory.semantic_alignment.models import VisualProposition
+from book_video_factory.semantic_alignment.prompting import PromptBindingError, verify_prompt_binding
 from book_video_factory.semantic_alignment.vision_review.contracts import VisionEvidence
 from book_video_factory.semantic_alignment.vision_review.evidence import (
     StaleVisionEvidenceError,
@@ -63,6 +69,7 @@ _REPORT_FIELDS = {
 # closed and blocks the render -- "no verified review means no render".
 _SCENE_REVIEW_DECISION_RELATIVE = "06_visual_production/SCENE_REVIEW_DECISION.json"
 _CONTRACT_RELATIVE = "04_audio/CAPTION_VISUAL_CONTRACT.json"
+_GROUPING_RELATIVE = "04_audio/CAPTION_GROUPING_AUDIT.json"
 _REQUIRED_DECISION_FIELDS = {
     "task_id", "semantic_review_status", "reality_review_status",
     "identity_review_status", "note",
@@ -190,8 +197,30 @@ def _contract_currency_blockers(contract_path: Path, root: Path, release_id: str
         raise RenderPreflightError(f"caption visual contract is invalid: {error}") from error
     if not contracts:
         raise RenderPreflightError("caption visual contract contains no contracts")
+    try:
+        grouping = load_current_caption_grouping_document(root)
+    except CaptionGroupingError as error:
+        raise RenderPreflightError(f"caption grouping audit is not current: {error}") from error
+    groups = grouping.get("groups")
+    if not isinstance(groups, list) or not groups:
+        raise RenderPreflightError("caption grouping audit contains no groups")
+    groups_by_id: dict[str, Mapping[str, Any]] = {}
+    caption_to_group: dict[str, Mapping[str, Any]] = {}
+    for group in groups:
+        if not isinstance(group, Mapping):
+            raise RenderPreflightError("caption grouping audit contains an invalid group")
+        group_id = str(group.get("group_id", ""))
+        if not group_id or group_id in groups_by_id:
+            raise RenderPreflightError("caption grouping audit has invalid group IDs")
+        groups_by_id[group_id] = group
+        for caption_id in group.get("caption_ids", []):
+            caption_id = str(caption_id)
+            if not caption_id or caption_id in caption_to_group:
+                raise RenderPreflightError("caption grouping audit has missing or duplicate caption coverage")
+            caption_to_group[caption_id] = group
+    if set(caption_to_group) != set(contracts):
+        raise RenderPreflightError("caption grouping audit does not exactly cover current contracts")
 
-    content_sha = {cid: c.content_sha256() for cid, c in contracts.items()}
     try:
         from book_video_factory.production_visuals.registry import _tasks as _load_tasks
 
@@ -202,6 +231,7 @@ def _contract_currency_blockers(contract_path: Path, root: Path, release_id: str
         ) from error
 
     blockers: list[str] = []
+    covered_groups: set[str] = set()
     for tid, task in task_map.items():
         if not isinstance(task, Mapping):
             continue
@@ -209,16 +239,39 @@ def _contract_currency_blockers(contract_path: Path, root: Path, release_id: str
         if not caption_ids:
             # identity / style-reference tasks are not bound to the contract.
             continue
-        bound = task.get("caption_visual_contract_sha256")
-        expected_inputs = sorted(content_sha[cid] for cid in caption_ids if cid in content_sha)
-        if not expected_inputs:
-            # The contract covers none of this task's captions -> the contract is
-            # incomplete relative to the production tasks, so the bind is unsafe.
+        if any(str(caption_id) not in caption_to_group for caption_id in caption_ids):
             blockers.append(str(tid))
             continue
-        expected = hashlib.sha256("|".join(expected_inputs).encode("utf-8")).hexdigest()
-        if bound is None or bound != expected:
+        group = caption_to_group[str(caption_ids[0])]
+        group_id = str(group.get("group_id", ""))
+        if [str(item) for item in group.get("caption_ids", [])] != [str(item) for item in caption_ids] or group_id in covered_groups:
             blockers.append(str(tid))
+            continue
+        bindings = [dict(item) for item in group.get("contract_bindings", [])]
+        expected_contract_sha = hashlib.sha256(
+            "|".join(str(item.get("caption_visual_contract_sha256", "")) for item in bindings).encode("utf-8")
+        ).hexdigest()
+        try:
+            proposition = VisualProposition.from_mapping(task.get("visual_proposition", {}))
+            verify_prompt_binding(
+                task.get("prompt_binding", {}),
+                caption_text=str(task.get("caption_text", "")),
+                proposition=proposition,
+                prompt=str(task.get("prompt", "")),
+                caption_visual_contract_sha256=expected_contract_sha,
+                group_id=group_id,
+                caption_contract_bindings=bindings,
+                caption_group_sha256=str(group.get("caption_group_sha256", "")),
+            )
+        except (PromptBindingError, TypeError, ValueError):
+            blockers.append(str(tid))
+            continue
+        if task.get("caption_visual_contract_sha256") != expected_contract_sha:
+            blockers.append(str(tid))
+            continue
+        covered_groups.add(group_id)
+    if covered_groups != set(groups_by_id) and not blockers:
+        blockers.append("caption_group_coverage")
     return blockers
 
 
@@ -454,14 +507,13 @@ def preflight_render(
             if isinstance(task_id, str) and isinstance(asset_rel, str):
                 assets_by_task[task_id] = root / asset_rel
     vision_blockers = _scene_review_vision_blockers(decision_path, assets_by_task)
-    # L5: when the Caption Visual Contract is in force, the prompt binding of every
-    # production image task must carry its current hash; a stale or missing bind
-    # blocks the render (fail-closed). Skipped when the contract is absent so
-    # pre-contract projects/tests are unaffected.
+    # L5: remediation render requires persisted current v2 Contract + Grouping.
     contract_path = root / _CONTRACT_RELATIVE
     contract_blockers: list[str] = []
-    if contract_path.is_file():
+    try:
         contract_blockers = _contract_currency_blockers(contract_path, root, manifest.get("release_id"))
+    except RenderPreflightError as error:
+        contract_blockers = [f"caption_alignment:{error}"]
     passed = (
         bool(style_evidence["validated"])
         and bool(disk_evidence["passed"])
@@ -493,11 +545,15 @@ def preflight_render(
         "recovery_commands": [item["remove_command"] for item in work_dirs if item["remove_command"]],
         "vision_review_decision_present": decision_path.is_file(),
         "vision_review_blockers": vision_blockers,
-        "caption_visual_contract_in_force": contract_path.is_file(),
+        "caption_visual_contract_in_force": contract_path.is_file() and (root / _GROUPING_RELATIVE).is_file(),
         "caption_visual_contract_blockers": contract_blockers,
         "recorded_at": _now(),
         "status": "pass" if passed else "blocked",
-        "next_stage_status": "ready_for_hbg_render" if passed else "blocked_by_render_preflight",
+        "next_stage_status": (
+            "ready_for_hbg_render" if passed
+            else "blocked_by_visual_semantic_alignment" if (vision_blockers or contract_blockers)
+            else "blocked_by_render_preflight"
+        ),
     }
     report_path = safe_project_output(root, Path("07_render/RENDER_PREFLIGHT.json"))
     report_path.parent.mkdir(parents=True, exist_ok=True)

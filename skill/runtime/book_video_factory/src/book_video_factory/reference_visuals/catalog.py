@@ -36,7 +36,13 @@ _KERNEL_FIELDS = {
 
 
 def repository_root() -> Path:
-    return Path(__file__).resolve().parents[4]
+    current = Path(__file__).resolve()
+    catalog = Path("book_video_factory/config/visuals/gold-reference-catalog-v1.json")
+    references = Path("docs/visual-upgrade-input/contact_sheets")
+    for parent in current.parents:
+        if (parent / catalog).is_file() and (parent / references).is_dir():
+            return parent
+    raise ReferenceCatalogError("cannot locate repository visual reference evidence")
 
 
 def default_catalog_path() -> Path:

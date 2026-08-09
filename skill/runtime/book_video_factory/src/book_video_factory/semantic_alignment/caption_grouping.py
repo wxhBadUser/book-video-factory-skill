@@ -236,7 +236,7 @@ class CaptionGroup:
         return self.end - self.start
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "group_id": self.group_id,
             "caption_ids": list(self.caption_ids),
             "start": self.start,
@@ -251,6 +251,10 @@ class CaptionGroup:
             "contract_bindings": [dict(item) for item in self.contract_bindings],
             "split_from_previous": dict(self.split_from_previous),
         }
+        payload["caption_group_sha256"] = hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        return payload
 
 
 def _scene_state_signature(contract: Any) -> str:
@@ -454,7 +458,7 @@ def build_caption_grouping_audit_document(
         for reason in boundary["reasons"]:
             reason_distribution[reason] = reason_distribution.get(reason, 0) + 1
     return {
-        "schema_version": "caption-grouping-audit.v1",
+        "schema_version": "caption-grouping-audit.v2",
         "release_id": str(release_id),
         "caption_count": len(captions),
         "boundary_count": len(boundaries),
@@ -534,6 +538,67 @@ def build_caption_grouping_from_project(
     output_path = root / "04_audio" / "CAPTION_GROUPING_AUDIT.json"
     output_path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return output_path
+
+
+def load_current_caption_grouping_document(root: str | Path) -> dict[str, Any]:
+    """Load the persisted, current v2 Caption Grouping audit for production.
+
+    Validate-only derivation is intentionally not a production fallback: the
+    Director and Render gates need a persisted artifact whose complete ordered
+    grouping still equals the current Caption Visual Contract and captions.
+    """
+
+    from .caption_contract import (
+        CaptionContractError,
+        CaptionVisualContract,
+        build_caption_visual_contract_from_project,
+        load_caption_visual_contract_document,
+    )
+
+    root = Path(root)
+    bindings_path = root / "04_audio" / "CAPTION_BINDINGS.json"
+    contracts_path = root / "04_audio" / "CAPTION_VISUAL_CONTRACT.json"
+    grouping_path = root / "04_audio" / "CAPTION_GROUPING_AUDIT.json"
+    if grouping_path.is_symlink() or not grouping_path.is_file():
+        raise CaptionGroupingError("caption grouping audit is missing or symlinked")
+    try:
+        bindings = json.loads(bindings_path.read_text(encoding="utf-8"))
+        persisted = json.loads(grouping_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise CaptionGroupingError(f"caption grouping audit is unreadable: {error}") from error
+    if not isinstance(persisted, Mapping) or persisted.get("schema_version") != "caption-grouping-audit.v2":
+        raise CaptionGroupingError("caption grouping audit must use current v2 schema")
+    release_id = str(bindings.get("release_id") or "unknown")
+    if persisted.get("release_id") != release_id:
+        raise CaptionGroupingError("caption grouping audit release does not match caption bindings")
+    raw_captions = bindings.get("captions")
+    captions = list(raw_captions.values()) if isinstance(raw_captions, Mapping) else raw_captions
+    if not isinstance(captions, list) or not captions:
+        raise CaptionGroupingError("CAPTION_BINDINGS.json contains no captions")
+    try:
+        persisted_contracts = load_caption_visual_contract_document(contracts_path)
+        current_document = build_caption_visual_contract_from_project(
+            root, release_id=release_id, validate_only=True,
+        )
+        current_contracts = {
+            caption_id: CaptionVisualContract.from_mapping(payload)
+            for caption_id, payload in current_document["contracts"].items()
+        }
+    except (CaptionContractError, OSError, ValueError, KeyError) as error:
+        raise CaptionGroupingError(f"current caption visual contract is invalid: {error}") from error
+    if set(persisted_contracts) != set(current_contracts) or any(
+        persisted_contracts[caption_id].content_sha256() != current_contracts[caption_id].content_sha256()
+        for caption_id in current_contracts
+    ):
+        raise CaptionGroupingError("persisted caption visual contract is stale or partial")
+    expected = build_caption_grouping_audit_document(
+        release_id=release_id,
+        captions=captions,
+        contracts=current_contracts,
+    )
+    if persisted != expected:
+        raise CaptionGroupingError("persisted caption grouping audit is stale or partial")
+    return expected
 
 
 def _check_unit(unit: CaptionUnit) -> None:
@@ -707,6 +772,7 @@ __all__ = [
     "build_caption_grouping_from_project",
     "derive_caption_image_groups",
     "group_captions",
+    "load_current_caption_grouping_document",
     "normalize_script_register",
     "required_split_reasons",
     "validate_caption_groups",

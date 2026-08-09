@@ -28,6 +28,8 @@ from book_video_factory.semantic_alignment.caption_contract import (
     build_caption_visual_contract_from_project,
     enrich_captions_to_contracts,
 )
+from book_video_factory.semantic_alignment.caption_grouping import build_caption_grouping_from_project
+from book_video_factory.semantic_alignment.models import VisualProposition
 from book_video_factory.semantic_alignment.prompting import (
     PromptBindingError,
     compute_prompt_binding,
@@ -163,6 +165,40 @@ def _write_tasks(root: Path, tasks: list[dict]) -> None:
     (d / "IMAGE_TASKS.jsonl").write_text("\n".join(lines), encoding="utf-8")
 
 
+def _write_current_contract_group_and_task(root: Path) -> tuple[Path, dict]:
+    """Mint a complete persisted v2 Contract/Group fixture for Render attacks."""
+    bindings_path = root / "04_audio" / "CAPTION_BINDINGS.json"
+    bindings = json.loads(bindings_path.read_text(encoding="utf-8"))
+    caption = bindings["captions"]["caption-1"]
+    caption.update({"start": 0.0, "end": 3.0})
+    bindings_path.write_text(json.dumps(bindings, ensure_ascii=False), encoding="utf-8")
+    contract_path = build_caption_visual_contract_from_project(root, release_id="r1")
+    build_caption_grouping_from_project(root)
+    grouping = json.loads((root / "04_audio" / "CAPTION_GROUPING_AUDIT.json").read_text(encoding="utf-8"))
+    group = grouping["groups"][0]
+    proposition = VisualProposition(
+        mode="Abstract", subject="命运", action="压迫", environment="空旷田野",
+        mood="克制", lighting="L1", palette="P1", rationale_text="测试命题",
+    )
+    prompt = "PROMPT"
+    contract_sha = hashlib.sha256(
+        "|".join(item["caption_visual_contract_sha256"] for item in group["contract_bindings"]).encode("utf-8")
+    ).hexdigest()
+    binding = compute_prompt_binding(
+        caption_ids=group["caption_ids"], caption_text=caption["text"], proposition=proposition,
+        prompt=prompt, scene_id="S1", beat_ids=["B1"], shot_id="SHOT_S1",
+        caption_visual_contract_sha256=contract_sha, group_id=group["group_id"],
+        caption_contract_bindings=group["contract_bindings"],
+        caption_group_sha256=group["caption_group_sha256"],
+    )
+    return contract_path, {
+        "schema_version": "production-image-task.v1", "task_id": "SCENE_1", "scene_id": "S1",
+        "caption_ids": group["caption_ids"], "caption_text": caption["text"], "prompt": prompt,
+        "visual_proposition": proposition.to_dict(), "prompt_binding": binding,
+        "caption_visual_contract_sha256": contract_sha,
+    }
+
+
 def _valid_evidence(shot_id: str, image_sha: str, caption_text: str, prompt_text: str,
                     provider: str = "local-vision-stub") -> VisionEvidence:
     cap_sha = hashlib.sha256(caption_text.encode("utf-8")).hexdigest()
@@ -267,40 +303,27 @@ def test_T06_contract_release_mismatch_blocks(tmp_path):
 
 
 def test_T07_task_without_contract_binding_is_blocked(tmp_path):
-    root = _write_min_root(tmp_path)
-    _write_tasks(root, [{
-        "schema_version": "production-image-task.v1", "task_id": "SCENE_1",
-        "caption_ids": ["C1"],  # no caption_visual_contract_sha256 at all
-    }])
-    contract_path = _write_contract(root, release_id="r1", caption_ids=["C1"])
+    root = _tmp_project(tmp_path)
+    contract_path, task = _write_current_contract_group_and_task(root)
+    task.pop("caption_visual_contract_sha256")
+    _write_tasks(root, [task])
     blockers = _contract_currency_blockers(contract_path, root, "r1")
     assert blockers == ["SCENE_1"]
 
 
 def test_T08_task_with_stale_contract_binding_is_blocked(tmp_path):
-    root = _write_min_root(tmp_path)
-    _write_tasks(root, [{
-        "schema_version": "production-image-task.v1", "task_id": "SCENE_1",
-        "caption_ids": ["C1"], "caption_visual_contract_sha256": "0" * 64,  # wrong
-    }])
-    contract_path = _write_contract(root, release_id="r1", caption_ids=["C1"])
+    root = _tmp_project(tmp_path)
+    contract_path, task = _write_current_contract_group_and_task(root)
+    task["caption_visual_contract_sha256"] = "0" * 64
+    _write_tasks(root, [task])
     blockers = _contract_currency_blockers(contract_path, root, "r1")
     assert blockers == ["SCENE_1"]
 
 
 def test_T09_task_with_current_contract_binding_passes(tmp_path):
-    root = _write_min_root(tmp_path)
-    # compute the correct binding the director would have produced
-    from book_video_factory.semantic_alignment.caption_contract import (
-        load_caption_visual_contract_document,
-    )
-    contract_path = _write_contract(root, release_id="r1", caption_ids=["C1"])
-    contracts = load_caption_visual_contract_document(contract_path)
-    expected = hashlib.sha256(contracts["C1"].content_sha256().encode("utf-8")).hexdigest()
-    _write_tasks(root, [{
-        "schema_version": "production-image-task.v1", "task_id": "SCENE_1",
-        "caption_ids": ["C1"], "caption_visual_contract_sha256": expected,
-    }])
+    root = _tmp_project(tmp_path)
+    contract_path, task = _write_current_contract_group_and_task(root)
+    _write_tasks(root, [task])
     blockers = _contract_currency_blockers(contract_path, root, "r1")
     assert blockers == []  # correct bind -> no blocker
 

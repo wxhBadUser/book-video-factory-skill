@@ -233,7 +233,18 @@ def build_storyboard_audio_plan(project: Path) -> dict:
     for beat, assigned in zip(beats, assignments):
         if not assigned:
             raise AssertionError(f"fixture beat has no captions: {beat['beatId']}")
-        chunks = [assigned[index:index + 6] for index in range(0, len(assigned), 6)]
+        chunks: list[list[dict]] = []
+        current: list[dict] = []
+        for caption in assigned:
+            register_changed = bool(current) and (
+                caption.get("narrative_function") != current[-1].get("narrative_function")
+            )
+            if current and (len(current) == 6 or register_changed):
+                chunks.append(current)
+                current = []
+            current.append(caption)
+        if current:
+            chunks.append(current)
         shot_ids: list[str] = []
         for chunk_index, chunk in enumerate(chunks, start=1):
             shot_id = f"audio-{beat['beatId'].lower()}-{chunk_index:02d}"
@@ -256,7 +267,7 @@ def build_storyboard_audio_plan(project: Path) -> dict:
                 "visual_load": "strong" if duration >= 8.0 else "ordinary",
                 "intentional_hold": False,
                 "hold_reason": "",
-                "semantic_rationale": "字幕与源 Beat 共享人物、物件或场景实体",
+                "semantic_rationale": "".join(str(item["text"]) for item in chunk),
                 "nonverbal_window": None,
             })
         dispositions.append({

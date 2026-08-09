@@ -53,6 +53,13 @@ SYMBOLIC_TROPES: tuple[tuple[tuple[str, ...], str, str], ...] = (
 DEFAULT_LIGHTING = "DUSK_SOFT"
 DEFAULT_PALETTE = "EARTH_DUSK"
 
+ABSTRACT_ALLOWED_NARRATIVE_FUNCTIONS = {
+    "theory",
+    "author_background",
+    "transition",
+    "closing",
+}
+
 
 def _normalize(text: str) -> str:
     return unicodedata.normalize("NFKC", str(text or ""))
@@ -152,6 +159,8 @@ def classify_proposition(
     lighting: str = DEFAULT_LIGHTING,
     palette: str = DEFAULT_PALETTE,
     narrative_function: str = "",
+    visual_mode: str = "",
+    symbolic_mapping: Mapping[str, Any] | None = None,
 ) -> VisualProposition:
     """Classify one shot into a Literal / Symbolic / Abstract visual proposition."""
     captions = [str(text).strip() for text in caption_texts if str(text).strip()]
@@ -165,6 +174,114 @@ def classify_proposition(
     characters = _anchor_terms(character_anchors or {})
     scenes = _anchor_terms(scene_anchors or {})
     objects = _anchor_terms(object_anchors or {})
+
+    mode_hint = str(visual_mode or "").strip().lower()
+    if mode_hint and mode_hint not in {"literal", "abstract", "symbolic", "symbolic_or_abstract"}:
+        raise PropositionClassifierError(
+            f"shot {shot_id} has unsupported Caption Contract visual_mode {visual_mode!r}"
+        )
+    if mode_hint == "abstract":
+        if narrative_function not in ABSTRACT_ALLOWED_NARRATIVE_FUNCTIONS or entities:
+            raise PropositionClassifierError(
+                f"shot {shot_id} cannot use Abstract for narrative_function {narrative_function!r} "
+                "or a contract with required visible entities"
+            )
+        return VisualProposition(
+            mode="Abstract",
+            subject="纯气氛，无叙事指称",
+            action="",
+            environment="",
+            mood="沉静、留白",
+            lighting=lighting,
+            palette=palette,
+            rationale_text=(
+                f"Caption Contract declares visual_mode=abstract for {narrative_function}; "
+                f"「{_excerpt(caption_blob)}」不绑定剧情人物，画面只提供气氛且不得继承 Beat 实体"
+            ),
+            entity_visibility=(),
+            surrogate_objects=(),
+            source_terms=(),
+        )
+    if symbolic_mapping is not None:
+        mapping_id = str(symbolic_mapping.get("mapping_id", "")).strip()
+        status = str(symbolic_mapping.get("status", "")).strip()
+        concept = str(symbolic_mapping.get("source_concept", "")).strip()
+        surrogate = str(symbolic_mapping.get("surrogate_object", "")).strip()
+        if (
+            mode_hint not in {"symbolic", "symbolic_or_abstract"}
+            or status != "approved"
+            or not mapping_id
+            or not concept
+            or concept not in caption_blob
+            or not surrogate
+            or entities
+        ):
+            raise PropositionClassifierError(
+                f"shot {shot_id} symbolic mapping is not approved, caption-grounded, or compatible with an empty must_show set"
+            )
+        return VisualProposition(
+            mode="Symbolic",
+            subject=surrogate,
+            action="静态构图，让批准的象征物成为唯一主体",
+            environment="与批准视觉 Profile 一致的时代环境",
+            mood="克制、含蓄",
+            lighting=lighting,
+            palette=palette,
+            rationale_text=(
+                f"批准映射 {mapping_id} 将字幕概念「{concept}」绑定为「{surrogate}」；"
+                "该映射来自当前视觉 Profile，不引入 Beat 人物"
+            ),
+            entity_visibility=(),
+            surrogate_objects=(surrogate,),
+            source_terms=(concept, f"mapping:{mapping_id}"),
+        )
+    if mode_hint == "symbolic":
+        raise PropositionClassifierError(
+            f"shot {shot_id} declares Symbolic but has no approved Profile symbolic mapping"
+        )
+    if mode_hint == "symbolic_or_abstract" and not entities:
+        if narrative_function not in ABSTRACT_ALLOWED_NARRATIVE_FUNCTIONS:
+            raise PropositionClassifierError(
+                f"shot {shot_id} concrete narrative_function {narrative_function!r} cannot fall back to Abstract"
+            )
+        return VisualProposition(
+            mode="Abstract",
+            subject="纯气氛，无叙事指称",
+            action="",
+            environment="",
+            mood="沉静、留白",
+            lighting=lighting,
+            palette=palette,
+            rationale_text=(
+                f"Caption Contract permits symbolic_or_abstract for {narrative_function}, "
+                f"但当前批准 Profile 没有匹配「{_excerpt(caption_blob)}」的象征映射；"
+                "因此只给气氛，不添加剧情人物"
+            ),
+            entity_visibility=(),
+            surrogate_objects=(),
+            source_terms=(),
+        )
+    if mode_hint == "literal" and not entities:
+        if narrative_function == "opening" and _QUESTION_RE.search(caption_blob):
+            return VisualProposition(
+                mode="Abstract",
+                subject="纯气氛，无叙事指称",
+                action="",
+                environment="",
+                mood="悬置、留白",
+                lighting=lighting,
+                palette=palette,
+                rationale_text=(
+                    f"Opening Caption「{_excerpt(caption_blob)}」是明确设问且没有 must_show；"
+                    "画面不得继承 Beat 人物，只提供开场悬念气氛"
+                ),
+                entity_visibility=(),
+                surrogate_objects=(),
+                source_terms=(),
+            )
+        raise PropositionClassifierError(
+            f"shot {shot_id} declares Literal but its Caption Contract must_show set is empty"
+        )
 
     is_question = bool(_QUESTION_RE.search(caption_blob))
     abstract_hits = [marker for marker in ABSTRACT_MARKERS if marker in caption_blob]
@@ -271,12 +388,6 @@ def classify_proposition(
     # as a blank mood frame. Only genuine meta narration -- theory,
     # author_background, transition, closing -- is permitted to fall back to
     # Abstract (it has no concrete referent to depict).
-    ABSTRACT_ALLOWED_NARRATIVE_FUNCTIONS = {
-        "theory",
-        "author_background",
-        "transition",
-        "closing",
-    }
     if narrative_function and narrative_function not in ABSTRACT_ALLOWED_NARRATIVE_FUNCTIONS:
         raise PropositionClassifierError(
             f"shot {shot_id} caption narrative_function {narrative_function!r} is a concrete event "

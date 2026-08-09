@@ -5,8 +5,8 @@ Two production defects are locked down here.
 1. Priority inversion. The old prompt led with art direction and buried the
    narration line in the middle, so the model optimised for style and treated
    the caption as flavour text. The caption must come first, then the factual
-   proposition, then the required referents, then the prohibitions, then the
-   narrative function, then camera, then anchors, then style, and only then the
+   proposition, then the required scene/action and referents, then identity
+   references, prohibitions, camera, style, and only then the
    symbolic explanation.
 
 2. Silent staleness. A prompt could be generated from caption A and later reused
@@ -95,11 +95,11 @@ class TestBlockOrder:
         assert PROMPT_BLOCK_ORDER == (
             "caption",
             "proposition",
+            "required_scene",
             "required_visible",
-            "forbidden",
-            "narrative_function",
-            "camera",
             "anchors",
+            "forbidden",
+            "camera",
             "style",
             "symbolic_explanation",
         )
@@ -149,10 +149,10 @@ class TestBlockOrder:
             camera=CAMERA,
             style=STYLE,
         )
-        forbidden = [b for b in blocks if b.startswith("[4/9 FORBIDDEN]")]
+        forbidden = [b for b in blocks if b.startswith("[6/9 FORBIDDEN]")]
         assert forbidden and "凤霞" in forbidden[0] and "雪地" in forbidden[0]
 
-    def test_narrative_function_block_names_the_register(self) -> None:
+    def test_required_scene_block_names_the_narrative_register(self) -> None:
         blocks = build_aligned_prompt_blocks(
             caption_text="余华写这本书的时候只有三十岁。",
             proposition=abstract_proposition(),
@@ -160,7 +160,7 @@ class TestBlockOrder:
             camera=CAMERA,
             style=STYLE,
         )
-        block = next(b for b in blocks if b.startswith("[5/9 NARRATIVE FUNCTION]"))
+        block = next(b for b in blocks if b.startswith("[3/9 REQUIRED SCENE]"))
         assert "author_background" in block
 
 
@@ -173,7 +173,7 @@ class TestModeSpecificRules:
             camera=CAMERA,
             style=STYLE,
         )
-        block = next(b for b in blocks if b.startswith("[3/9 REQUIRED VISIBLE]"))
+        block = next(b for b in blocks if b.startswith("[4/9 REQUIRED VISIBLE]"))
         assert "福贵" in block and "老牛" in block
         assert "一头年迈的水牛" in block
 
@@ -227,7 +227,7 @@ class TestModeSpecificRules:
             camera=CAMERA,
             style=STYLE,
         )
-        block = next(b for b in blocks if b.startswith("[3/9 REQUIRED VISIBLE]"))
+        block = next(b for b in blocks if b.startswith("[4/9 REQUIRED VISIBLE]"))
         assert "no narrative referent" in block.lower()
 
     def test_abstract_may_not_demand_visible_entities(self) -> None:

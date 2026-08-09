@@ -26,9 +26,78 @@ from book_video_factory.semantic_alignment.classifier import (
     classify_proposition,
 )
 from book_video_factory.semantic_alignment.models import EntityVisibility, VisualProposition
+from book_video_factory.semantic_alignment.prompting import build_aligned_prompt_blocks
 
 
 class ClassifierAbstractFallbackTests(unittest.TestCase):
+    def test_contract_abstract_registers_ignore_beat_people(self) -> None:
+        for narrative_function in ("theory", "author_background"):
+            with self.subTest(narrative_function=narrative_function):
+                prop = classify_proposition(
+                    shot_id=f"s-{narrative_function}",
+                    caption_texts=["尊严不保证结果，却决定人如何承受失去。"],
+                    description="福贵站在田野里",
+                    seed_rationale="Beat requires 福贵",
+                    source_entities=[],
+                    narrative_function=narrative_function,
+                    visual_mode="abstract",
+                )
+                self.assertEqual(prop.mode, "Abstract")
+                self.assertFalse(prop.entity_visibility)
+                self.assertNotIn("福贵", json.dumps(prop.to_dict(), ensure_ascii=False))
+                self.assertIn(narrative_function, prop.rationale_text)
+
+    def test_plot_or_literal_contract_without_must_show_cannot_degrade_to_abstract(self) -> None:
+        for narrative_function, visual_mode, caption in (
+            ("plot", "abstract", "尊严不保证结果，却决定人如何承受失去。"),
+            ("plot", "literal", "圣地亚哥收紧钓线，大鱼拖着小船向前。"),
+        ):
+            with self.subTest(narrative_function=narrative_function, visual_mode=visual_mode):
+                with self.assertRaises(PropositionClassifierError):
+                    classify_proposition(
+                        shot_id="s-concrete-contract",
+                        caption_texts=[caption],
+                        description="",
+                        seed_rationale="",
+                        source_entities=[],
+                        narrative_function=narrative_function,
+                        visual_mode=visual_mode,
+                    )
+
+    def test_symbolic_requires_approved_profile_mapping_and_binds_its_evidence(self) -> None:
+        kwargs = {
+            "shot_id": "s-symbolic-contract",
+            "caption_texts": ["尊严不保证结果，却决定人如何承受失去。"],
+            "description": "",
+            "seed_rationale": "",
+            "source_entities": [],
+            "narrative_function": "theory",
+            "visual_mode": "symbolic",
+        }
+        with self.assertRaises(PropositionClassifierError):
+            classify_proposition(**kwargs)
+        mapping = {
+            "mapping_id": "SYM_DIGNITY_EMPTY_NET",
+            "status": "approved",
+            "source_concept": "尊严",
+            "surrogate_object": "晾在船边的空渔网",
+        }
+        prop = classify_proposition(**kwargs, symbolic_mapping=mapping)
+        self.assertEqual(prop.mode, "Symbolic")
+        self.assertEqual(prop.surrogate_objects, ("晾在船边的空渔网",))
+        self.assertIn("mapping:SYM_DIGNITY_EMPTY_NET", prop.source_terms)
+        blocks = build_aligned_prompt_blocks(
+            caption_text=kwargs["caption_texts"][0],
+            proposition=prop,
+            narrative_function="theory",
+            camera={
+                "shot_size": "medium wide", "lens": "40mm", "camera_angle": "eye level",
+                "composition": "single symbolic object", "depth": "readable foreground",
+            },
+            style={"visual_world": "literary realism", "palette": "umber", "texture": "linen"},
+        )
+        self.assertIn("SYM_DIGNITY_EMPTY_NET", blocks[-1])
+
     def test_concrete_event_caption_cannot_degrade_to_abstract(self) -> None:
         # D-bridge: a plot (concrete-event) caption that the classifier cannot
         # ground as Literal/Symbolic must be re-proposed, not shipped as a blank

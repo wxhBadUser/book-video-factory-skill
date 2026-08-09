@@ -57,8 +57,11 @@ def build_phase1_inputs() -> dict:
     source_manifest = {
         "schema_version": "book-research.v1", "book_id": "old-man-and-the-sea",
         "book_title": "老人与海", "author": "欧内斯特·海明威",
-        "source_level": "A", "research_status": "ready", "is_full_text": True,
+        "source_level": "A", "evidence_level": "A",
+        "research_status": "ready", "is_full_text": True,
         "coverage": "full_text_available", "source_dir": "source",
+        "rights_status": "pending_rights_clearance", "public_release_allowed": False,
+        "rights_evidence": [],
         "files": [{"path": "full_text.txt", "size": len(PHASE1_SOURCE_BYTES), "sha256": PHASE1_SOURCE_SHA256, "kind": "full_text"}],
     }
     research = {
@@ -124,15 +127,15 @@ def build_phase1_inputs() -> dict:
     }
     section_defs = [
         ("S01", "hook", "一个人连续失败八十四天，还会不会再出海？" * 13, ["F001"]),
-        ("S02", "world_setup", "海边的人都觉得老人的好运已经彻底用完，可他仍然认真整理每一圈绳索。" * 16, ["F002"]),
-        ("S03", "desire", "他不是不知道失败是什么，他只是拒绝让失败替自己决定明天做什么。" * 16, ["F003"]),
-        ("S04", "cost", "太阳升高以后，绳索割进手掌，饥饿和疲惫开始一点点收走他的力气。" * 13, ["F004"]),
-        ("S05", "escalation", "大鱼终于咬钩，可问题已经不是能不能捕到鱼，而是他愿意为这场证明付出多少。" * 16, ["F005"]),
-        ("S06", "midpoint_requestion", "老人和大鱼在海上彼此拖拽，他尊敬这个对手，也知道自己不能松手。" * 16, ["F006"]),
-        ("S07", "reinterpretation", "鲨鱼一口口夺走鱼肉，胜利的样子开始崩塌，但他的行动并没有因此变成笑话。" * 16, ["F007"]),
+        ("S02", "world_setup", "众人都说圣地亚哥运气已尽，圣地亚哥仍认真整理旧绳索。" * 29, ["F002"]),
+        ("S03", "desire", "圣地亚哥知道失败，圣地亚哥仍决定明天出海。" * 16, ["F003"]),
+        ("S04", "cost", "绳索割进圣地亚哥手掌，饥饿削弱圣地亚哥力量。" * 13, ["F004"]),
+        ("S05", "escalation", "圣地亚哥等到大鱼咬钩，圣地亚哥决定付出代价。" * 16, ["F005"]),
+        ("S06", "midpoint_requestion", "圣地亚哥和大鱼彼此拖拽，圣地亚哥尊敬对手却不松手。" * 16, ["F006"]),
+        ("S07", "reinterpretation", "圣地亚哥看鲨鱼夺走鱼肉，圣地亚哥仍守住行动尊严。" * 16, ["F007"]),
         ("S08", "theory", "尊严不是保证你得到结果，而是结果被夺走以后，你仍然承认那场行动属于自己。" * 12, ["F008"]),
-        ("S09", "modern_mirror", "我们害怕的常常不是失败，而是努力以后仍然没有东西可以展示给别人看。" * 13, ["F009"]),
-        ("S10", "ending_image", "老人回到小屋睡着了，又梦见少年时代非洲海滩上的狮子。" * 13, ["F010"]),
+        ("S09", "theory", "我们害怕的常常不是失败，而是努力以后仍然没有东西可以展示给别人看。" * 13, ["F009"]),
+        ("S10", "ending_image", "圣地亚哥回到小屋睡着，圣地亚哥梦见海滩上的狮子。" * 13, ["F010"]),
     ]
     release_sections = [{"section_id": sid, "narrative_function": fn, "text": text} for sid, fn, text, _ in section_defs]
     release_text = "".join(item["text"] for item in release_sections)

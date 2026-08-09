@@ -286,7 +286,9 @@ class RenderStageTests(unittest.TestCase):
             "opening": {"preview_video": "assets/opening/preview.mp4", "final_image_task_id": "SCENE_S1", "flash_task_ids": ["SCENE_S1", "SCENE_S2"]},
             "quality": "high", "minimum_free_gib": 1, "hyperframes_version": "1.2.3",
         })
-        vendor_lock = Path(__file__).resolve().parents[2] / "vendor/hbg-life-simulation/UPSTREAM_LOCK.json"
+        from book_video_factory.hbg_bridge.runner import repository_root
+
+        vendor_lock = repository_root() / "vendor/hbg-life-simulation/UPSTREAM_LOCK.json"
         write_json(project / "07_render/OPENING_PREVIEW_MANIFEST.json", {
             "schema_version": "opening-preview-manifest.v1",
             "release_id": "r1",

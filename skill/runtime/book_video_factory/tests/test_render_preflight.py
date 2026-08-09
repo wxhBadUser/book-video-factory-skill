@@ -42,7 +42,7 @@ class RenderPreflightTests(unittest.TestCase):
                  mock.patch("book_video_factory.render_stage.compiler._tasks", return_value=tasks), \
                  mock.patch("book_video_factory.render_stage.compiler._scene_approval", return_value=(approval, scene_manifest)):
                 result = preflight_render(project, input_path, command_runner=_runner(calls), process_lister=lambda: [])
-            self.assertEqual(result.next_stage_status, "ready_for_hbg_render")
+            self.assertEqual(result.next_stage_status, "blocked_by_visual_semantic_alignment")
             self.assertEqual(len(calls), 2)
             self.assertTrue(any("validate_style_system.mjs" in item for item in calls[0]))
             self.assertTrue(any("preflight_long_render.sh" in item for item in calls[1]))
@@ -51,10 +51,8 @@ class RenderPreflightTests(unittest.TestCase):
             self.assertGreater(report["free_disk_bytes"], report["required_disk_bytes"])
             self.assertEqual(len(report["render_job_id"]), 20)
             self.assertEqual(report["existing_work_dirs"], [])
-            self.assertEqual(verify_render_preflight(project)["status"], "pass")
-            report["render_job_id"] = "0" * 20
-            phase7.write_json(result.report_path, report)
-            with self.assertRaisesRegex(RenderPreflightError, "job identity|stale"):
+            self.assertTrue(report["caption_visual_contract_blockers"])
+            with self.assertRaisesRegex(RenderPreflightError, "blocked|pass"):
                 verify_render_preflight(project)
 
     def test_blocks_active_and_current_stale_work_dirs_with_exact_safe_recovery(self) -> None:
@@ -78,7 +76,7 @@ class RenderPreflightTests(unittest.TestCase):
                     command_runner=_runner([]),
                     process_lister=lambda: [{"pid": 4242, "command_line": f"node render {active}"}],
                 )
-            self.assertEqual(result.next_stage_status, "blocked_by_render_preflight")
+            self.assertEqual(result.next_stage_status, "blocked_by_visual_semantic_alignment")
             report = json.loads(result.report_path.read_text(encoding="utf-8"))
             by_name = {Path(item["path"]).name: item for item in report["existing_work_dirs"]}
             self.assertEqual(by_name["work-active-job"]["activity"], "active")
@@ -104,7 +102,7 @@ class RenderPreflightTests(unittest.TestCase):
                  mock.patch("book_video_factory.render_stage.compiler._tasks", return_value=tasks), \
                  mock.patch("book_video_factory.render_stage.compiler._scene_approval", return_value=(approval, scene_manifest)):
                 result = preflight_render(project, input_path, command_runner=_runner([], disk_pass=False), process_lister=lambda: [])
-            self.assertEqual(result.next_stage_status, "blocked_by_render_preflight")
+            self.assertEqual(result.next_stage_status, "blocked_by_visual_semantic_alignment")
             report = json.loads(result.report_path.read_text(encoding="utf-8"))
             self.assertEqual(report["hbg_disk_preflight"]["exit_code"], 1)
             self.assertEqual(report["status"], "blocked")

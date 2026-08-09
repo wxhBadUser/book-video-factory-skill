@@ -22,8 +22,9 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from book_video_factory.director_stage.compiler import _task_for_scene
+from book_video_factory.director_stage.compiler import DirectorStageError, _task_for_scene
 from book_video_factory.semantic_alignment.caption_contract import CaptionEntityEvidence, CaptionVisualContract
+from book_video_factory.semantic_alignment.caption_grouping import CaptionGroup
 from book_video_factory.semantic_alignment.models import VisualProposition
 from book_video_factory.semantic_alignment.prompting import (
     PromptBindingError,
@@ -161,6 +162,37 @@ class DirectorTaskSemanticBindingTests(unittest.TestCase):
                 caption_text=task["caption_text"],
                 proposition=VisualProposition.from_mapping(task["visual_proposition"]),
                 prompt=task["prompt"] + "\nextra instruction",
+            )
+
+    def test_two_caption_task_rejects_a_missing_caption_contract(self) -> None:
+        """A frame cannot silently omit one of its two caption contracts."""
+        first_text = CAPTIONS["c1"]["text"]
+        first_contract = CaptionVisualContract(
+            caption_id="c1",
+            caption_text=first_text,
+            caption_text_sha256=hashlib.sha256(first_text.encode("utf-8")).hexdigest(),
+            section_id="S1",
+            source_beat_ids=("B-001",),
+            narrative_function="plot",
+            scene_state={
+                "visible_character_ids": ["C001"],
+                "location_id": "田埂",
+                "time_context": "黄昏",
+                "action_state": first_text,
+                "continuity_state": {"pronoun_resolutions": []},
+            },
+            must_show=(CaptionEntityEvidence(
+                "C001", "福贵", "caption_named_entity", {"text_evidence": "福贵"},
+            ),),
+        )
+        with self.assertRaisesRegex(DirectorStageError, "c2"):
+            _task_for_scene(
+                scene(captionIds=["c1", "c2"]),
+                PROFILE,
+                VISUAL_ASSETS,
+                {"c1": CAPTIONS["c1"], "c2": {"text": "福贵停在田埂上。"}},
+                CANVAS,
+                caption_contracts={"c1": first_contract},
             )
 
     def test_forbidden_entities_reach_the_prompt(self) -> None:
@@ -444,25 +476,61 @@ class ProductionImageTaskSchemaTests(unittest.TestCase):
                     msg="the production task schema must document the semantic alignment fields",
                 )
 
+    def build_current_contract_task(self) -> dict:
+        text = CAPTIONS["c1"]["text"]
+        contract = CaptionVisualContract(
+            caption_id="c1",
+            caption_text=text,
+            caption_text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            section_id="S1",
+            source_beat_ids=("B-001",),
+            narrative_function="plot",
+            scene_state={
+                "visible_character_ids": ["C001"],
+                "location_id": "田埂",
+                "time_context": "黄昏",
+                "action_state": text,
+                "continuity_state": {"pronoun_resolutions": []},
+            },
+            must_show=(CaptionEntityEvidence(
+                "C001", "福贵", "caption_named_entity", {"text_evidence": "福贵"},
+            ),),
+        )
+        group = CaptionGroup(
+            group_id="G001",
+            caption_ids=("c1",),
+            start=0.0,
+            end=3.0,
+            narrative_function="plot",
+            contract_bindings=({
+                "caption_id": "c1",
+                "caption_visual_contract_sha256": contract.content_sha256(),
+            },),
+        ).to_dict()
+        return _task_for_scene(
+            scene(), PROFILE, VISUAL_ASSETS, CAPTIONS, CANVAS,
+            caption_contracts={"c1": contract}, caption_group=group,
+        )
+
     def test_emitted_task_validates_against_the_schema(self) -> None:
-        task = _task_for_scene(scene(), PROFILE, VISUAL_ASSETS, CAPTIONS, CANVAS)
+        task = self.build_current_contract_task()
         errors = validate_against_schema(task, self.schema)
         self.assertEqual(errors, [], msg="\n".join(errors))
 
     def test_schema_rejects_an_unknown_proposition_mode(self) -> None:
-        task = _task_for_scene(scene(), PROFILE, VISUAL_ASSETS, CAPTIONS, CANVAS)
+        task = self.build_current_contract_task()
         task["visual_proposition"]["mode"] = "Interpretive"
         errors = validate_against_schema(task, self.schema)
         self.assertTrue(errors, msg="an unknown proposition mode must be rejected")
 
     def test_schema_rejects_a_binding_without_caption_ids(self) -> None:
-        task = _task_for_scene(scene(), PROFILE, VISUAL_ASSETS, CAPTIONS, CANVAS)
+        task = self.build_current_contract_task()
         task["prompt_binding"]["caption_ids"] = []
         errors = validate_against_schema(task, self.schema)
         self.assertTrue(errors, msg="an empty caption id list must be rejected")
 
     def test_schema_rejects_a_truncated_prompt_hash(self) -> None:
-        task = _task_for_scene(scene(), PROFILE, VISUAL_ASSETS, CAPTIONS, CANVAS)
+        task = self.build_current_contract_task()
         task["prompt_binding"]["prompt_sha256"] = "abc123"
         errors = validate_against_schema(task, self.schema)
         self.assertTrue(errors, msg="a malformed prompt hash must be rejected")
