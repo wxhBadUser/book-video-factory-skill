@@ -11,7 +11,11 @@ than the one that was reviewed.
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
+from typing import Any, Mapping
+
+from book_video_factory.semantic_alignment.models import VisualProposition
 
 from .contracts import (
     CurrentVisionEvidence,
@@ -29,6 +33,57 @@ def _sha_text(text: str) -> str:
 
 def _sha_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def _current_review_semantic_inputs(
+    *,
+    caption_group: Mapping[str, Any],
+    caption_texts: Mapping[str, str],
+    proposition: VisualProposition,
+    prompt_text: str,
+) -> tuple[str, str, str, str, str, str]:
+    """Normalize the exact semantic content shown to the current reviewer."""
+
+    if not isinstance(caption_group, Mapping):
+        raise VisionReviewError("current vision review requires a complete Caption Group artifact")
+    group_payload = dict(caption_group)
+    bound_group_sha = group_payload.pop("caption_group_sha256", None)
+    derived_group_sha = _sha_text(
+        json.dumps(group_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    )
+    if bound_group_sha != derived_group_sha:
+        raise VisionReviewError("current vision review Caption Group artifact SHA is stale")
+    caption_ids = group_payload.get("caption_ids")
+    if (
+        not isinstance(caption_ids, list)
+        or not caption_ids
+        or any(not isinstance(value, str) or not value.strip() for value in caption_ids)
+        or len(set(caption_ids)) != len(caption_ids)
+    ):
+        raise VisionReviewError("current vision review Caption Group IDs are invalid")
+    if not isinstance(caption_texts, Mapping) or set(caption_texts) != set(caption_ids):
+        raise VisionReviewError("current vision review Caption text set must exactly match the Group")
+    normalized_captions: list[str] = []
+    for caption_id in caption_ids:
+        text = caption_texts.get(caption_id)
+        if not isinstance(text, str) or not text.strip() or text != text.strip():
+            raise VisionReviewError(f"current vision review Caption text is invalid: {caption_id}")
+        normalized_captions.append(f"{caption_id}: {text}")
+    if not isinstance(proposition, VisualProposition):
+        raise VisionReviewError("current vision review requires a VisualProposition")
+    proposition_text = json.dumps(
+        proposition.to_dict(), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    if not isinstance(prompt_text, str) or not prompt_text.strip():
+        raise VisionReviewError("current vision review requires the bound Prompt")
+    return (
+        "\n".join(normalized_captions),
+        derived_group_sha,
+        proposition_text,
+        proposition.content_sha256(),
+        prompt_text,
+        _sha_text(prompt_text),
+    )
 
 
 def review_shot(
@@ -107,12 +162,10 @@ def review_current_shot(
     *,
     shot_id: str,
     image_path: str | Path,
-    caption_group_text: str,
-    caption_group_sha256: str,
-    proposition_text: str,
-    proposition_sha256: str,
+    caption_group: Mapping[str, Any],
+    caption_texts: Mapping[str, str],
+    proposition: VisualProposition,
     prompt_text: str,
-    prompt_sha256: str,
     visible_persistent_character_ids: tuple[str, ...],
     identity_reference_paths: tuple[str | Path, ...],
     generation_provider: str,
@@ -132,6 +185,19 @@ def review_current_shot(
         raise VisionReviewError(
             f"shot {shot_id}: generation provider may not review its own image"
         )
+    (
+        caption_group_text,
+        caption_group_sha256,
+        proposition_text,
+        proposition_sha256,
+        prompt_text,
+        prompt_sha256,
+    ) = _current_review_semantic_inputs(
+        caption_group=caption_group,
+        caption_texts=caption_texts,
+        proposition=proposition,
+        prompt_text=prompt_text,
+    )
     visible_ids = tuple(str(value) for value in visible_persistent_character_ids)
     reference_paths = tuple(Path(value) for value in identity_reference_paths)
     if len(visible_ids) != len(reference_paths):

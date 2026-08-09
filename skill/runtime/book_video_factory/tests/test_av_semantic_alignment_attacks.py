@@ -33,7 +33,7 @@ from book_video_factory.semantic_alignment.models import VisualProposition
 from book_video_factory.semantic_alignment.prompting import (
     PromptBindingError,
     compute_prompt_binding,
-    verify_prompt_binding,
+    verify_legacy_prompt_binding,
 )
 from book_video_factory.render_stage.preflight import (
     RenderPreflightError,
@@ -194,9 +194,13 @@ def _write_current_contract_group_and_task(root: Path) -> tuple[Path, dict]:
     return contract_path, {
         "schema_version": "production-image-task.v1", "task_id": "SCENE_1", "scene_id": "S1",
         "shot_id": "SHOT_S1", "source_beat_ids": ["B1"],
+        "generation_lane": "host-imagegen", "generation_mode": "single",
         "caption_ids": group["caption_ids"], "caption_text": caption["text"], "prompt": prompt,
+        "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "narrative_function": group["narrative_function"],
         "visual_proposition": proposition.to_dict(), "prompt_binding": binding,
         "caption_visual_contract_sha256": contract_sha,
+        "output_target": "assets/generated/scenes/S1.png",
     }
 
 
@@ -308,8 +312,8 @@ def test_T07_task_without_contract_binding_is_blocked(tmp_path):
     contract_path, task = _write_current_contract_group_and_task(root)
     task.pop("caption_visual_contract_sha256")
     _write_tasks(root, [task])
-    blockers = _contract_currency_blockers(contract_path, root, "r1")
-    assert blockers == ["SCENE_1"]
+    with pytest.raises(RenderPreflightError, match="cannot load production image tasks"):
+        _contract_currency_blockers(contract_path, root, "r1")
 
 
 def test_T08_task_with_stale_contract_binding_is_blocked(tmp_path):
@@ -317,8 +321,8 @@ def test_T08_task_with_stale_contract_binding_is_blocked(tmp_path):
     contract_path, task = _write_current_contract_group_and_task(root)
     task["caption_visual_contract_sha256"] = "0" * 64
     _write_tasks(root, [task])
-    blockers = _contract_currency_blockers(contract_path, root, "r1")
-    assert blockers == ["SCENE_1"]
+    with pytest.raises(RenderPreflightError, match="cannot load production image tasks"):
+        _contract_currency_blockers(contract_path, root, "r1")
 
 
 def test_T09_task_with_current_contract_binding_passes(tmp_path):
@@ -389,7 +393,7 @@ def test_T16_stale_contract_sha_fails_prompt_binding():
         caption_visual_contract_sha256="0" * 64,
     )
     with pytest.raises(PromptBindingError):
-        verify_prompt_binding(
+        verify_legacy_prompt_binding(
             binding, caption_text="t", proposition=_StubProposition(), prompt="p",
             caption_visual_contract_sha256="1" * 64,  # edited contract
         )

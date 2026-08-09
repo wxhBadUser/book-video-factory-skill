@@ -130,6 +130,29 @@ def _scene_review_vision_blockers(
         except Exception:
             # Cannot source authoritative Group/Proposition/Prompt bindings.
             task_map = None
+    if require_current:
+        if assets_by_task is None or task_map is None:
+            raise RenderPreflightError(
+                "current scene review requires authoritative task and asset sets"
+            )
+        expected_task_ids = set(map(str, task_map))
+        asset_task_ids = set(map(str, assets_by_task))
+        if not expected_task_ids or asset_task_ids != expected_task_ids:
+            raise RenderPreflightError(
+                "current production task and scene asset sets do not exactly match"
+            )
+        decision_task_ids: list[str] = []
+        for item in decisions:
+            task_id = item.get("task_id") if isinstance(item, Mapping) else None
+            if not isinstance(task_id, str) or not task_id.strip() or task_id != task_id.strip():
+                raise RenderPreflightError("scene review decision task IDs are invalid")
+            decision_task_ids.append(task_id)
+        if len(decision_task_ids) != len(set(decision_task_ids)):
+            raise RenderPreflightError("scene review decision task IDs are duplicated")
+        if set(decision_task_ids) != expected_task_ids:
+            raise RenderPreflightError(
+                "scene review decisions do not exactly cover current production tasks and assets"
+            )
     for item in decisions:
         if not isinstance(item, dict):
             raise RenderPreflightError("scene review decision item is invalid")
@@ -503,6 +526,55 @@ def _reported_disk(stdout: str) -> tuple[int | None, int | None]:
         return None, None
 
 
+def _record_prepare_visual_block(
+    root: Path, input_path: Path, error: Exception
+) -> RenderPreflightResult:
+    """Persist a formal blocked state when visual evidence fails during prepare."""
+
+    try:
+        render_input = json.loads(input_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        render_input = {}
+    release_id = render_input.get("release_id") if isinstance(render_input, Mapping) else None
+    renderer = render_input.get("renderer") if isinstance(render_input, Mapping) else None
+    job_id = hashlib.sha256(str(error).encode("utf-8")).hexdigest()[:20]
+    vendor_lock = repository_root() / "vendor/hbg-life-simulation/UPSTREAM_LOCK.json"
+    approval_path = root / "07_render/OPENING_MIX_APPROVAL.json"
+    report = {
+        "schema_version": "render-preflight.v1",
+        "release_id": release_id,
+        "render_manifest_path": None,
+        "render_manifest_sha256": None,
+        "opening_mix_approval_sha256": sha256_file(approval_path) if approval_path.is_file() else None,
+        "hbg_vendor_lock_sha256": sha256_file(vendor_lock) if vendor_lock.is_file() else None,
+        "workspace": None,
+        "chosen_renderer": renderer,
+        "render_job_id": job_id,
+        "expected_work_dir": None,
+        "free_disk_bytes": None,
+        "free_disk_gib": None,
+        "required_disk_bytes": None,
+        "required_disk_gib": None,
+        "style_validation": {"validated": False, "not_run": "visual semantic prepare blocked"},
+        "hbg_disk_preflight": {"passed": False, "not_run": "visual semantic prepare blocked"},
+        "existing_work_dirs": [],
+        "recovery_commands": [],
+        "vision_review_decision_present": (root / _SCENE_REVIEW_DECISION_RELATIVE).is_file(),
+        "vision_review_blockers": [f"prepare_visual_alignment:{error}"],
+        "caption_visual_contract_in_force": (root / _CONTRACT_RELATIVE).is_file() and (root / _GROUPING_RELATIVE).is_file(),
+        "caption_visual_contract_blockers": [],
+        "recorded_at": _now(),
+        "status": "blocked",
+        "next_stage_status": "blocked_by_visual_semantic_alignment",
+    }
+    report_path = safe_project_output(root, Path("07_render/RENDER_PREFLIGHT.json"))
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_bytes(_pretty(report))
+    return RenderPreflightResult(
+        "created", report_path, job_id, "blocked_by_visual_semantic_alignment"
+    )
+
+
 def preflight_render(
     project: Path,
     input_path: Path,
@@ -511,10 +583,16 @@ def preflight_render(
     process_lister: ProcessLister | None = None,
 ) -> RenderPreflightResult:
     root = project.expanduser().resolve()
-    from book_video_factory.render_stage.compiler import RenderStageError, prepare_render_stage
+    from book_video_factory.render_stage.compiler import (
+        RenderStageError,
+        VisualSemanticAlignmentError,
+        prepare_render_stage,
+    )
 
     try:
         prepared = prepare_render_stage(root, input_path)
+    except VisualSemanticAlignmentError as error:
+        return _record_prepare_visual_block(root, input_path, error)
     except RenderStageError as error:
         raise RenderPreflightError(f"render workspace preparation failed: {error}") from error
     manifest = _load(prepared.render_manifest_path, "render manifest")

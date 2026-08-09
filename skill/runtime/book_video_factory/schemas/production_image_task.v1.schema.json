@@ -76,6 +76,7 @@
         "caption_ids",
         "caption_contract_bindings",
         "caption_group_sha256",
+        "caption_visual_contract_sha256",
         "beat_ids",
         "caption_text_sha256",
         "proposition_sha256",

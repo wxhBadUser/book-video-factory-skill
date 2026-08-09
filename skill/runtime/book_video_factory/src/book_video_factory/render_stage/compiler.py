@@ -16,12 +16,21 @@ from book_video_factory.hbg_bridge.provenance import _verify_vendor
 from book_video_factory.hbg_bridge.runner import repository_root
 from book_video_factory.hbg_bridge.shell import bash_executable, path_for_bash
 from book_video_factory.manifests import safe_project_output, sha256_file
-from book_video_factory.production_visuals.registry import _load as load_scene_json, _manifest as load_scene_manifest, _tasks
+from book_video_factory.production_visuals.registry import (
+    SceneAssetError,
+    _load as load_scene_json,
+    _manifest as load_scene_manifest,
+    _tasks,
+)
 from book_video_factory.render_stage.qa import evaluate_final_video
 
 
 class RenderStageError(RuntimeError):
     """Phase 7 render inputs or HBG output are incomplete or stale."""
+
+
+class VisualSemanticAlignmentError(RenderStageError):
+    """Current scene/task/image/anchor evidence is incomplete or stale."""
 
 
 @dataclass(frozen=True)
@@ -185,17 +194,17 @@ def _scene_approval(root: Path, director_sha: str, tasks: Mapping[str, Any]) -> 
     approval_path = root / "06_visual_production/SCENE_ASSET_APPROVAL.json"
     approval = _load(approval_path, "scene asset approval")
     if approval.get("schema_version") != "scene-asset-approval.v1" or not approval.get("human_approved") or approval.get("next_stage_status") != "ready_for_render":
-        raise RenderStageError("scene assets do not have current human approval")
+        raise VisualSemanticAlignmentError("scene assets do not have current human approval")
     manifest_path = root / "06_visual_production/SCENE_ASSET_MANIFEST.json"
     manifest = load_scene_manifest(root, approval.get("release_id"), director_sha, len(tasks))
     if approval.get("scene_asset_manifest_sha256") != sha256_file(manifest_path):
-        raise RenderStageError("scene asset approval is stale")
+        raise VisualSemanticAlignmentError("scene asset approval is stale")
     by_task = {item["task_id"]: item for item in manifest["assets"]}
     if set(by_task) != set(tasks) or approval.get("asset_hashes") != {task_id: by_task[task_id]["sha256"] for task_id in tasks}:
-        raise RenderStageError("scene asset approval does not bind every current image")
+        raise VisualSemanticAlignmentError("scene asset approval does not bind every current image")
     event = _project_media(root, approval.get("approval_event_path"), "scene approval event")
     if sha256_file(event) != approval.get("approval_event_sha256"):
-        raise RenderStageError("scene approval event is stale")
+        raise VisualSemanticAlignmentError("scene approval event is stale")
     return approval, manifest
 
 
@@ -282,7 +291,7 @@ def _workspace_payloads(root: Path, render_input: Mapping[str, Any], manifest: M
     storyboard = _current_director_storyboard(root)
     by_scene = {item["scene_id"]: item for item in manifest["assets"]}
     if set(by_scene) != {item.get("id") for item in storyboard}:
-        raise RenderStageError("scene assets and current Director timeline differ")
+        raise VisualSemanticAlignmentError("scene assets and current Director timeline differ")
     rendered_storyboard: list[dict[str, Any]] = []
     scene_paths: list[str] = []
     for scene in storyboard:
@@ -387,9 +396,15 @@ def prepare_render_stage(project: Path, input_path: Path) -> RenderStageResult:
         director = compile_director_stage(root)
     except DirectorStageError as error:
         raise RenderStageError(f"director stage is not current: {error}") from error
-    tasks = _tasks(root)
+    try:
+        tasks = _tasks(root)
+    except SceneAssetError as error:
+        raise VisualSemanticAlignmentError(f"production image tasks are not current: {error}") from error
     director_sha = sha256_file(director.manifest_path)
-    approval, scene_manifest = _scene_approval(root, director_sha, tasks)
+    try:
+        approval, scene_manifest = _scene_approval(root, director_sha, tasks)
+    except SceneAssetError as error:
+        raise VisualSemanticAlignmentError(f"scene image or identity evidence is not current: {error}") from error
     render_input = _render_input(root, input_path.expanduser().resolve(), approval["release_id"], tasks)
     input_hashes = {
         "render_input": sha256_file(input_path.expanduser().resolve()),

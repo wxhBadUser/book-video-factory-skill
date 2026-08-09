@@ -26,7 +26,7 @@ from book_video_factory.semantic_alignment.prompting import (
     PromptSpecError,
     build_aligned_prompt_blocks,
     compute_prompt_binding,
-    verify_prompt_binding,
+    verify_legacy_prompt_binding,
 )
 
 
@@ -307,7 +307,7 @@ class TestBinding:
 
     def test_verify_accepts_the_unchanged_triple(self) -> None:
         binding, prompt = self.make()
-        verify_prompt_binding(
+        verify_legacy_prompt_binding(
             binding,
             caption_text="福贵牵着老牛走过田埂。",
             proposition=literal_proposition(),
@@ -317,7 +317,7 @@ class TestBinding:
     def test_caption_edit_invalidates_the_binding(self) -> None:
         binding, prompt = self.make()
         with pytest.raises(PromptBindingError) as excinfo:
-            verify_prompt_binding(
+            verify_legacy_prompt_binding(
                 binding,
                 caption_text="福贵牵着老牛走过田埂，天快黑了。",
                 proposition=literal_proposition(),
@@ -329,7 +329,7 @@ class TestBinding:
         binding, prompt = self.make()
         mutated = VisualProposition(**{**literal_proposition().__dict__, "action": "坐在门槛上"})
         with pytest.raises(PromptBindingError) as excinfo:
-            verify_prompt_binding(
+            verify_legacy_prompt_binding(
                 binding,
                 caption_text="福贵牵着老牛走过田埂。",
                 proposition=mutated,
@@ -340,7 +340,7 @@ class TestBinding:
     def test_prompt_edit_invalidates_the_binding(self) -> None:
         binding, _ = self.make()
         with pytest.raises(PromptBindingError) as excinfo:
-            verify_prompt_binding(
+            verify_legacy_prompt_binding(
                 binding,
                 caption_text="福贵牵着老牛走过田埂。",
                 proposition=literal_proposition(),
@@ -376,7 +376,7 @@ class TestBinding:
         binding, prompt = self.make()
         del binding["prompt_sha256"]
         with pytest.raises(PromptBindingError):
-            verify_prompt_binding(
+            verify_legacy_prompt_binding(
                 binding,
                 caption_text="福贵牵着老牛走过田埂。",
                 proposition=literal_proposition(),

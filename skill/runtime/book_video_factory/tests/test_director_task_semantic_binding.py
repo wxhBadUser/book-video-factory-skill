@@ -28,7 +28,7 @@ from book_video_factory.semantic_alignment.caption_grouping import CaptionGroup
 from book_video_factory.semantic_alignment.models import VisualProposition
 from book_video_factory.semantic_alignment.prompting import (
     PromptBindingError,
-    verify_prompt_binding,
+    verify_legacy_prompt_binding,
 )
 
 PROFILE = {
@@ -151,7 +151,7 @@ class DirectorTaskSemanticBindingTests(unittest.TestCase):
 
     def test_binding_verifies_against_the_emitted_prompt(self) -> None:
         task = self.build()
-        verify_prompt_binding(
+        verify_legacy_prompt_binding(
             task["prompt_binding"],
             caption_text=task["caption_text"],
             proposition=VisualProposition.from_mapping(task["visual_proposition"]),
@@ -161,7 +161,7 @@ class DirectorTaskSemanticBindingTests(unittest.TestCase):
     def test_binding_fails_closed_when_the_caption_changes(self) -> None:
         task = self.build()
         with self.assertRaises(PromptBindingError):
-            verify_prompt_binding(
+            verify_legacy_prompt_binding(
                 task["prompt_binding"],
                 caption_text="福贵坐在门槛上。",
                 proposition=VisualProposition.from_mapping(task["visual_proposition"]),
@@ -171,7 +171,7 @@ class DirectorTaskSemanticBindingTests(unittest.TestCase):
     def test_binding_fails_closed_when_the_prompt_changes(self) -> None:
         task = self.build()
         with self.assertRaises(PromptBindingError):
-            verify_prompt_binding(
+            verify_legacy_prompt_binding(
                 task["prompt_binding"],
                 caption_text=task["caption_text"],
                 proposition=VisualProposition.from_mapping(task["visual_proposition"]),

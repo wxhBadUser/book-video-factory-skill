@@ -10,8 +10,12 @@ from typing import Any
 
 import pytest
 
-from book_video_factory.director_stage import compiler as director_compiler
-from book_video_factory.director_stage.compiler import DirectorStageError, _scene_for_caption_group
+from book_video_factory.director_stage.compiler import _scene_for_caption_group
+from book_video_factory.production_task_validation import (
+    ProductionTaskValidationError,
+    validate_production_image_task,
+)
+from book_video_factory.production_visuals.registry import SceneAssetError, _tasks
 from book_video_factory.semantic_alignment.classifier import classify_proposition
 from book_video_factory.semantic_alignment.contract_bindings import (
     ContractBindingError,
@@ -97,6 +101,33 @@ def _verify_current(binding: dict, proposition: VisualProposition) -> None:
         shot_id="SHOT_CAPTION_GROUP_CG_0001",
         beat_ids=("B001",),
     )
+
+
+def _current_expectations() -> dict[str, Any]:
+    return {
+        "caption_visual_contract_sha256": aggregate_contract_bindings_sha256(
+            [
+                {"caption_id": "caption-0001", "content_sha256": HEX_B},
+                {"caption_id": "caption-0002", "content_sha256": HEX_A},
+            ]
+        ),
+        "group_id": "CG-0001",
+        "caption_contract_bindings": (
+            {"caption_id": "caption-0001", "content_sha256": HEX_B},
+            {"caption_id": "caption-0002", "content_sha256": HEX_A},
+        ),
+        "caption_group_sha256": HEX_C,
+        "caption_ids": ("caption-0001", "caption-0002"),
+        "scene_id": "caption-group-cg-0001",
+        "shot_id": "SHOT_CAPTION_GROUP_CG_0001",
+        "beat_ids": ("B001",),
+    }
+
+
+def _write_task_queue(root: Path, task: dict[str, Any]) -> None:
+    path = root / "05_director" / "IMAGE_TASKS.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(task, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def _schema_task(mode: str) -> dict:
@@ -269,6 +300,37 @@ def test_current_group_binding_cannot_be_verified_without_identity_expectations(
         )
 
 
+@pytest.mark.parametrize("omitted", tuple(_current_expectations()))
+def test_current_group_binding_requires_every_current_expectation(omitted: str) -> None:
+    binding, proposition = _binding()
+    expectations = _current_expectations()
+    expectations.pop(omitted)
+    with pytest.raises(PromptBindingError):
+        verify_prompt_binding(
+            binding,
+            caption_text="福贵牵着老牛走。 / 天色暗了。",
+            proposition=proposition,
+            prompt="prompt",
+            **expectations,
+        )
+
+
+def test_current_group_binding_rejects_legacy_child_key_even_when_expected_matches() -> None:
+    binding, proposition = _binding()
+    child = binding["caption_contract_bindings"][0]
+    child["caption_visual_contract_sha256"] = child.pop("content_sha256")
+    expectations = _current_expectations()
+    expectations["caption_contract_bindings"] = binding["caption_contract_bindings"]
+    with pytest.raises(PromptBindingError, match="legacy"):
+        verify_prompt_binding(
+            binding,
+            caption_text="福贵牵着老牛走。 / 天色暗了。",
+            proposition=proposition,
+            prompt="prompt",
+            **expectations,
+        )
+
+
 @pytest.mark.parametrize("field", ["caption_ids", "scene_id", "shot_id", "beat_ids"])
 def test_current_group_binding_rejects_each_mutated_identity_field(field: str) -> None:
     binding, proposition = _binding()
@@ -350,17 +412,78 @@ def test_schema_and_production_loader_accept_each_legal_proposition_mode(mode: s
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     task = _schema_task(mode)
     assert _schema_errors(task, schema) == []
-    director_compiler._validate_production_image_task(task)
+    validate_production_image_task(task)
 
 
 def test_production_loader_rejects_missing_semantic_source_or_legacy_binding_key() -> None:
     for field in ("narrative_function", "source_beat_ids"):
         invalid = _schema_task("Literal")
         invalid.pop(field)
-        with pytest.raises(DirectorStageError, match=field):
-            director_compiler._validate_production_image_task(invalid)
+        with pytest.raises(ProductionTaskValidationError, match=field):
+            validate_production_image_task(invalid)
     invalid = _schema_task("Literal")
     child = invalid["prompt_binding"]["caption_contract_bindings"][0]
     child["caption_visual_contract_sha256"] = child.pop("content_sha256")
-    with pytest.raises(DirectorStageError, match="content_sha256"):
-        director_compiler._validate_production_image_task(invalid)
+    with pytest.raises(ProductionTaskValidationError, match="legacy"):
+        validate_production_image_task(invalid)
+
+
+@pytest.mark.parametrize(
+    ("label", "mutate"),
+    (
+        ("narrative_function", lambda task: task.pop("narrative_function")),
+        ("source_beat_ids", lambda task: task.pop("source_beat_ids")),
+        ("source_beat_ids", lambda task: task.__setitem__("source_beat_ids", [])),
+        (
+            "Literal",
+            lambda task: task["visual_proposition"].__setitem__("entity_visibility", []),
+        ),
+        (
+            "Symbolic",
+            lambda task: task["visual_proposition"].__setitem__("surrogate_objects", []),
+        ),
+        (
+            "Abstract",
+            lambda task: task["visual_proposition"].__setitem__(
+                "entity_visibility",
+                [{"entity_id": "C002", "must_be_visible": True, "natural_language": "福贵"}],
+            ),
+        ),
+        (
+            "legacy",
+            lambda task: task["prompt_binding"]["caption_contract_bindings"][0].update(
+                {
+                    "caption_visual_contract_sha256": task["prompt_binding"]
+                    ["caption_contract_bindings"][0].pop("content_sha256")
+                }
+            ),
+        ),
+        ("prompt_sha256", lambda task: task.__setitem__("prompt_sha256", HEX_B)),
+        (
+            "aggregate SHA",
+            lambda task: task.__setitem__("caption_visual_contract_sha256", HEX_B),
+        ),
+        (
+            "scene_id",
+            lambda task: task["prompt_binding"].__setitem__("scene_id", "EVIL"),
+        ),
+    ),
+)
+def test_persisted_task_loader_rejects_schema_and_semantic_attacks(
+    tmp_path: Path, label: str, mutate: Any
+) -> None:
+    mode = label if label in {"Literal", "Symbolic", "Abstract"} else "Literal"
+    task = _schema_task(mode)
+    mutate(task)
+    _write_task_queue(tmp_path, task)
+    with pytest.raises(SceneAssetError, match=label):
+        _tasks(tmp_path)
+
+
+@pytest.mark.parametrize("mode", ["Literal", "Symbolic", "Abstract"])
+def test_persisted_task_loader_accepts_each_legal_proposition_mode(
+    tmp_path: Path, mode: str
+) -> None:
+    task = _schema_task(mode)
+    _write_task_queue(tmp_path, task)
+    assert _tasks(tmp_path) == {task["task_id"]: task}

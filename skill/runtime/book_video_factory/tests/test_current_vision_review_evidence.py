@@ -21,11 +21,31 @@ from book_video_factory.semantic_alignment.vision_review import (
     review_current_shot,
     verify_current_evidence,
 )
+from book_video_factory.semantic_alignment.models import VisualProposition
 
 
-GROUP_SHA = "a" * 64
-PROMPT_SHA = "b" * 64
-PROPOSITION_SHA = "c" * 64
+def _current_group() -> dict:
+    group = {
+        "group_id": "G001", "caption_ids": ["caption-0001"],
+        "start": 0.0, "end": 2.0, "duration": 2.0,
+        "narrative_function": "plot", "characters": [], "location": "",
+        "time_of_day": "", "split_reasons": [],
+        "scene_state_signature": "d" * 64,
+        "contract_bindings": [{"caption_id": "caption-0001", "content_sha256": "e" * 64}],
+        "split_from_previous": {"required": False, "reasons": []},
+    }
+    canonical = json.dumps(group, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    group["caption_group_sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return group
+
+
+GROUP_SHA = _current_group()["caption_group_sha256"]
+PROMPT_SHA = hashlib.sha256("[1/9 CAPTION]\n福贵牵着老牛走过田埂。".encode("utf-8")).hexdigest()
+PROPOSITION_SHA = VisualProposition(
+    mode="Literal", subject="福贵", action="牵牛", environment="田埂",
+    mood="平静", lighting="soft", palette="earth",
+    rationale_text="字幕明确描述福贵牵牛走过田埂。",
+).content_sha256()
 
 
 class _CurrentStubProvider(BaseVisionProvider):
@@ -78,6 +98,65 @@ def _write(path: Path, payload: bytes) -> Path:
 
 
 class CurrentVisionEvidenceTests(unittest.TestCase):
+    def test_current_review_derives_semantic_hashes_from_the_exact_review_content(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            image = _write(root / "scene.png", b"scene-pixels")
+            group = {
+                "group_id": "G001",
+                "caption_ids": ["caption-0001"],
+                "start": 0.0,
+                "end": 2.0,
+                "duration": 2.0,
+                "narrative_function": "plot",
+                "characters": ["C002"],
+                "location": "field",
+                "time_of_day": "day",
+                "split_reasons": [],
+                "scene_state_signature": "d" * 64,
+                "contract_bindings": [{"caption_id": "caption-0001", "content_sha256": "e" * 64}],
+                "split_from_previous": {"required": False, "reasons": []},
+            }
+            canonical = json.dumps(group, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            group["caption_group_sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            proposition = VisualProposition(
+                mode="Literal", subject="福贵", action="牵牛", environment="田埂",
+                mood="平静", lighting="soft", palette="earth",
+                rationale_text="字幕明确描述福贵牵牛走过田埂。",
+            )
+            prompt = "[1/9 CAPTION]\n福贵牵着老牛走过田埂。"
+
+            evidence = review_current_shot(
+                shot_id="SHOT_CG_0001",
+                image_path=image,
+                caption_group=group,
+                caption_texts={"caption-0001": "福贵牵着老牛走过田埂。"},
+                proposition=proposition,
+                prompt_text=prompt,
+                visible_persistent_character_ids=(),
+                identity_reference_paths=(),
+                generation_provider="host-imagegen",
+                provider=_CurrentStubProvider(identity="not_applicable"),
+            )
+
+            self.assertEqual(evidence.caption_group_sha256, group["caption_group_sha256"])
+            self.assertEqual(evidence.prompt_sha256, hashlib.sha256(prompt.encode("utf-8")).hexdigest())
+            self.assertEqual(evidence.proposition_sha256, proposition.content_sha256())
+
+            with self.assertRaises(VisionReviewError):
+                review_current_shot(
+                    shot_id="SHOT_CG_0001",
+                    image_path=image,
+                    caption_group={**group, "caption_group_sha256": "f" * 64},
+                    caption_texts={"caption-0001": "UNRELATED TEXT SHOWN TO REVIEWER"},
+                    proposition=proposition,
+                    prompt_text=prompt,
+                    visible_persistent_character_ids=(),
+                    identity_reference_paths=(),
+                    generation_provider="host-imagegen",
+                    provider=_CurrentStubProvider(identity="not_applicable"),
+                )
+
     def _review(
         self,
         root: Path,
@@ -96,15 +175,18 @@ class CurrentVisionEvidenceTests(unittest.TestCase):
                 for index, _ in enumerate(visible_ids, start=1)
             )
         provider = _CurrentStubProvider(identity=identity_status)
+        proposition = VisualProposition(
+            mode="Literal", subject="福贵", action="牵牛", environment="田埂",
+            mood="平静", lighting="soft", palette="earth",
+            rationale_text="字幕明确描述福贵牵牛走过田埂。",
+        )
         evidence = review_current_shot(
             shot_id="SHOT_CG_0001",
             image_path=image,
-            caption_group_text="福贵牵着老牛走过田埂。",
-            caption_group_sha256=GROUP_SHA,
-            proposition_text="老年福贵牵老牛走在田埂上。",
-            proposition_sha256=PROPOSITION_SHA,
+            caption_group=_current_group(),
+            caption_texts={"caption-0001": "福贵牵着老牛走过田埂。"},
+            proposition=proposition,
             prompt_text="[1/9 CAPTION]\n福贵牵着老牛走过田埂。",
-            prompt_sha256=PROMPT_SHA,
             visible_persistent_character_ids=visible_ids,
             identity_reference_paths=paths,
             generation_provider=generation_provider,
@@ -124,9 +206,13 @@ class CurrentVisionEvidenceTests(unittest.TestCase):
             )
 
             self.assertEqual(evidence.image_sha256, hashlib.sha256(image.read_bytes()).hexdigest())
-            self.assertEqual(evidence.caption_group_sha256, GROUP_SHA)
-            self.assertEqual(evidence.prompt_sha256, PROMPT_SHA)
-            self.assertEqual(evidence.proposition_sha256, PROPOSITION_SHA)
+            self.assertEqual(evidence.caption_group_sha256, _current_group()["caption_group_sha256"])
+            self.assertEqual(evidence.prompt_sha256, hashlib.sha256("[1/9 CAPTION]\n福贵牵着老牛走过田埂。".encode()).hexdigest())
+            self.assertEqual(evidence.proposition_sha256, VisualProposition(
+                mode="Literal", subject="福贵", action="牵牛", environment="田埂",
+                mood="平静", lighting="soft", palette="earth",
+                rationale_text="字幕明确描述福贵牵牛走过田埂。",
+            ).content_sha256())
             self.assertEqual(
                 evidence.identity_anchor_sha256,
                 tuple(hashlib.sha256(path.read_bytes()).hexdigest() for path in anchors),

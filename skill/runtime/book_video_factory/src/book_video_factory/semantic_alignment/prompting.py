@@ -38,6 +38,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from book_video_factory.semantic_alignment.caption_grouping import NARRATIVE_FUNCTIONS
 from book_video_factory.semantic_alignment.contract_bindings import (
     ContractBindingError,
+    aggregate_contract_bindings_sha256,
     normalize_contract_bindings,
 )
 from book_video_factory.semantic_alignment.models import VisualProposition
@@ -336,15 +337,79 @@ def verify_prompt_binding(
     shot_id: str | None = None,
     beat_ids: Sequence[str] | None = None,
 ) -> None:
-    """Fail closed when the caption, proposition, prompt, or contract drifted.
+    """Verify a current Group binding against every authoritative expectation."""
 
-    When ``caption_visual_contract_sha256`` is supplied it must match the value
-    bound into the prompt binding -- an edited contract (or a frame built
-    against a different contract) fails closed. When the binding carries the
-    field but no expected value is supplied, the field is left unverified (this
-    only happens for legacy bindings predating the contract; remediated
-    releases always pass the expected value).
-    """
+    _verify_prompt_hashes(
+        binding,
+        caption_text=caption_text,
+        proposition=proposition,
+        prompt=prompt,
+    )
+    has_group_fields = [field in binding for field in _GROUP_BINDING_FIELDS]
+    if any(has_group_fields) and not all(has_group_fields):
+        raise PromptBindingError("prompt binding has a partial caption group binding")
+    if not all(has_group_fields):
+        raise PromptBindingError(
+            "legacy prompt bindings require verify_legacy_prompt_binding()"
+        )
+    expectations = {
+        "group_id": group_id,
+        "caption_contract_bindings": caption_contract_bindings,
+        "caption_group_sha256": caption_group_sha256,
+        "caption_visual_contract_sha256": caption_visual_contract_sha256,
+        "caption_ids": caption_ids,
+        "scene_id": scene_id,
+        "shot_id": shot_id,
+        "beat_ids": beat_ids,
+    }
+    missing_expectations = [name for name, value in expectations.items() if value is None]
+    if missing_expectations:
+        raise PromptBindingError(
+            "current caption group verification requires expected "
+            + ", ".join(missing_expectations)
+        )
+    try:
+        bound_bindings = normalize_contract_bindings(
+            binding["caption_contract_bindings"],
+            expected_caption_ids=[str(item) for item in caption_ids or ()],
+        )
+        expected_bindings = normalize_contract_bindings(
+            caption_contract_bindings or (),
+            expected_caption_ids=[str(item) for item in caption_ids or ()],
+        )
+        bound_aggregate = aggregate_contract_bindings_sha256(
+            bound_bindings,
+            expected_caption_ids=[str(item) for item in caption_ids or ()],
+        )
+    except (ContractBindingError, TypeError) as error:
+        raise PromptBindingError(str(error)) from error
+    if bound_bindings != expected_bindings:
+        raise PromptBindingError("caption contract bindings changed since the prompt was built")
+    if binding.get("caption_visual_contract_sha256") != caption_visual_contract_sha256:
+        raise PromptBindingError("caption visual contract aggregate SHA changed since the prompt was built")
+    if bound_aggregate != binding.get("caption_visual_contract_sha256"):
+        raise PromptBindingError("prompt binding caption visual contract aggregate SHA is inconsistent")
+    if binding.get("group_id") != group_id or binding.get("caption_group_sha256") != caption_group_sha256:
+        raise PromptBindingError("caption group changed since the prompt was built")
+    expected_fields = {
+        "caption_ids": list(caption_ids or ()),
+        "scene_id": scene_id,
+        "shot_id": shot_id,
+        "beat_ids": list(beat_ids or ()),
+    }
+    for field, expected in expected_fields.items():
+        if binding.get(field) != expected:
+            raise PromptBindingError(f"prompt binding {field} changed since it was built")
+
+
+def _verify_prompt_hashes(
+    binding: Mapping[str, Any],
+    *,
+    caption_text: str,
+    proposition: VisualProposition,
+    prompt: str,
+) -> None:
+    """Verify fields shared by current and explicitly versioned legacy bindings."""
 
     missing = [field for field in _BINDING_FIELDS if field not in binding]
     if missing:
@@ -367,15 +432,26 @@ def verify_prompt_binding(
             f"prompt body changed since it was bound "
             f"(binding {binding['prompt_sha256'][:12]}, actual {expected_prompt[:12]})"
         )
-    expected_fields = {
-        "caption_ids": list(caption_ids) if caption_ids is not None else None,
-        "scene_id": scene_id,
-        "shot_id": shot_id,
-        "beat_ids": list(beat_ids) if beat_ids is not None else None,
-    }
-    for field, expected in expected_fields.items():
-        if expected is not None and binding.get(field) != expected:
-            raise PromptBindingError(f"prompt binding {field} changed since it was built")
+
+
+def verify_legacy_prompt_binding(
+    binding: Mapping[str, Any],
+    *,
+    caption_text: str,
+    proposition: VisualProposition,
+    prompt: str,
+    caption_visual_contract_sha256: str | None = None,
+) -> None:
+    """Verify a pre-Group binding through an explicit legacy-only API."""
+
+    if any(field in binding for field in _GROUP_BINDING_FIELDS):
+        raise PromptBindingError("current caption group bindings require verify_prompt_binding()")
+    _verify_prompt_hashes(
+        binding,
+        caption_text=caption_text,
+        proposition=proposition,
+        prompt=prompt,
+    )
     if caption_visual_contract_sha256 is not None:
         bound = binding.get("caption_visual_contract_sha256")
         if bound != caption_visual_contract_sha256:
@@ -383,36 +459,6 @@ def verify_prompt_binding(
                 f"caption visual contract changed since the prompt was built "
                 f"(binding {str(bound)[:12]}, actual {caption_visual_contract_sha256[:12]})"
             )
-    has_group_fields = [field in binding for field in _GROUP_BINDING_FIELDS]
-    if any(has_group_fields) and not all(has_group_fields):
-        raise PromptBindingError("prompt binding has a partial caption group binding")
-    if all(has_group_fields):
-        missing_expectations = [
-            name
-            for name, value in {
-                "caption_ids": caption_ids,
-                "scene_id": scene_id,
-                "shot_id": shot_id,
-                "beat_ids": beat_ids,
-            }.items()
-            if value is None
-        ]
-        if missing_expectations:
-            raise PromptBindingError(
-                "current caption group verification requires expected "
-                + ", ".join(missing_expectations)
-            )
-    if group_id is not None or caption_contract_bindings is not None or caption_group_sha256 is not None:
-        if not all(has_group_fields):
-            raise PromptBindingError("prompt binding is missing caption group fields")
-        if binding["group_id"] != group_id or binding["caption_group_sha256"] != caption_group_sha256:
-            raise PromptBindingError("caption group changed since the prompt was built")
-        expected_bindings = [dict(item) for item in caption_contract_bindings or ()]
-        if binding["caption_contract_bindings"] != expected_bindings:
-            raise PromptBindingError("caption contract bindings changed since the prompt was built")
-        bound_ids = [str(item.get("caption_id", "")).strip() for item in expected_bindings]
-        if bound_ids != binding["caption_ids"]:
-            raise PromptBindingError("caption contract binding IDs do not match ordered caption IDs")
 
 
 __all__ = [
@@ -422,5 +468,6 @@ __all__ = [
     "PromptSpecError",
     "build_aligned_prompt_blocks",
     "compute_prompt_binding",
+    "verify_legacy_prompt_binding",
     "verify_prompt_binding",
 ]

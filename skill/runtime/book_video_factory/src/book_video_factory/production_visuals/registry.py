@@ -10,6 +10,10 @@ from typing import Any, Mapping
 
 from book_video_factory.director_stage.compiler import DirectorStageError, compile_director_stage
 from book_video_factory.manifests import safe_project_output, sha256_file
+from book_video_factory.production_task_validation import (
+    ProductionTaskValidationError,
+    validate_production_image_task,
+)
 from book_video_factory.reference_visuals.catalog import load_reference_catalog
 from book_video_factory.visual_stage.asset_registry import _machine_diagnostic, _validate_source
 
@@ -109,6 +113,10 @@ def _tasks(root: Path) -> dict[str, dict[str, Any]]:
             raise SceneAssetError(f"image task line {number} is invalid") from error
         if not isinstance(task, dict) or task.get("schema_version") != "production-image-task.v1":
             raise SceneAssetError(f"image task line {number} has an invalid contract")
+        try:
+            validate_production_image_task(task)
+        except ProductionTaskValidationError as error:
+            raise SceneAssetError(f"image task line {number} is invalid: {error}") from error
         task_id = task.get("task_id")
         if not isinstance(task_id, str) or not task_id or task_id in result:
             raise SceneAssetError("production image task IDs are invalid")

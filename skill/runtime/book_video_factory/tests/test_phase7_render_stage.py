@@ -6,14 +6,18 @@ import os
 import subprocess
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
+import test_phase5_director_stage as phase5
+
 from PIL import Image
 
 from book_video_factory.manifests import sha256_file
+from book_video_factory.hbg_bridge.runner import repository_root
 from book_video_factory.semantic_alignment.caption_contract import build_caption_visual_contract_from_project
 from book_video_factory.semantic_alignment.caption_grouping import build_caption_grouping_from_project
 from book_video_factory.semantic_alignment.contract_bindings import aggregate_contract_bindings_sha256
@@ -22,8 +26,15 @@ from book_video_factory.semantic_alignment.prompting import compute_prompt_bindi
 from book_video_factory.semantic_alignment.vision_review import (
     BaseVisionProvider,
     CurrentReviewResult,
+    LocalVisionProvider,
     register_provider_key,
     review_current_shot,
+    review_shot,
+)
+from book_video_factory.production_visuals.registry import register_scene_asset
+from book_video_factory.production_visuals.review import (
+    approve_scene_assets,
+    build_scene_asset_review,
 )
 from book_video_factory.render_stage.compiler import (
     _default_qa_runner,
@@ -62,13 +73,18 @@ class _Phase7CurrentVisionProvider(BaseVisionProvider):
         prompt_text: str,
         identity_reference_bytes: tuple[bytes, ...],
     ) -> CurrentReviewResult:
+        identity_status = "pass" if identity_reference_bytes else "not_applicable"
         return CurrentReviewResult(
             semantic_review_status="pass",
             semantic_review_reasoning="画面覆盖当前图片组的全部字幕语义。",
             reality_review_status="pass",
             reality_review_reasoning="画面动作、物件和空间关系符合现实。",
-            identity_review_status="not_applicable",
-            identity_review_reasoning="当前图片组没有可见持续人物，因此身份审查不适用。",
+            identity_review_status=identity_status,
+            identity_review_reasoning=(
+                "人物身份与有序身份锚点的脸型、年龄和服装一致。"
+                if identity_reference_bytes
+                else "当前图片组没有可见持续人物，因此身份审查不适用。"
+            ),
             vision_call_id="phase7-current-call-001",
         )
 
@@ -83,15 +99,23 @@ def _signed_scene_evidence(project: Path, asset_rel: str, task_id: str) -> dict[
     if not isinstance(task, dict):
         raise AssertionError(f"fixture task queue missing current task {task_id}")
     proposition = VisualProposition.from_mapping(task["visual_proposition"])
+    grouping = json.loads(
+        (project / "04_audio/CAPTION_GROUPING_AUDIT.json").read_text(encoding="utf-8")
+    )
+    group = next(
+        value for value in grouping["groups"]
+        if value["group_id"] == task["prompt_binding"]["group_id"]
+    )
+    bindings = json.loads(
+        (project / "04_audio/CAPTION_BINDINGS.json").read_text(encoding="utf-8")
+    )["captions"]
     evidence = review_current_shot(
         shot_id=str(task["shot_id"]),
         image_path=project / asset_rel,
-        caption_group_text=str(task["caption_text"]),
-        caption_group_sha256=str(task["prompt_binding"]["caption_group_sha256"]),
-        proposition_text=json.dumps(task["visual_proposition"], ensure_ascii=False, sort_keys=True),
-        proposition_sha256=proposition.content_sha256(),
+        caption_group=group,
+        caption_texts={caption_id: bindings[caption_id]["text"] for caption_id in task["caption_ids"]},
+        proposition=proposition,
         prompt_text=str(task["prompt"]),
-        prompt_sha256=hashlib.sha256(str(task["prompt"]).encode("utf-8")).hexdigest(),
         visible_persistent_character_ids=(),
         identity_reference_paths=(),
         generation_provider="host-imagegen",
@@ -140,6 +164,243 @@ def render_pipeline_status(project: Path) -> dict[str, Any]:
 
 
 class RenderStageTests(unittest.TestCase):
+    @contextmanager
+    def _real_group_render_fixture(self):
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            project = phase5.DirectorStageTests().prepare(base)
+            compile_director_stage = phase5.compile_director_stage
+            director = compile_director_stage(project)
+            legacy_storyboard = json.loads((project / "STORYBOARD.json").read_text(encoding="utf-8"))
+            timeline = json.loads(
+                (project / "05_director/DIRECTOR_TIMELINE.json").read_text(encoding="utf-8")
+            )
+            tasks = [
+                json.loads(line)
+                for line in (project / "05_director/IMAGE_TASKS.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self.assertNotEqual(
+                [scene["id"] for scene in legacy_storyboard],
+                [scene["scene_id"] for scene in timeline["scenes"]],
+            )
+            self.assertEqual(
+                [task["scene_id"] for task in tasks],
+                [scene["scene_id"] for scene in timeline["scenes"]],
+            )
+
+            # Director was compiled above and is compiled again by the final
+            # prepare call. Avoid repeating the same unchanged 104-scene
+            # compilation once per registry transaction; tasks, registry,
+            # approval, render input and final prepare remain real.
+            with mock.patch(
+                "book_video_factory.production_visuals.registry.compile_director_stage",
+                return_value=director,
+            ):
+                for index, task in enumerate(tasks, start=1):
+                    source = base / f"registered-scene-{index:04d}.png"
+                    Image.new(
+                        "RGB", (1920, 1080),
+                        ((index * 37) % 251, (index * 67) % 251, (index * 97) % 251),
+                    ).save(source)
+                    register_scene_asset(
+                        project,
+                        task_id=task["task_id"],
+                        source=source,
+                        tool_call_id=f"imagegen_call_integration_{index:06d}",
+                        style_reference_ids=list(task["style_reference_ids"]),
+                        identity_reference_task_ids=list(task["identity_reference_task_ids"]),
+                    )
+
+            manifest_path = project / "06_visual_production/SCENE_ASSET_MANIFEST.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            assets = {asset["task_id"]: asset for asset in manifest["assets"]}
+            v1_decision_path = project / "06_visual_production/SCENE_REVIEW_DECISION.json"
+            write_json(v1_decision_path, {
+                "schema_version": "scene-review-decision.v1",
+                "release_id": "r1",
+                "director_stage_manifest_sha256": sha256_file(director.manifest_path),
+                "scene_asset_manifest_sha256": sha256_file(manifest_path),
+                "reviewer": "Integration Reviewer",
+                "decisions": [{
+                    "task_id": task["task_id"],
+                    "semantic_review_status": "pass",
+                    "reality_review_status": "pass",
+                    "identity_review_status": "pass",
+                    "note": "Temporary integration pixels reviewed.",
+                    "vision_evidence": review_shot(
+                        shot_id=task["task_id"],
+                        image_path=project / assets[task["task_id"]]["path"],
+                        caption_text=task["caption_text"],
+                        prompt_text=task["prompt"],
+                        provider=LocalVisionProvider(),
+                    ).to_dict(),
+                } for task in tasks],
+            })
+
+            def contact_sheet(output: Path, _images: list[Path]) -> None:
+                Image.new("RGB", (1200, 600), (48, 48, 48)).save(output)
+
+            build_scene_asset_review(
+                project, v1_decision_path, contact_sheet_runner=contact_sheet
+            )
+            approval_path = approve_scene_assets(
+                project,
+                reviewer="Integration Reviewer",
+                note="Temporary integration scene set approved.",
+                contact_sheet_runner=contact_sheet,
+            )
+            self.assertTrue(approval_path.is_file())
+
+            grouping = json.loads(
+                (project / "04_audio/CAPTION_GROUPING_AUDIT.json").read_text(encoding="utf-8")
+            )
+            groups = {group["group_id"]: group for group in grouping["groups"]}
+            captions = json.loads(
+                (project / "04_audio/CAPTION_BINDINGS.json").read_text(encoding="utf-8")
+            )["captions"]
+            write_json(v1_decision_path, {
+                "schema_version": "scene-review-decision.v1",
+                "release_id": "r1",
+                "decisions": [{
+                    "task_id": task["task_id"],
+                    "semantic_review_status": "pass",
+                    "reality_review_status": "pass",
+                    "identity_review_status": "pass" if task["anchor_refs"] else "not_applicable",
+                    "note": "Current v2 integration pixels reviewed.",
+                    "vision_evidence": review_current_shot(
+                        shot_id=task["shot_id"],
+                        image_path=project / assets[task["task_id"]]["path"],
+                        caption_group=groups[task["prompt_binding"]["group_id"]],
+                        caption_texts={caption_id: captions[caption_id]["text"] for caption_id in task["caption_ids"]},
+                        proposition=VisualProposition.from_mapping(task["visual_proposition"]),
+                        prompt_text=task["prompt"],
+                        visible_persistent_character_ids=tuple(task["anchor_refs"]),
+                        identity_reference_paths=tuple(
+                            project / evidence["path"]
+                            for evidence in assets[task["task_id"]]["identity_reference_evidence"]
+                        ),
+                        generation_provider=assets[task["task_id"]]["provider"],
+                        provider=_Phase7CurrentVisionProvider(),
+                    ).to_dict(),
+                } for task in tasks],
+            })
+
+            bgm = project / "assets/audio/bgm/source.mp3"
+            bgm.parent.mkdir(parents=True, exist_ok=True)
+            bgm.write_bytes(b"integration-bgm")
+            preview = project / "assets/opening/preview.mp4"
+            preview.parent.mkdir(parents=True, exist_ok=True)
+            preview.write_bytes(b"integration-preview")
+            render_input = project / "07_render/RENDER_INPUT.json"
+            render_input.parent.mkdir(parents=True, exist_ok=True)
+            selected = [task["task_id"] for task in tasks[: min(2, len(tasks))]]
+            write_json(render_input, {
+                "schema_version": "render-stage-input.v1", "release_id": "r1",
+                "renderer": "streaming_ffmpeg", "output_name": "integration.mp4",
+                "bgm_source": bgm.relative_to(project).as_posix(),
+                "opening": {
+                    "preview_video": preview.relative_to(project).as_posix(),
+                    "final_image_task_id": tasks[0]["task_id"],
+                    "flash_task_ids": selected,
+                },
+                "quality": "high", "minimum_free_gib": 1,
+                "hyperframes_version": "1.2.3",
+            })
+            vendor_lock = repository_root() / "vendor/hbg-life-simulation/UPSTREAM_LOCK.json"
+            write_json(project / "07_render/OPENING_PREVIEW_MANIFEST.json", {
+                "schema_version": "opening-preview-manifest.v1", "release_id": "r1",
+                "render_input_sha256": sha256_file(render_input),
+                "scene_approval_sha256": sha256_file(approval_path),
+                "audio_stage_sha256": sha256_file(project / "04_audio/AUDIO_STAGE_MANIFEST.json"),
+                "hbg_style_sha256": sha256_file(project / "HBG_STYLE.json"),
+                "project_spec_sha256": sha256_file(project / "PROJECT_SPEC.json"),
+                "preview_path": preview.relative_to(project).as_posix(),
+                "preview_sha256": sha256_file(preview), "preview_bytes": preview.stat().st_size,
+                "renderer": "hbg-hyperframes-opening-preview",
+                "hbg_vendor_lock_sha256": sha256_file(vendor_lock),
+                "next_stage_status": "awaiting_opening_mix_calibration",
+            })
+
+            def probe(path: Path, seconds: float | None) -> dict[str, float]:
+                return {
+                    "duration_seconds": 18.0 if path == preview else (120.0 if seconds is None else seconds),
+                    "integrated_lufs": -14.0 if path == preview else -15.3,
+                    "true_peak_dbtp": -3.5 if path == preview else -4.2,
+                }
+
+            calibration = calibrate_opening_mix(project, render_input, probe_runner=probe)
+            approve_opening_mix(
+                project, calibration.calibration_path,
+                reviewer="Integration Reviewer", note="Temporary integration mix approved.",
+            )
+            prepared = prepare_render_stage(project, render_input)
+            rendered = json.loads(
+                (prepared.workspace / "STORYBOARD.json").read_text(encoding="utf-8")
+            )
+            yield project, render_input, manifest, timeline, rendered, legacy_storyboard, director
+
+    def test_real_director_group_tasks_registry_and_approval_prepare_current_timeline(self) -> None:
+        with self._real_group_render_fixture() as (
+            _project, _render_input, _manifest, timeline, rendered, legacy_storyboard, _director,
+        ):
+            self.assertEqual(
+                [scene["id"] for scene in rendered],
+                [scene["scene_id"] for scene in timeline["scenes"]],
+            )
+            self.assertNotEqual(
+                [scene["id"] for scene in rendered],
+                [scene["id"] for scene in legacy_storyboard],
+            )
+
+    def test_real_integration_image_drift_persists_visual_semantic_block(self) -> None:
+        with self._real_group_render_fixture() as (
+            project, render_input, manifest, _timeline, _rendered, _legacy_storyboard, _director,
+        ):
+            scene_path = project / manifest["assets"][0]["path"]
+            scene_path.write_bytes(scene_path.read_bytes() + b"scene-drift")
+
+            blocked = preflight_render(project, render_input)
+
+            self.assertEqual(
+                blocked.next_stage_status,
+                "blocked_by_visual_semantic_alignment",
+            )
+            self.assertIn(
+                "registered scene asset was modified",
+                json.loads(blocked.report_path.read_text(encoding="utf-8"))[
+                    "vision_review_blockers"
+                ][0],
+            )
+
+    def test_real_integration_anchor_drift_persists_visual_semantic_block(self) -> None:
+        with self._real_group_render_fixture() as (
+            project, render_input, manifest, _timeline, _rendered, _legacy_storyboard, director,
+        ):
+            anchored_asset = next(
+                asset for asset in manifest["assets"]
+                if asset["identity_reference_evidence"]
+            )
+            anchor_path = project / anchored_asset["identity_reference_evidence"][0]["path"]
+            anchor_path.write_bytes(anchor_path.read_bytes() + b"anchor-drift")
+
+            with mock.patch(
+                "book_video_factory.render_stage.compiler.compile_director_stage",
+                return_value=director,
+            ):
+                blocked = preflight_render(project, render_input)
+
+            self.assertEqual(
+                blocked.next_stage_status,
+                "blocked_by_visual_semantic_alignment",
+            )
+            self.assertIn(
+                "identity reference evidence is stale",
+                json.loads(blocked.report_path.read_text(encoding="utf-8"))[
+                    "vision_review_blockers"
+                ][0],
+            )
+
     def test_render_workspace_stages_on_project_volume_for_atomic_publish(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             project, input_path, tasks, scene_manifest, director = self.prepare_project(Path(temp))
@@ -337,6 +598,8 @@ class RenderStageTests(unittest.TestCase):
                 "task_id": task_id,
                 "scene_id": scene_id,
                 "shot_id": shot_id,
+                "generation_lane": "host-imagegen",
+                "generation_mode": "single",
                 "caption_ids": caption_ids,
                 "caption_text": caption_text,
                 "caption_visual_contract_sha256": aggregate,
@@ -348,6 +611,7 @@ class RenderStageTests(unittest.TestCase):
                 "prompt_binding": binding,
                 "anchor_refs": [],
                 "identity_reference_task_ids": [],
+                "output_target": f"assets/generated/scenes/{scene_id}.png",
             }
         assets = []
         for index, task in enumerate(tasks.values(), start=1):

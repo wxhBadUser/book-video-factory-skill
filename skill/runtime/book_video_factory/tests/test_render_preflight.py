@@ -15,6 +15,7 @@ from book_video_factory.render_stage.preflight import (
     preflight_render,
     verify_render_preflight,
 )
+from book_video_factory.render_stage.compiler import VisualSemanticAlignmentError
 from book_video_factory.semantic_alignment.models import VisualProposition
 from book_video_factory.semantic_alignment.vision_review import (
     BaseVisionProvider,
@@ -93,6 +94,13 @@ class RenderPreflightTests(unittest.TestCase):
     ) -> tuple[Path, Path, dict, dict]:
         root = _tmp_project(base)
         _contract_path, task = _write_current_contract_group_and_task(root)
+        task.update({
+            "generation_lane": "host-imagegen",
+            "generation_mode": "single",
+            "narrative_function": "plot",
+            "prompt_sha256": hashlib.sha256(task["prompt"].encode("utf-8")).hexdigest(),
+            "output_target": "assets/generated/scenes/S1.png",
+        })
         task["anchor_refs"] = ["C002", "C003"]
         task["identity_reference_task_ids"] = ["ANCHOR_C002", "ANCHOR_C003"]
         _write_tasks(root, [task])
@@ -113,15 +121,23 @@ class RenderPreflightTests(unittest.TestCase):
                 "role": "identity_reference",
             })
         proposition = VisualProposition.from_mapping(task["visual_proposition"])
+        grouping = json.loads(
+            (root / "04_audio/CAPTION_GROUPING_AUDIT.json").read_text(encoding="utf-8")
+        )
+        group = next(
+            value for value in grouping["groups"]
+            if value["group_id"] == task["prompt_binding"]["group_id"]
+        )
+        bindings = json.loads(
+            (root / "04_audio/CAPTION_BINDINGS.json").read_text(encoding="utf-8")
+        )["captions"]
         evidence = review_current_shot(
             shot_id=task["shot_id"],
             image_path=image,
-            caption_group_text=task["caption_text"],
-            caption_group_sha256=task["prompt_binding"]["caption_group_sha256"],
-            proposition_text=json.dumps(task["visual_proposition"], ensure_ascii=False, sort_keys=True),
-            proposition_sha256=proposition.content_sha256(),
+            caption_group=group,
+            caption_texts={caption_id: bindings[caption_id]["text"] for caption_id in task["caption_ids"]},
+            proposition=proposition,
             prompt_text=task["prompt"],
-            prompt_sha256=hashlib.sha256(task["prompt"].encode()).hexdigest(),
             visible_persistent_character_ids=tuple(task["anchor_refs"]),
             identity_reference_paths=tuple(anchors),
             generation_provider="host-imagegen",
@@ -188,15 +204,24 @@ class RenderPreflightTests(unittest.TestCase):
                             attack_decision.write_text(
                                 json.dumps(decision, ensure_ascii=False), encoding="utf-8"
                             )
-                    self.assertEqual(
-                        _scene_review_vision_blockers(
-                            attack_decision,
-                            {current_asset["task_id"]: current_asset},
-                            attack_root,
-                            require_current=True,
-                        ),
-                        [current_asset["task_id"]],
-                    )
+                    if attack in {"proposition", "prompt"}:
+                        with self.assertRaises(RenderPreflightError):
+                            _scene_review_vision_blockers(
+                                attack_decision,
+                                {current_asset["task_id"]: current_asset},
+                                attack_root,
+                                require_current=True,
+                            )
+                    else:
+                        self.assertEqual(
+                            _scene_review_vision_blockers(
+                                attack_decision,
+                                {current_asset["task_id"]: current_asset},
+                                attack_root,
+                                require_current=True,
+                            ),
+                            [current_asset["task_id"]],
+                        )
 
     def test_current_release_requires_all_three_v2_statuses_and_rejects_v1(self) -> None:
         for axis in ("semantic", "reality", "identity"):
@@ -235,6 +260,64 @@ class RenderPreflightTests(unittest.TestCase):
                 ),
                 [asset["task_id"]],
             )
+
+    def test_full_preflight_requires_decisions_to_exactly_cover_current_tasks_and_assets(self) -> None:
+        attacks = ("empty", "missing", "duplicate", "extra", "non_string")
+        for attack in attacks:
+            with self.subTest(attack=attack), tempfile.TemporaryDirectory() as temp:
+                project, input_path, tasks, scene_manifest, director = self.prepare(Path(temp))
+                decision_path = project / "06_visual_production/SCENE_REVIEW_DECISION.json"
+                decision = json.loads(decision_path.read_text(encoding="utf-8"))
+                if attack == "empty":
+                    decision["decisions"] = []
+                elif attack == "missing":
+                    decision["decisions"] = decision["decisions"][:-1]
+                elif attack == "duplicate":
+                    decision["decisions"][-1] = copy.deepcopy(decision["decisions"][0])
+                elif attack == "extra":
+                    extra = copy.deepcopy(decision["decisions"][0])
+                    extra["task_id"] = "SCENE_EXTRA"
+                    decision["decisions"].append(extra)
+                else:
+                    decision["decisions"][0]["task_id"] = 7
+                decision_path.write_text(json.dumps(decision, ensure_ascii=False), encoding="utf-8")
+                approval = {"release_id": "r1", "human_approved": True, "next_stage_status": "ready_for_render"}
+
+                with mock.patch("book_video_factory.render_stage.compiler.compile_director_stage", return_value=director), \
+                     mock.patch("book_video_factory.render_stage.compiler._tasks", return_value=tasks), \
+                     mock.patch("book_video_factory.render_stage.compiler._scene_approval", return_value=(approval, scene_manifest)):
+                    result = preflight_render(
+                        project,
+                        input_path,
+                        command_runner=_runner([]),
+                        process_lister=lambda: [],
+                    )
+
+                self.assertEqual(result.next_stage_status, "blocked_by_visual_semantic_alignment")
+                report = json.loads(result.report_path.read_text(encoding="utf-8"))
+                self.assertTrue(report["vision_review_blockers"])
+
+    def test_prepare_time_visual_semantic_error_is_persisted_by_formal_preflight_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            project = Path(raw) / "project"
+            project.mkdir()
+            input_path = project / "07_render/RENDER_INPUT.json"
+            input_path.parent.mkdir(parents=True)
+            input_path.write_text("{}", encoding="utf-8")
+
+            with mock.patch(
+                "book_video_factory.render_stage.compiler.prepare_render_stage",
+                side_effect=VisualSemanticAlignmentError(
+                    "registered scene asset or identity anchor pixels changed"
+                ),
+            ):
+                result = preflight_render(project, input_path)
+
+            self.assertEqual(result.next_stage_status, "blocked_by_visual_semantic_alignment")
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "blocked")
+            self.assertEqual(report["next_stage_status"], "blocked_by_visual_semantic_alignment")
+            self.assertIn("identity anchor pixels changed", report["vision_review_blockers"][0])
 
     def test_directly_invokes_hbg_style_and_disk_preflight_with_bound_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
