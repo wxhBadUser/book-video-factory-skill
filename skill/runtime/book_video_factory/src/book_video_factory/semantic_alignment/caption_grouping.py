@@ -74,10 +74,10 @@ class CaptionUnit:
     text: str
     start: float
     end: float
+    narrative_function: str
     characters: tuple[str, ...] = ()
     location: str = ""
     time_of_day: str = ""
-    narrative_function: str = "plot"
 
     def to_dict(self) -> dict[str, Any]:
         return {

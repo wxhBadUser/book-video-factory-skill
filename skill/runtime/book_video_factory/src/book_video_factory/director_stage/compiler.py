@@ -396,11 +396,11 @@ def _task_for_scene(
     contract_sha_inputs: list[str] = []
     for contract in scene_contracts:
         for item in contract.must_show:
-            if item and item not in must_show:
-                must_show.append(item)
+            if item.natural_language and item.natural_language not in must_show:
+                must_show.append(item.natural_language)
         for item in contract.must_not_show_as_primary:
-            if item and item not in must_not_show:
-                must_not_show.append(item)
+            if item.natural_language and item.natural_language not in must_not_show:
+                must_not_show.append(item.natural_language)
         contract_sha_inputs.append(contract.content_sha256())
     caption_visual_contract_sha256 = (
         hashlib.sha256("|".join(sorted(contract_sha_inputs)).encode("utf-8")).hexdigest()

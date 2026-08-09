@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Caption Visual Contract v2",
+  "type": "object",
+  "required": ["schema_version", "release_id", "caption_count", "contracts"],
+  "properties": {
+    "schema_version": {"const": "caption-visual-contract.v2"},
+    "release_id": {"type": "string", "minLength": 1},
+    "caption_count": {"type": "integer", "minimum": 1},
+    "contracts": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"$ref": "#/$defs/contract"}
+    }
+  },
+  "$defs": {
+    "entity": {
+      "type": "object",
+      "required": ["entity_id", "natural_language", "reason", "evidence"],
+      "properties": {
+        "entity_id": {"type": "string", "minLength": 1},
+        "natural_language": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "evidence": {"type": "object", "minProperties": 1}
+      }
+    },
+    "contract": {
+      "type": "object",
+      "required": ["caption_id", "caption_text", "caption_text_sha256", "section_id", "source_beat_ids", "narrative_function", "visual_mode", "scene_state", "must_show", "may_show", "must_not_show_as_primary", "semantic_signature"],
+      "properties": {
+        "caption_id": {"type": "string", "minLength": 1},
+        "caption_text": {"type": "string", "minLength": 1},
+        "caption_text_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "section_id": {"type": "string", "minLength": 1},
+        "source_beat_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "narrative_function": {"type": "string", "minLength": 1},
+        "visual_mode": {"type": "string", "minLength": 1},
+        "scene_state": {
+          "type": "object",
+          "required": ["visible_character_ids", "location_id", "time_context", "action_state", "continuity_state"]
+        },
+        "must_show": {"type": "array", "items": {"$ref": "#/$defs/entity"}},
+        "may_show": {"type": "array", "items": {"$ref": "#/$defs/entity"}},
+        "must_not_show_as_primary": {"type": "array", "items": {"$ref": "#/$defs/entity"}},
+        "semantic_signature": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

@@ -22,6 +22,7 @@ import pytest
 
 from book_video_factory.semantic_alignment.caption_contract import (
     CaptionContractError,
+    CaptionEntityEvidence,
     CaptionVisualContract,
     build_caption_visual_contract_document,
     build_caption_visual_contract_from_project,
@@ -116,14 +117,27 @@ def _write_contract(root: Path, release_id: str, caption_ids, *, narrative_funct
     for cid in caption_ids:
         text = f"caption {cid}"
         contracts.append(CaptionVisualContract(
-            caption_id=cid,
-            caption_text=text,
-            caption_text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            source_beat_ids=(),
-            narrative_function=narrative_function,
-            subjects=(text,),
-            story_objects=(),
-            must_show=(text,),
+                caption_id=cid,
+                caption_text=text,
+                caption_text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                section_id="S1",
+                source_beat_ids=("B1",),
+                narrative_function=narrative_function,
+                subjects=(text,),
+                story_objects=(),
+                scene_state={
+                    "visible_character_ids": [],
+                    "location_id": "",
+                    "time_context": "",
+                    "action_state": text,
+                    "continuity_state": {"pronoun_resolutions": []},
+                },
+                must_show=(CaptionEntityEvidence(
+                    entity_id="C1",
+                    natural_language=text,
+                    reason="caption_named_entity",
+                    evidence={"text_evidence": text},
+                ),),
         ))
     doc = build_caption_visual_contract_document(release_id=release_id, contracts=contracts)
     path = root / "04_audio" / "CAPTION_VISUAL_CONTRACT.json"

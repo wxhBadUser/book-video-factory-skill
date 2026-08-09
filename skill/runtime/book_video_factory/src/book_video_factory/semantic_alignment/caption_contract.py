@@ -37,7 +37,7 @@ import hashlib
 import json
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -66,7 +66,7 @@ def _short_name(full_natural_language: str, fallback: str) -> str:
     before a separator is the name.
     """
 
-    head = re.split(r"[，,、。；;：:·\s（(【\[]", _norm(full_natural_language).strip(), 1)[0].strip()
+    head = re.split(r"[，,、。；;：:·\s（(【\[]", _norm(full_natural_language).strip(), maxsplit=1)[0].strip()
     return head or str(fallback).strip()
 
 
@@ -97,6 +97,43 @@ def _alias_display(entity_id: str) -> str:
 
 
 @dataclass(frozen=True)
+class CaptionEntityEvidence:
+    """One visual entity, with the caption evidence that permits its use."""
+
+    entity_id: str
+    natural_language: str
+    reason: str
+    evidence: Mapping[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "entity_id": self.entity_id,
+            "natural_language": self.natural_language,
+            "reason": self.reason,
+            "evidence": dict(self.evidence),
+        }
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> "CaptionEntityEvidence":
+        if not isinstance(raw, Mapping):
+            raise CaptionContractError("caption entity evidence must be a mapping")
+        entity_id = raw.get("entity_id")
+        natural_language = raw.get("natural_language")
+        reason = raw.get("reason")
+        evidence = raw.get("evidence")
+        if not all(isinstance(value, str) and value.strip() for value in (entity_id, natural_language, reason)):
+            raise CaptionContractError("caption entity evidence requires entity_id, natural_language, and reason")
+        if not isinstance(evidence, Mapping) or not evidence:
+            raise CaptionContractError(f"caption entity evidence for {entity_id!r} requires nonempty evidence")
+        return cls(
+            entity_id=entity_id.strip(),
+            natural_language=natural_language.strip(),
+            reason=reason.strip(),
+            evidence=dict(evidence),
+        )
+
+
+@dataclass(frozen=True)
 class CaptionVisualContract:
     """The authoritative record of what one display caption demands on screen.
 
@@ -108,18 +145,20 @@ class CaptionVisualContract:
     caption_id: str
     caption_text: str
     caption_text_sha256: str
-
+    section_id: str
     source_beat_ids: tuple[str, ...]
-
     narrative_function: str
+
     subjects: tuple[str, ...] = ()
     actions: tuple[str, ...] = ()
     location: str = ""
     time_context: str = ""
     story_objects: tuple[str, ...] = ()
 
-    must_show: tuple[str, ...] = ()
-    must_not_show_as_primary: tuple[str, ...] = ()
+    scene_state: Mapping[str, Any] = field(default_factory=dict)
+    must_show: tuple[CaptionEntityEvidence, ...] = ()
+    may_show: tuple[CaptionEntityEvidence, ...] = ()
+    must_not_show_as_primary: tuple[CaptionEntityEvidence, ...] = ()
 
     visual_focus: str = ""
     visual_mode: str = "literal"
@@ -130,6 +169,7 @@ class CaptionVisualContract:
             "caption_id": self.caption_id,
             "caption_text": self.caption_text,
             "caption_text_sha256": self.caption_text_sha256,
+            "section_id": self.section_id,
             "source_beat_ids": list(self.source_beat_ids),
             "narrative_function": self.narrative_function,
             "subjects": list(self.subjects),
@@ -137,8 +177,10 @@ class CaptionVisualContract:
             "location": self.location,
             "time_context": self.time_context,
             "story_objects": list(self.story_objects),
-            "must_show": list(self.must_show),
-            "must_not_show_as_primary": list(self.must_not_show_as_primary),
+            "scene_state": dict(self.scene_state),
+            "must_show": [item.to_dict() for item in self.must_show],
+            "may_show": [item.to_dict() for item in self.may_show],
+            "must_not_show_as_primary": [item.to_dict() for item in self.must_not_show_as_primary],
             "visual_focus": self.visual_focus,
             "visual_mode": self.visual_mode,
             "semantic_signature": self.semantic_signature,
@@ -154,6 +196,19 @@ class CaptionVisualContract:
             raise CaptionContractError(f"contract for {raw.get('caption_id')} has no valid caption_text_sha256")
         if hashlib.sha256(text.encode("utf-8")).hexdigest() != text_hash:
             raise CaptionContractError(f"contract caption_text_sha256 does not match caption_text for {raw.get('caption_id')}")
+        section_id = raw.get("section_id")
+        source_beat_ids = raw.get("source_beat_ids")
+        scene_state = raw.get("scene_state")
+        if not isinstance(section_id, str) or not section_id.strip():
+            raise CaptionContractError(f"contract for {raw.get('caption_id')} has no section_id")
+        if not isinstance(source_beat_ids, list) or not all(
+            isinstance(item, str) and item.strip() for item in source_beat_ids
+        ):
+            raise CaptionContractError(f"contract for {raw.get('caption_id')} has invalid source_beat_ids")
+        if not isinstance(scene_state, Mapping) or not {
+            "visible_character_ids", "location_id", "time_context", "action_state", "continuity_state"
+        }.issubset(scene_state):
+            raise CaptionContractError(f"contract for {raw.get('caption_id')} has invalid scene_state")
         nf = raw.get("narrative_function")
         if nf not in NARRATIVE_FUNCTIONS:
             raise CaptionContractError(f"contract for {raw.get('caption_id')} has invalid narrative_function {nf!r}")
@@ -161,15 +216,21 @@ class CaptionVisualContract:
             caption_id=str(raw.get("caption_id", "")),
             caption_text=text,
             caption_text_sha256=text_hash,
-            source_beat_ids=tuple(str(item) for item in raw.get("source_beat_ids", []) if str(item).strip()),
+            section_id=section_id.strip(),
+            source_beat_ids=tuple(source_beat_ids),
             narrative_function=str(nf),
             subjects=tuple(str(item) for item in raw.get("subjects", []) if str(item).strip()),
             actions=tuple(str(item) for item in raw.get("actions", []) if str(item).strip()),
             location=str(raw.get("location", "")),
             time_context=str(raw.get("time_context", "")),
             story_objects=tuple(str(item) for item in raw.get("story_objects", []) if str(item).strip()),
-            must_show=tuple(str(item) for item in raw.get("must_show", []) if str(item).strip()),
-            must_not_show_as_primary=tuple(str(item) for item in raw.get("must_not_show_as_primary", []) if str(item).strip()),
+            scene_state=dict(scene_state),
+            must_show=tuple(CaptionEntityEvidence.from_mapping(item) for item in raw.get("must_show", [])),
+            may_show=tuple(CaptionEntityEvidence.from_mapping(item) for item in raw.get("may_show", [])),
+            must_not_show_as_primary=tuple(
+                CaptionEntityEvidence.from_mapping(item)
+                for item in raw.get("must_not_show_as_primary", [])
+            ),
             visual_focus=str(raw.get("visual_focus", "")),
             visual_mode=str(raw.get("visual_mode", "literal")),
             semantic_signature=str(raw.get("semantic_signature", "")),
@@ -311,6 +372,17 @@ def _entity_kind(entity_id: str) -> str:
     return "char"
 
 
+def _is_person_referent(entity_id: str) -> bool:
+    """Whether a character id can resolve the human pronouns 他 / 她.
+
+    The locked character namespace also contains the ox identity. It may be
+    caption-named and visible, but cannot silently win a human-pronoun
+    resolution merely because it was listed after the person in a prior line.
+    """
+
+    return _entity_kind(entity_id) == "char" and "\u725b" not in _ENTITY_ALIASES.get(entity_id, ())
+
+
 def _build_referent_lexicon(
     entity_name_maps: Iterable[Mapping[str, str]],
 ) -> list[tuple[str, str, str]]:
@@ -358,6 +430,63 @@ def _scan_caption_terms(
     return found
 
 
+def _entity_match_terms(entity_id: str, entity_name_maps: Iterable[Mapping[str, str]]) -> tuple[str, ...]:
+    """Return all spoken terms that can directly name one locked entity."""
+
+    terms = list(_ENTITY_ALIASES.get(entity_id, ()))
+    for names in entity_name_maps:
+        name = names.get(entity_id)
+        if isinstance(name, str) and name.strip():
+            terms.append(_short_name(name, entity_id))
+    return tuple(dict.fromkeys(_norm(term).lower() for term in terms if _norm(term).strip()))
+
+
+def _direct_caption_entities(
+    caption_text: str,
+    *,
+    lexicon: Sequence[tuple[str, str, str]],
+    entity_name_maps: Iterable[Mapping[str, str]],
+    required_entities: Sequence[str],
+) -> dict[str, tuple[str, str]]:
+    """Find explicit caption names, preferring the bound beat's entity ids.
+
+    Names such as ``福贵`` can legitimately be aliases for multiple continuity
+    identities. When a locked beat supplies one candidate, it disambiguates the
+    spoken term; the beat still cannot add an entity that the caption did not
+    name.
+    """
+
+    normalized = _norm(caption_text).lower()
+    found: dict[str, tuple[str, str]] = {}
+    claimed_terms: set[str] = set()
+    for entity_id in required_entities:
+        entity_id = str(entity_id)
+        for term in _entity_match_terms(entity_id, entity_name_maps):
+            if term in normalized:
+                found[entity_id] = (_entity_kind(entity_id), term)
+                claimed_terms.add(term)
+                break
+    for entity_id, (kind, term) in _scan_caption_terms(caption_text, lexicon).items():
+        if term.lower() not in claimed_terms and entity_id not in found:
+            found[entity_id] = (kind, term)
+    return found
+
+
+def _entity_evidence(
+    entity_id: str,
+    *,
+    natural_language: str,
+    reason: str,
+    evidence: Mapping[str, Any],
+) -> CaptionEntityEvidence:
+    return CaptionEntityEvidence(
+        entity_id=str(entity_id),
+        natural_language=natural_language,
+        reason=reason,
+        evidence=dict(evidence),
+    )
+
+
 def enrich_captions_to_contracts(
     *,
     script_sections: Sequence[Mapping[str, Any]],
@@ -372,9 +501,15 @@ def enrich_captions_to_contracts(
     resolve raw entity ids (``C002``, ``OBJ_BOOK``, ``SCENE_FIELD``) to human
     names for the contract's ``must_show`` list.
 
-    Fail-closed: a caption that cannot be bound to a real beat/section is
-    rejected. There is no silent ``narrative_function = "plot"`` and no empty
-    ``subjects`` default -- an un-derivable caption must not be illustrated.
+    The caption is the authority for required visible entities. A beat's
+    ``requiredEntities`` may disambiguate an explicit caption name or remain
+    ``may_show`` context, but can never force a person into ``must_show``.
+
+    Fail-closed: a caption must bind to a locked script section. A locked beat
+    is optional context; when absent, the caption text must occur in exactly one
+    locked section and no beat entity may be inherited. The section's narrative
+    function is authoritative; a disagreeing beat is a corrupted redundant
+    field, not an alternate source of truth.
     """
 
     maps = list(entity_name_maps)
@@ -390,6 +525,7 @@ def enrich_captions_to_contracts(
     lexicon = _build_referent_lexicon(maps)
     beat_list = list(beats)
     results: list[CaptionVisualContract] = []
+    prior_named_characters: list[tuple[str, str, str]] = []
     for caption in captions:
         caption_id = str(caption.get("caption_id") or caption.get("id") or "")
         text = str(caption.get("text", "")).strip()
@@ -398,72 +534,142 @@ def enrich_captions_to_contracts(
         text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
 
         beat = _best_beat_for_caption(text, beat_list, section_text_by_id)
-        section_id = str(beat.get("sectionId") or beat.get("section_id") or "") if beat else ""
-        if not section_id:
-            # Fall back to the script section whose body contains the caption,
-            # used ONLY to recover the narrative_function. Subjects are taken
-            # from the caption text itself, never defaulted from a section.
-            for sid, sec_text in section_text_by_id.items():
-                if sec_text and _norm(text) in sec_text:
-                    section_id = sid
-                    break
+        if beat is None:
+            section_matches = [
+                section_id
+                for section_id, section_text in section_text_by_id.items()
+                if section_text and _norm(text) in section_text
+            ]
+            if len(section_matches) != 1:
+                raise CaptionContractError(
+                    f"caption {caption_id} ({text[:24]!r}) cannot be bound to exactly one locked script section"
+                )
+            section_id = section_matches[0]
+        else:
+            section_id = str(beat.get("sectionId") or beat.get("section_id") or "")
+            if not section_id:
+                raise CaptionContractError(f"caption {caption_id} beat has no section_id")
         section = section_by_id.get(section_id, {})
-        raw_nf = (beat or {}).get("narrative_function") or section.get("narrative_function")
-        if not raw_nf:
+        raw_section_nf = section.get("narrative_function")
+        if not raw_section_nf:
             raise CaptionContractError(
-                f"caption {caption_id} ({text[:24]!r}) cannot be bound to any locked beat/section "
+                f"caption {caption_id} ({text[:24]!r}) cannot be bound to a locked script section "
                 f"with a narrative_function; refusing to default to 'plot'"
             )
-        narrative_function = normalize_script_register(str(raw_nf))
+        narrative_function = normalize_script_register(str(raw_section_nf))
+        beat_context: Mapping[str, Any] = beat or {}
+        raw_beat_nf = beat_context.get("narrative_function") or beat_context.get("narrativeFunction")
+        if raw_beat_nf and normalize_script_register(str(raw_beat_nf)) != narrative_function:
+            raise CaptionContractError(
+                f"caption {caption_id} beat narrative_function conflicts with script section {section_id}: "
+                f"{raw_beat_nf!r} != {raw_section_nf!r}"
+            )
 
-        # Subjects / objects: prefer what the caption TEXT names (the lexicon),
-        # then union with the beat's required entities so a generic caption still
-        # inherits the scene's intended referents.
-        caption_found = _scan_caption_terms(text, lexicon)
-        required = [str(item) for item in (beat or {}).get("requiredEntities", []) if str(item).strip()]
-        beat_found: dict[str, tuple[str, str]] = {}
-        for entity in required:
-            kind = _entity_kind(entity)
-            if entity not in beat_found:
-                beat_found[entity] = (kind, entity)
+        required = [str(item) for item in beat_context.get("requiredEntities", []) if str(item).strip()]
+        caption_found = _direct_caption_entities(
+            text,
+            lexicon=lexicon,
+            entity_name_maps=maps,
+            required_entities=required,
+        )
+        must_show: list[CaptionEntityEvidence] = []
+        for entity_id, (_kind, matched_term) in caption_found.items():
+            must_show.append(_entity_evidence(
+                entity_id,
+                natural_language=_entity_display(entity_id, maps),
+                reason="caption_named_entity",
+                evidence={"text_evidence": matched_term},
+            ))
 
-        char_eids = {eid for eid, (kind, _t) in caption_found.items() if kind == "char"}
-        char_eids |= {eid for eid in beat_found if beat_found[eid][0] == "char"}
-        obj_eids = {eid for eid, (kind, _t) in caption_found.items() if kind != "char"}
-        obj_eids |= {eid for eid in beat_found if beat_found[eid][0] != "char"}
+        pronouns = [token for token in ("他们", "她们", "他", "她") if token in _norm(text)]
+        resolved_character_ids: set[str] = set()
+        for pronoun in pronouns:
+            if not prior_named_characters:
+                raise CaptionContractError(
+                    f"caption {caption_id} contains unresolved pronoun {pronoun!r}; no prior caption evidence"
+                )
+            upstream_caption_id, upstream_text, entity_id = prior_named_characters[-1]
+            if entity_id in resolved_character_ids or any(item.entity_id == entity_id for item in must_show):
+                continue
+            must_show.append(_entity_evidence(
+                entity_id,
+                natural_language=_entity_display(entity_id, maps),
+                reason="pronoun_resolution",
+                evidence={
+                    "pronoun_resolution": pronoun,
+                    "upstream_caption_id": upstream_caption_id,
+                    "upstream_caption_text": upstream_text,
+                    "text_evidence": pronoun,
+                },
+            ))
+            resolved_character_ids.add(entity_id)
 
-        subjects = [_entity_display(eid, maps) for eid in char_eids]
-        objects = [_entity_display(eid, maps) for eid in obj_eids]
-        must_show: list[str] = []
-        for item in subjects + objects:
-            if item and item not in must_show:
-                must_show.append(item)
-
-        forbidden = [str(item) for item in (beat or {}).get("forbiddenEntities", []) if str(item).strip()]
+        must_show_ids = {item.entity_id for item in must_show}
+        may_show = tuple(
+            _entity_evidence(
+                entity_id,
+                natural_language=_entity_display(entity_id, maps),
+                reason="beat_required_entity_context",
+                evidence={"source_beat_id": str(beat_context.get("beatId") or beat_context.get("id") or ""), "required_entity": entity_id},
+            )
+            for entity_id in required
+            if entity_id not in must_show_ids
+        )
+        forbidden = [str(item) for item in beat_context.get("forbiddenEntities", []) if str(item).strip()]
+        must_not_show = tuple(
+            _entity_evidence(
+                entity_id,
+                natural_language=_entity_display(entity_id, maps),
+                reason="beat_forbidden_entity",
+                evidence={"source_beat_id": str(beat_context.get("beatId") or beat_context.get("id") or ""), "forbidden_entity": entity_id},
+            )
+            for entity_id in forbidden
+        )
 
         visual_mode = "literal" if narrative_function in _LITERAL_FUNCTIONS else "symbolic_or_abstract"
-        scene_eid = next((eid for eid in obj_eids if eid.startswith("SCENE_")), "")
-        location = _entity_display(scene_eid, maps) if scene_eid else (beat or {}).get("location") or section.get("chapterTitle", "")
-        actions = _split_sentences((beat or {}).get("description", "") or text)[:3] or [text]
+        scene_eid = next((eid for eid in caption_found if eid.startswith("SCENE_")), "")
+        location_id = scene_eid or _first_scene(required)
+        location = _entity_display(location_id, maps) if location_id else beat_context.get("location") or section.get("chapterTitle", "")
+        actions = _split_sentences(beat_context.get("description", "") or text)[:3] or [text]
+        visible_character_ids = [item.entity_id for item in must_show if _entity_kind(item.entity_id) == "char"]
+        pronoun_evidence = [item.to_dict()["evidence"] for item in must_show if item.reason == "pronoun_resolution"]
 
         contract = CaptionVisualContract(
             caption_id=caption_id,
             caption_text=text,
             caption_text_sha256=text_hash,
-            source_beat_ids=((str((beat or {}).get("beatId") or (beat or {}).get("id") or ""),) if beat else ()),
+            section_id=section_id,
+            source_beat_ids=(str(beat_context.get("beatId") or beat_context.get("id") or ""),) if beat else (),
             narrative_function=narrative_function,
-            subjects=tuple(subjects),
+            subjects=tuple(
+                item.natural_language for item in must_show if _entity_kind(item.entity_id) == "char"
+            ),
             actions=tuple(actions),
             location=str(location),
-            time_context=str((beat or {}).get("time_context") or section.get("time_context") or ""),
-            story_objects=tuple(objects),
+            time_context=str(beat_context.get("time_context") or section.get("time_context") or ""),
+            story_objects=tuple(
+                item.natural_language for item in must_show if _entity_kind(item.entity_id) != "char"
+            ),
+            scene_state={
+                "visible_character_ids": visible_character_ids,
+                "location_id": location_id,
+                "time_context": str(beat_context.get("time_context") or section.get("time_context") or ""),
+                "action_state": text,
+                "continuity_state": {"pronoun_resolutions": pronoun_evidence},
+            },
             must_show=tuple(must_show),
-            must_not_show_as_primary=tuple(forbidden),
+            may_show=may_show,
+            must_not_show_as_primary=must_not_show,
             visual_focus=_norm(text)[:40],
             visual_mode=visual_mode,
         )
-        contract = CaptionVisualContract(**{**contract.to_dict(), "semantic_signature": contract.content_sha256()})
+        contract = replace(contract, semantic_signature=contract.content_sha256())
         results.append(contract)
+        prior_named_characters.extend(
+            (caption_id, text, entity_id)
+            for entity_id, (kind, _term) in caption_found.items()
+            if kind == "char" and _is_person_referent(entity_id)
+        )
     return results
 
 
@@ -482,7 +688,7 @@ def build_caption_visual_contract_document(
     """Serialize the contract set as the ``04_audio/CAPTION_VISUAL_CONTRACT.json`` artifact."""
 
     return {
-        "schema_version": "caption-visual-contract.v1",
+        "schema_version": "caption-visual-contract.v2",
         "release_id": str(release_id),
         "caption_count": len(contracts),
         "contracts": {c.caption_id: c.to_dict() for c in contracts},
@@ -508,7 +714,7 @@ def load_caption_visual_contract_document(path: str | Path) -> dict[str, Caption
     """Load a contract document back into a ``caption_id -> CaptionVisualContract`` map."""
 
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    if data.get("schema_version") != "caption-visual-contract.v1":
+    if data.get("schema_version") != "caption-visual-contract.v2":
         raise CaptionContractError(f"unexpected caption visual contract schema {data.get('schema_version')!r}")
     return {
         caption_id: CaptionVisualContract.from_mapping(payload)
@@ -518,6 +724,7 @@ def load_caption_visual_contract_document(path: str | Path) -> dict[str, Caption
 
 __all__ = [
     "CaptionContractError",
+    "CaptionEntityEvidence",
     "CaptionVisualContract",
     "build_caption_visual_contract_document",
     "build_caption_visual_contract_from_project",
@@ -601,7 +808,12 @@ def _build_project_entity_name_maps(profile: Mapping[str, Any]) -> list[dict[str
     return [char, obj, scene]
 
 
-def build_caption_visual_contract_from_project(root: str | Path, *, release_id: str | None = None) -> Path:
+def build_caption_visual_contract_from_project(
+    root: str | Path,
+    *,
+    release_id: str | None = None,
+    validate_only: bool = False,
+) -> Path | dict[str, Any]:
     """Derive and persist the project's Caption Visual Contract.
 
     Reads the locked ``SCRIPT_PACKAGE.json`` (section narrative_functions),
@@ -636,4 +848,7 @@ def build_caption_visual_contract_from_project(root: str | Path, *, release_id: 
         captions=captions,
         entity_name_maps=name_maps,
     )
+    document = build_caption_visual_contract_document(release_id=release_id, contracts=contracts)
+    if validate_only:
+        return document
     return write_caption_visual_contract_document(root, release_id=release_id, contracts=contracts)
