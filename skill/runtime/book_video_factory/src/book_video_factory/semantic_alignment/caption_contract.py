@@ -304,8 +304,8 @@ def _best_beat_for_caption(
     norm = _norm(caption_text)
     if not norm:
         return None
-    best: dict[str, Any] | None = None
-    best_cue_len = None
+    matches: list[dict[str, Any]] = []
+    best_cue_len: int | None = None
     for beat in beats:
         cue = _norm(beat.get("cue", ""))
         if not cue:
@@ -314,8 +314,23 @@ def _best_beat_for_caption(
             cue_len = len(cue)
             if best_cue_len is None or cue_len < best_cue_len:
                 best_cue_len = cue_len
-                best = dict(beat)
-    return best
+                matches = [dict(beat)]
+            elif cue_len == best_cue_len:
+                matches.append(dict(beat))
+    if not matches:
+        return None
+    beat_ids = {str(item.get("beatId") or item.get("id") or "") for item in matches}
+    section_ids = {str(item.get("sectionId") or item.get("section_id") or "") for item in matches}
+    functions = {
+        normalize_script_register(str(item.get("narrative_function") or item.get("narrativeFunction")))
+        if item.get("narrative_function") or item.get("narrativeFunction") else None
+        for item in matches
+    }
+    if len(beat_ids) != 1 or len(section_ids) != 1 or len(functions) != 1:
+        raise CaptionContractError(
+            "ambiguous beat binding: equally specific cues do not resolve one Beat ID, section ID, and narrative_function"
+        )
+    return matches[0]
 
 
 # Locked domain referents for this production: entity id -> spoken aliases that
@@ -323,18 +338,18 @@ def _best_beat_for_caption(
 # contract's must_show is derived from what the caption actually NAMES, not only
 # from the beat's required-entity ids (which a buggy storyboard can get wrong).
 _ENTITY_ALIASES: dict[str, tuple[str, ...]] = {
-    "C001": ("福贵", "阔少", "少爷", "老爷"),
-    "C002": ("福贵", "老头", "老汉", "老爷子", "爹"),
-    "C003": ("家珍", "妻子", "娘"),
-    "C004": ("凤霞", "女儿"),
-    "C005": ("有庆", "儿子"),
+    "C001": ("福贵",),
+    "C002": ("福贵",),
+    "C003": ("家珍",),
+    "C004": ("凤霞",),
+    "C005": ("有庆",),
     "C006": ("龙二",),
-    "C007": ("春生", "县长"),
+    "C007": ("春生",),
     "C008": ("二喜",),
-    "C009": ("苦根", "孩子"),
+    "C009": ("苦根",),
     "C010": ("老牛", "牛"),
     "OBJ_BEANS": ("豆子", "豆"),
-    "OBJ_BOOK": ("书", "照片", "煤油灯", "书桌"),
+    "OBJ_BOOK": (),
     "OBJ_BRIDAL": ("嫁衣", "花轿", "出嫁", "婚"),
     "OBJ_NEEDLE": ("针", "注射器"),
     "OBJ_DICE": ("骰子",),
@@ -359,28 +374,58 @@ _ENTITY_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
+_CAPTION_LOCAL_ROLES: dict[str, tuple[str, str, str]] = {
+    "父亲": ("ROLE_FATHER", "father", "male"),
+    "爹": ("ROLE_FATHER", "father", "male"),
+    "母亲": ("ROLE_MOTHER", "mother", "female"),
+    "娘": ("ROLE_MOTHER", "mother", "female"),
+    "妻子": ("ROLE_WIFE", "wife", "female"),
+    "女儿": ("ROLE_DAUGHTER", "daughter", "female"),
+    "儿子": ("ROLE_SON", "son", "male"),
+    "少爷": ("ROLE_YOUNG_MASTER", "young_master", "male"),
+    "老爷": ("ROLE_MASTER", "master", "male"),
+    "医生": ("ROLE_DOCTOR", "doctor", ""),
+    "护士": ("ROLE_NURSE", "nurse", ""),
+    "县长": ("ROLE_COUNTY_MAGISTRATE", "county_magistrate", ""),
+    "孩子": ("ROLE_CHILD", "child", ""),
+}
+
+
+_CAPTION_LOCAL_GROUPS: dict[str, tuple[str, str]] = {
+    "村里人": ("GROUP_VILLAGERS", "villagers"),
+}
+
+
+_UPSTREAM_ROLE_GROUPS: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    "doctor": ("GROUP_DOCTORS", "doctors", ("SCENE_HOSPITAL",)),
+    "nurse": ("GROUP_NURSES", "nurses", ("SCENE_HOSPITAL",)),
+}
+
+
+_PROFILE_GENDER_MARKERS: dict[str, tuple[str, ...]] = {
+    "female": ("女子", "女人", "女孩", "少女", "新娘"),
+    "male": ("男子", "男人", "男孩", "少年", "少爷"),
+}
+
+
+_CONTEXTUAL_ENTITY_TERMS: dict[str, tuple[str, ...]] = {
+    "OBJ_BOOK": ("书", "照片", "书桌"),
+}
+
+
 def _split_sentences(text: str) -> list[str]:
     parts = re.split(r"[，,。．.；;：:！!？?、\s]+", _norm(text))
     return [p for p in parts if len(p) >= 2]
 
 
 def _entity_kind(entity_id: str) -> str:
+    if entity_id.startswith("GROUP_"):
+        return "group"
     if entity_id.startswith("OBJ_"):
         return "obj"
     if entity_id.startswith("SCENE_"):
         return "scene"
     return "char"
-
-
-def _is_person_referent(entity_id: str) -> bool:
-    """Whether a character id can resolve the human pronouns 他 / 她.
-
-    The locked character namespace also contains the ox identity. It may be
-    caption-named and visible, but cannot silently win a human-pronoun
-    resolution merely because it was listed after the person in a prior line.
-    """
-
-    return _entity_kind(entity_id) == "char" and "\u725b" not in _ENTITY_ALIASES.get(entity_id, ())
 
 
 def _build_referent_lexicon(
@@ -406,11 +451,11 @@ def _build_referent_lexicon(
     for table in entity_name_maps:
         for entity_id, name in table.items():
             entity_id = str(entity_id)
-            term = _short_name(name, entity_id).lower()
-            key = (term, entity_id)
-            if term and key not in seen:
-                seen.add(key)
-                lexicon.append((term, entity_id, _entity_kind(entity_id)))
+            for term in _name_terms(name, entity_id):
+                key = (term, entity_id)
+                if term and key not in seen:
+                    seen.add(key)
+                    lexicon.append((term, entity_id, _entity_kind(entity_id)))
     lexicon.sort(key=lambda item: -len(item[0]))
     return lexicon
 
@@ -437,8 +482,18 @@ def _entity_match_terms(entity_id: str, entity_name_maps: Iterable[Mapping[str, 
     for names in entity_name_maps:
         name = names.get(entity_id)
         if isinstance(name, str) and name.strip():
-            terms.append(_short_name(name, entity_id))
+            terms.extend(_name_terms(name, entity_id))
     return tuple(dict.fromkeys(_norm(term).lower() for term in terms if _norm(term).strip()))
+
+
+def _name_terms(name: str, fallback: str) -> tuple[str, ...]:
+    """Extract literal, source-supplied aliases, including a book title in 《》."""
+
+    text = _norm(name).strip()
+    terms = [_short_name(text, fallback)]
+    for title in re.findall(r"《([^》]+)》", text):
+        terms.extend((f"《{title}》", title))
+    return tuple(dict.fromkeys(term.lower() for term in terms if term.strip()))
 
 
 def _direct_caption_entities(
@@ -461,7 +516,8 @@ def _direct_caption_entities(
     claimed_terms: set[str] = set()
     for entity_id in required_entities:
         entity_id = str(entity_id)
-        for term in _entity_match_terms(entity_id, entity_name_maps):
+        terms = (*_entity_match_terms(entity_id, entity_name_maps), *_CONTEXTUAL_ENTITY_TERMS.get(entity_id, ()))
+        for term in dict.fromkeys(terms):
             if term in normalized:
                 found[entity_id] = (_entity_kind(entity_id), term)
                 claimed_terms.add(term)
@@ -470,6 +526,275 @@ def _direct_caption_entities(
         if term.lower() not in claimed_terms and entity_id not in found:
             found[entity_id] = (kind, term)
     return found
+
+
+def _caption_span(caption_text: str, term: str) -> dict[str, Any]:
+    """Return the exact normalized-text span for a directly matched entity term."""
+
+    normalized_text = _norm(caption_text)
+    normalized_term = _norm(term)
+    start = normalized_text.lower().find(normalized_term.lower())
+    if start < 0:
+        raise CaptionContractError(f"caption evidence term {term!r} is absent from its caption text")
+    return {"start": start, "end": start + len(normalized_term), "text": normalized_text[start:start + len(normalized_term)]}
+
+
+def _caption_clauses(caption_text: str, *, end: int | None = None) -> list[dict[str, Any]]:
+    """Split locked caption text on punctuation while retaining normalized spans."""
+
+    normalized = _norm(caption_text)
+    limit = len(normalized) if end is None else min(end, len(normalized))
+    return [
+        {"start": match.start(), "end": match.end(), "text": match.group(0)}
+        for match in re.finditer(r"[^,，;；.。:：!?！？]+", normalized[:limit])
+    ]
+
+
+def _select_clause_candidates(
+    caption_text: str,
+    candidates: Sequence[tuple[str, str, str]],
+    *,
+    end: int | None = None,
+) -> tuple[dict[str, Any], list[tuple[str, str, str]]] | None:
+    """Return the latest clause containing explicit candidates, never a later entity tie-break."""
+
+    for clause in reversed(_caption_clauses(caption_text, end=end)):
+        clause_text = str(clause["text"]).lower()
+        matches = [
+            candidate for candidate in candidates
+            if candidate[2] and candidate[2].lower() in clause_text
+        ]
+        if matches:
+            return clause, matches
+    return None
+
+
+def _candidate_span_in_clause(clause: Mapping[str, Any], term: str) -> dict[str, Any]:
+    """Return the exact term span within an already selected clause."""
+
+    text = str(clause["text"])
+    start = text.lower().find(_norm(term).lower())
+    if start < 0:
+        raise CaptionContractError(f"caption clause does not contain antecedent term {term!r}")
+    absolute_start = int(clause["start"]) + start
+    return {"start": absolute_start, "end": absolute_start + len(term), "text": text[start:start + len(term)]}
+
+
+def _caption_local_roles(caption_text: str) -> list[tuple[str, str, dict[str, Any]]]:
+    """Return explicit kinship/status mentions without assigning a persistent identity."""
+
+    roles: list[tuple[str, str, dict[str, Any]]] = []
+    normalized = _norm(caption_text)
+    seen: set[str] = set()
+    for term, (role_id, role, gender) in sorted(_CAPTION_LOCAL_ROLES.items(), key=lambda item: -len(item[0])):
+        if role_id in seen or term not in normalized:
+            continue
+        evidence: dict[str, Any] = {
+            "caption_local": True,
+            "caption_span": _caption_span(caption_text, term),
+            "entity_kind": "character",
+            "role": role,
+            "text_evidence": term,
+        }
+        if gender:
+            evidence["gender"] = gender
+        roles.append((role_id, term, evidence))
+        seen.add(role_id)
+    return roles
+
+
+def _caption_local_groups(caption_text: str) -> list[tuple[str, str, dict[str, Any]]]:
+    """Return explicit, non-persistent plural groups from the current caption."""
+
+    groups: list[tuple[str, str, dict[str, Any]]] = []
+    normalized = _norm(caption_text)
+    for term, (group_id, group) in _CAPTION_LOCAL_GROUPS.items():
+        if term not in normalized:
+            continue
+        groups.append((group_id, term, {
+            "caption_local": True,
+            "caption_span": _caption_span(caption_text, term),
+            "entity_kind": "character_group",
+            "group": group,
+            "number": "plural",
+            "text_evidence": term,
+        }))
+    return groups
+
+
+def _upstream_role_group_candidates(
+    prior_captions: Sequence[tuple[str, str, str, tuple[tuple[str, str, str], ...]]],
+    *,
+    section_id: str,
+    scene_ids: set[str],
+) -> dict[str, dict[str, Any]]:
+    """Return same-section role groups supported by explicit prior captions only."""
+
+    candidates: dict[str, dict[str, Any]] = {}
+    for upstream_caption_id, upstream_section_id, upstream_text, _entities in prior_captions:
+        if upstream_section_id != section_id:
+            continue
+        for role_id, term, evidence in _caption_local_roles(upstream_text):
+            role = str(evidence["role"])
+            group = _UPSTREAM_ROLE_GROUPS.get(role)
+            if group is None:
+                continue
+            group_id, group_category, compatible_scenes = group
+            if not scene_ids.intersection(compatible_scenes):
+                continue
+            candidate = candidates.setdefault(
+                group_id,
+                {
+                    "group": group_category,
+                    "role": role,
+                    "term": term,
+                    "supporting_upstream_captions": [],
+                },
+            )
+            candidate["supporting_upstream_captions"].append({
+                "caption_id": upstream_caption_id,
+                "caption_text": upstream_text,
+                "caption_span": dict(evidence["caption_span"]),
+            })
+    return candidates
+
+
+def _is_plural_group_candidate(pronoun: str, kind: str) -> bool:
+    """Only masculine-or-mixed 他们 can use the currently modelled neutral groups."""
+
+    return pronoun == "他们" and kind == "group"
+
+
+def _pronoun_occurrences(caption_text: str) -> list[tuple[str, int, int]]:
+    """Return plural-first pronoun matches in textual order with normalized spans."""
+
+    normalized = _norm(caption_text)
+    return [
+        (match.group(0), match.start(), match.end())
+        for match in re.finditer(r"他们|她们|他|她|它", normalized)
+    ]
+
+
+def _gender_conflicts(pronoun: str, gender: Any) -> bool:
+    """Whether explicit metadata contradicts a gendered singular pronoun."""
+
+    return (
+        (pronoun == "他" and gender == "female")
+        or (pronoun == "她" and gender == "male")
+        or (pronoun == "她们" and gender == "male")
+    )
+
+
+def _gender_exclusions(
+    pronoun: str,
+    entities: Sequence[tuple[str, str, str]],
+    metadata: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return auditable exclusions caused by explicit gender evidence only."""
+
+    exclusions: list[dict[str, Any]] = []
+    for entity_id, kind, _term in entities:
+        if kind != "char":
+            continue
+        declared = metadata.get(entity_id, {})
+        gender = declared.get("gender") if isinstance(declared, Mapping) else None
+        if not _gender_conflicts(pronoun, gender):
+            continue
+        item: dict[str, Any] = {"entity_id": entity_id, "gender": gender}
+        if isinstance(declared.get("gender_evidence"), Mapping):
+            item["gender_evidence"] = dict(declared["gender_evidence"])
+        exclusions.append(item)
+    return sorted(exclusions, key=lambda item: str(item["entity_id"]))
+
+
+def _pronoun_candidates(
+    pronoun: str,
+    entities: Sequence[tuple[str, str, str]],
+    metadata: Mapping[str, Mapping[str, Any]],
+) -> list[tuple[str, str, str]]:
+    """Return only structurally compatible direct mentions from one caption."""
+
+    candidates: list[tuple[str, str, str]] = []
+    for entity_id, kind, term in entities:
+        declared = metadata.get(entity_id, {})
+        declared_type = declared.get("entity_type") if isinstance(declared, Mapping) else None
+        declared_gender = declared.get("gender") if isinstance(declared, Mapping) else None
+        if pronoun in {"他", "她"} and kind == "char":
+            if _gender_conflicts(pronoun, declared_gender):
+                continue
+            candidates.append((entity_id, kind, term))
+        elif _is_plural_group_candidate(pronoun, kind):
+            candidates.append((entity_id, kind, term))
+        elif pronoun == "它" and (kind != "char" or declared_type is not None):
+            candidates.append((entity_id, kind, term))
+    return candidates
+
+
+def _apply_explicit_gender_match_precedence(
+    pronoun: str,
+    candidates: Mapping[str, tuple[str, str]],
+    metadata: Mapping[str, Mapping[str, Any]],
+) -> tuple[dict[str, tuple[str, str]], list[str], list[dict[str, Any]]]:
+    """Prefer explicit gender matches without treating unknown gender as a match."""
+
+    expected_gender = {"他": "male", "她": "female"}.get(pronoun)
+    if expected_gender is None:
+        return dict(candidates), [], []
+    explicit_matches: dict[str, tuple[str, str]] = {}
+    unknown_candidates: list[str] = []
+    match_evidence: list[dict[str, Any]] = []
+    for entity_id, candidate in candidates.items():
+        kind, _term = candidate
+        if kind != "char":
+            continue
+        declared = metadata.get(entity_id, {})
+        gender = declared.get("gender") if isinstance(declared, Mapping) else None
+        if gender == expected_gender:
+            explicit_matches[entity_id] = candidate
+            evidence: dict[str, Any] = {"entity_id": entity_id, "gender": gender}
+            if isinstance(declared.get("gender_evidence"), Mapping):
+                evidence["gender_evidence"] = dict(declared["gender_evidence"])
+            match_evidence.append(evidence)
+        elif gender is None:
+            unknown_candidates.append(entity_id)
+    if explicit_matches:
+        return explicit_matches, sorted(unknown_candidates), sorted(match_evidence, key=lambda item: str(item["entity_id"]))
+    return dict(candidates), [], []
+
+
+def _validate_pronoun_metadata(
+    *,
+    caption_id: str,
+    pronoun: str,
+    entity_id: str,
+    kind: str,
+    metadata: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """Reject structured type or gender evidence that contradicts the pronoun."""
+
+    declared = metadata.get(entity_id, {})
+    if not isinstance(declared, Mapping):
+        raise CaptionContractError(f"entity metadata for {entity_id} must be a mapping")
+    declared_type = declared.get("entity_type")
+    declared_gender = declared.get("gender")
+    if pronoun in {"他", "她", "他们", "她们"}:
+        if declared_type is not None and declared_type != "person":
+            raise CaptionContractError(
+                f"caption {caption_id} pronoun {pronoun!r} type mismatch for {entity_id}: {declared_type!r}"
+            )
+        if pronoun == "他" and declared_gender is not None and declared_gender != "male":
+            raise CaptionContractError(
+                f"caption {caption_id} pronoun {pronoun!r} gender mismatch for {entity_id}: {declared_gender!r}"
+            )
+        if pronoun == "她" and declared_gender is not None and declared_gender != "female":
+            raise CaptionContractError(
+                f"caption {caption_id} pronoun {pronoun!r} gender mismatch for {entity_id}: {declared_gender!r}"
+            )
+    elif kind == "char" and (declared_type is None or declared_type == "person"):
+        raise CaptionContractError(
+            f"caption {caption_id} contains unresolved pronoun {pronoun!r}; "
+            f"{entity_id} lacks trusted non-person entity_type metadata"
+        )
 
 
 def _entity_evidence(
@@ -493,6 +818,7 @@ def enrich_captions_to_contracts(
     beats: Sequence[Mapping[str, Any]],
     captions: Sequence[Mapping[str, Any]],
     entity_name_maps: Iterable[Mapping[str, str]] = (),
+    entity_metadata: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[CaptionVisualContract]:
     """Derive the authoritative Caption Visual Contract for every caption.
 
@@ -513,6 +839,7 @@ def enrich_captions_to_contracts(
     """
 
     maps = list(entity_name_maps)
+    metadata = entity_metadata or {}
     section_by_id: dict[str, dict[str, Any]] = {}
     section_text_by_id: dict[str, str] = {}
     for section in script_sections:
@@ -525,7 +852,7 @@ def enrich_captions_to_contracts(
     lexicon = _build_referent_lexicon(maps)
     beat_list = list(beats)
     results: list[CaptionVisualContract] = []
-    prior_named_characters: list[tuple[str, str, str]] = []
+    prior_caption_entities: list[tuple[str, str, str, tuple[tuple[str, str, str], ...]]] = []
     for caption in captions:
         caption_id = str(caption.get("caption_id") or caption.get("id") or "")
         text = str(caption.get("text", "")).strip()
@@ -580,29 +907,251 @@ def enrich_captions_to_contracts(
                 reason="caption_named_entity",
                 evidence={"text_evidence": matched_term},
             ))
-
-        pronouns = [token for token in ("他们", "她们", "他", "她") if token in _norm(text)]
-        resolved_character_ids: set[str] = set()
-        for pronoun in pronouns:
-            if not prior_named_characters:
-                raise CaptionContractError(
-                    f"caption {caption_id} contains unresolved pronoun {pronoun!r}; no prior caption evidence"
-                )
-            upstream_caption_id, upstream_text, entity_id = prior_named_characters[-1]
-            if entity_id in resolved_character_ids or any(item.entity_id == entity_id for item in must_show):
-                continue
+        local_roles = _caption_local_roles(text)
+        for role_id, term, evidence in local_roles:
             must_show.append(_entity_evidence(
-                entity_id,
-                natural_language=_entity_display(entity_id, maps),
-                reason="pronoun_resolution",
-                evidence={
-                    "pronoun_resolution": pronoun,
-                    "upstream_caption_id": upstream_caption_id,
-                    "upstream_caption_text": upstream_text,
-                    "text_evidence": pronoun,
-                },
+                role_id,
+                natural_language=term,
+                reason="caption_local_role",
+                evidence=evidence,
             ))
-            resolved_character_ids.add(entity_id)
+        local_groups = _caption_local_groups(text)
+        for group_id, term, evidence in local_groups:
+            must_show.append(_entity_evidence(
+                group_id,
+                natural_language=term,
+                reason="caption_local_group",
+                evidence=evidence,
+            ))
+
+        pronoun_evidence: list[dict[str, Any]] = []
+        resolved_entity_ids: set[str] = set()
+        for pronoun, pronoun_start, pronoun_end in _pronoun_occurrences(text):
+            current_context_entities = [
+                (entity_id, _entity_kind(entity_id), "") for entity_id in required
+            ]
+            current_candidates = _pronoun_candidates(
+                pronoun,
+                current_context_entities,
+                metadata,
+            )
+            current_candidate_ids = {entity_id for entity_id, _kind, _term in current_candidates}
+            resolution_basis: Mapping[str, Any]
+            if current_candidate_ids:
+                resolution_basis = {
+                    "kind": "current_action_required_participant",
+                    "source_beat_id": str(beat_context.get("beatId") or beat_context.get("id") or ""),
+                    "candidate_entity_ids": sorted(current_candidate_ids),
+                }
+                gender_exclusions = _gender_exclusions(pronoun, current_context_entities, metadata)
+                if gender_exclusions:
+                    resolution_basis = {**resolution_basis, "gender_exclusions": gender_exclusions}
+                if pronoun in {"他们", "她们"}:
+                    same_caption_candidates = [
+                        (group_id, "group", term)
+                        for group_id, term, _evidence in local_groups
+                        if _is_plural_group_candidate(pronoun, "group")
+                    ]
+                else:
+                    same_caption_candidates = [
+                        (entity_id, kind, term)
+                        for entity_id, (kind, term) in caption_found.items()
+                        if entity_id in current_candidate_ids
+                    ]
+                fallback_due_no_current_candidate = False
+            else:
+                gender_exclusions = _gender_exclusions(pronoun, current_context_entities, metadata)
+                fallback_due_no_current_candidate = beat is not None
+                resolution_basis = (
+                    {
+                        "kind": "upstream_caption_fallback_due_no_compatible_current_participant",
+                        "current_beat_id": str(beat_context.get("beatId") or beat_context.get("id") or ""),
+                        "section_id": section_id,
+                        "rejected_current_candidates": gender_exclusions,
+                    }
+                    if fallback_due_no_current_candidate
+                    else {"kind": "unique_upstream_referent"}
+                )
+                same_caption_candidates = []
+            same_caption_clause = _select_clause_candidates(
+                text,
+                same_caption_candidates,
+                end=pronoun_start,
+            )
+            if same_caption_clause is not None:
+                antecedent_clause, same_caption_candidates = same_caption_clause
+            else:
+                antecedent_clause = None
+                same_caption_candidates = []
+            nearest = None
+            role_group_resolution: dict[str, Any] | None = None
+            if same_caption_candidates:
+                upstream_caption_id = caption_id
+                upstream_text = text
+                candidates = same_caption_candidates
+                same_caption = True
+            elif current_candidate_ids:
+                for upstream_caption_id, _upstream_section_id, upstream_text, entities in reversed(prior_caption_entities):
+                    context_candidates = [
+                        candidate for candidate in entities
+                        if candidate[0] in current_candidate_ids
+                        or _is_plural_group_candidate(pronoun, candidate[1])
+                    ]
+                    selected_clause = _select_clause_candidates(upstream_text, context_candidates)
+                    if selected_clause is not None:
+                        antecedent_clause, candidates = selected_clause
+                        nearest = (upstream_caption_id, upstream_text, candidates)
+                        break
+                same_caption = False
+            else:
+                for upstream_caption_id, upstream_section_id, upstream_text, entities in reversed(prior_caption_entities):
+                    if fallback_due_no_current_candidate and upstream_section_id != section_id:
+                        continue
+                    upstream_candidates = [
+                        candidate for candidate in _pronoun_candidates(pronoun, entities, metadata)
+                        if pronoun not in {"他们", "她们"}
+                        or _is_plural_group_candidate(pronoun, candidate[1])
+                    ]
+                    selected_clause = _select_clause_candidates(upstream_text, upstream_candidates)
+                    if selected_clause is not None:
+                        antecedent_clause, candidates = selected_clause
+                        nearest = (upstream_caption_id, upstream_text, candidates)
+                        break
+                same_caption = False
+                if pronoun in {"他们", "她们"} and nearest is None:
+                    scene_ids = {
+                        entity_id for entity_id in required
+                        if entity_id.startswith("SCENE_")
+                    }.union(
+                        entity_id for entity_id in caption_found
+                        if entity_id.startswith("SCENE_")
+                    )
+                    role_groups = _upstream_role_group_candidates(
+                        prior_caption_entities,
+                        section_id=section_id,
+                        scene_ids=scene_ids,
+                    )
+                    if len(role_groups) > 1:
+                        raise CaptionContractError(
+                            f"caption {caption_id} contains ambiguous plural role groups "
+                            f"{sorted(role_groups)} in section {section_id}"
+                        )
+                    if role_groups:
+                        entity_id, role_group_resolution = next(iter(role_groups.items()))
+                        support = role_group_resolution["supporting_upstream_captions"][-1]
+                        upstream_caption_id = str(support["caption_id"])
+                        upstream_text = str(support["caption_text"])
+                        candidates = [(entity_id, "group", str(role_group_resolution["term"]))]
+            if nearest is None and role_group_resolution is None and not same_caption_candidates:
+                if current_candidate_ids:
+                    detail = "no current-context upstream evidence"
+                elif fallback_due_no_current_candidate:
+                    detail = "no same-section upstream evidence after current participant rejection"
+                else:
+                    detail = "no prior caption evidence"
+                raise CaptionContractError(
+                    f"caption {caption_id} contains unresolved pronoun {pronoun!r}; {detail}"
+                )
+            if not same_caption_candidates and role_group_resolution is None:
+                upstream_caption_id, upstream_text, candidates = nearest
+            candidates_by_id = {entity_id: (kind, term) for entity_id, kind, term in candidates}
+            candidates_by_id, unknown_gender_candidates, explicit_gender_matches = _apply_explicit_gender_match_precedence(
+                pronoun,
+                candidates_by_id,
+                metadata,
+            )
+            if unknown_gender_candidates:
+                resolution_basis = {
+                    **resolution_basis,
+                    "unknown_candidates_excluded_by_explicit_match": unknown_gender_candidates,
+                    "explicit_gender_matches": explicit_gender_matches,
+                }
+            if role_group_resolution is not None:
+                antecedent_clause = _select_clause_candidates(upstream_text, candidates)[0]
+                resolution_basis = {
+                    "kind": "plural_role_group_from_explicit_upstream_roles",
+                    "current_beat_id": str(beat_context.get("beatId") or beat_context.get("id") or ""),
+                    "section_id": section_id,
+                    "scene_id": next(iter(sorted(scene_ids))),
+                    "local_role_category": str(role_group_resolution["role"]),
+                    "supporting_upstream_captions": role_group_resolution["supporting_upstream_captions"],
+                }
+                fallback_due_no_current_candidate = False
+            if fallback_due_no_current_candidate:
+                selected_profile_evidence = [
+                    {
+                        "entity_id": entity_id,
+                        "gender": metadata.get(entity_id, {}).get("gender"),
+                        "gender_evidence": dict(metadata[entity_id]["gender_evidence"]),
+                    }
+                    for entity_id in sorted(candidates_by_id)
+                    if isinstance(metadata.get(entity_id), Mapping)
+                    and isinstance(metadata[entity_id].get("gender_evidence"), Mapping)
+                ]
+                if selected_profile_evidence:
+                    resolution_basis = {
+                        **resolution_basis,
+                        "upstream_candidate_profile_evidence": selected_profile_evidence,
+                    }
+            if pronoun in {"他", "她", "它"} and len(candidates_by_id) != 1:
+                source_label = "same caption" if same_caption else f"nearest prior caption {upstream_caption_id}"
+                raise CaptionContractError(
+                    f"caption {caption_id} contains ambiguous pronoun {pronoun!r}; {source_label} "
+                    f"has candidates {sorted(candidates_by_id)}"
+                )
+            if pronoun in {"他们", "她们"}:
+                candidates_by_id = {
+                    entity_id: (kind, term)
+                    for entity_id, (kind, term) in candidates_by_id.items()
+                    if _is_plural_group_candidate(pronoun, kind)
+                }
+            if pronoun in {"他们", "她们"} and len(candidates_by_id) != 1:
+                source_label = "same caption" if same_caption else f"nearest prior caption {upstream_caption_id}"
+                raise CaptionContractError(
+                    f"caption {caption_id} contains unsupported plural pronoun {pronoun!r}; {source_label} "
+                    "does not name one explicit plural group"
+                )
+            for entity_id, (kind, term) in sorted(candidates_by_id.items()):
+                _validate_pronoun_metadata(
+                    caption_id=caption_id,
+                    pronoun=pronoun,
+                    entity_id=entity_id,
+                    kind=kind,
+                    metadata=metadata,
+                )
+                evidence = {
+                    "resolved_entity_id": entity_id,
+                    "pronoun_resolution": pronoun,
+                    "resolution_basis": dict(resolution_basis),
+                    "text_evidence": pronoun,
+                }
+                if same_caption:
+                    evidence.update({
+                        "antecedent_caption_id": caption_id,
+                        "antecedent_caption_text": text,
+                        "antecedent_caption_span": _candidate_span_in_clause(antecedent_clause, term),
+                        "antecedent_clause_text": antecedent_clause["text"],
+                        "antecedent_clause_span": antecedent_clause,
+                        "pronoun_span": {"start": pronoun_start, "end": pronoun_end, "text": pronoun},
+                    })
+                else:
+                    evidence.update({
+                        "pronoun_resolution": pronoun,
+                        "upstream_caption_id": upstream_caption_id,
+                        "upstream_caption_text": upstream_text,
+                        "upstream_caption_span": _candidate_span_in_clause(antecedent_clause, term),
+                        "antecedent_clause_text": antecedent_clause["text"],
+                        "antecedent_clause_span": antecedent_clause,
+                    })
+                pronoun_evidence.append(evidence)
+                if entity_id not in resolved_entity_ids and not any(item.entity_id == entity_id for item in must_show):
+                    must_show.append(_entity_evidence(
+                        entity_id,
+                        natural_language=term if kind == "group" else _entity_display(entity_id, maps),
+                        reason="pronoun_resolution",
+                        evidence=evidence,
+                    ))
+                    resolved_entity_ids.add(entity_id)
 
         must_show_ids = {item.entity_id for item in must_show}
         may_show = tuple(
@@ -631,9 +1180,9 @@ def enrich_captions_to_contracts(
         location_id = scene_eid or _first_scene(required)
         location = _entity_display(location_id, maps) if location_id else beat_context.get("location") or section.get("chapterTitle", "")
         actions = _split_sentences(beat_context.get("description", "") or text)[:3] or [text]
-        visible_character_ids = [item.entity_id for item in must_show if _entity_kind(item.entity_id) == "char"]
-        pronoun_evidence = [item.to_dict()["evidence"] for item in must_show if item.reason == "pronoun_resolution"]
-
+        visible_character_ids = [
+            item.entity_id for item in must_show if _entity_kind(item.entity_id) in {"char", "group"}
+        ]
         contract = CaptionVisualContract(
             caption_id=caption_id,
             caption_text=text,
@@ -642,13 +1191,13 @@ def enrich_captions_to_contracts(
             source_beat_ids=(str(beat_context.get("beatId") or beat_context.get("id") or ""),) if beat else (),
             narrative_function=narrative_function,
             subjects=tuple(
-                item.natural_language for item in must_show if _entity_kind(item.entity_id) == "char"
+                item.natural_language for item in must_show if _entity_kind(item.entity_id) in {"char", "group"}
             ),
             actions=tuple(actions),
             location=str(location),
             time_context=str(beat_context.get("time_context") or section.get("time_context") or ""),
             story_objects=tuple(
-                item.natural_language for item in must_show if _entity_kind(item.entity_id) != "char"
+                item.natural_language for item in must_show if _entity_kind(item.entity_id) not in {"char", "group"}
             ),
             scene_state={
                 "visible_character_ids": visible_character_ids,
@@ -665,11 +1214,19 @@ def enrich_captions_to_contracts(
         )
         contract = replace(contract, semantic_signature=contract.content_sha256())
         results.append(contract)
-        prior_named_characters.extend(
-            (caption_id, text, entity_id)
-            for entity_id, (kind, _term) in caption_found.items()
-            if kind == "char" and _is_person_referent(entity_id)
-        )
+        if caption_found or local_groups or local_roles:
+            prior_caption_entities.append((
+                caption_id,
+                section_id,
+                text,
+                tuple(
+                    [
+                        (entity_id, kind, term)
+                        for entity_id, (kind, term) in caption_found.items()
+                    ]
+                    + [(group_id, "group", term) for group_id, term, _evidence in local_groups]
+                ),
+            ))
     return results
 
 
@@ -808,6 +1365,98 @@ def _build_project_entity_name_maps(profile: Mapping[str, Any]) -> list[dict[str
     return [char, obj, scene]
 
 
+def _profile_marker_gender(
+    anchor: Mapping[str, Any],
+    *,
+    anchor_id: str,
+    profile_sha256: str,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Extract one unambiguous lexical gender marker from a locked character anchor."""
+
+    matches: list[tuple[str, str, str, int]] = []
+    for field in ("name", "prompt_subject"):
+        value = anchor.get(field)
+        if not isinstance(value, str):
+            continue
+        for gender, markers in _PROFILE_GENDER_MARKERS.items():
+            for marker in markers:
+                start = value.find(marker)
+                if start >= 0:
+                    matches.append((gender, field, marker, start))
+    invariants = anchor.get("invariants", [])
+    if isinstance(invariants, list):
+        for index, value in enumerate(invariants):
+            if not isinstance(value, str):
+                continue
+            for gender, markers in _PROFILE_GENDER_MARKERS.items():
+                for marker in markers:
+                    start = value.find(marker)
+                    if start >= 0:
+                        matches.append((gender, f"invariants[{index}]", marker, start))
+    genders = {gender for gender, _field, _marker, _start in matches}
+    if len(genders) > 1:
+        raise CaptionContractError(f"anchor {anchor_id} has contradictory gender markers")
+    if not matches:
+        return None, None
+    gender, field, marker, start = matches[0]
+    return gender, {
+        "anchor_id": anchor_id,
+        "field": field,
+        "marker": marker,
+        "profile_sha256": profile_sha256,
+        "span": {"start": start, "end": start + len(marker), "text": marker},
+    }
+
+
+def _build_project_entity_metadata(
+    profile: Mapping[str, Any],
+    *,
+    profile_sha256: str = "",
+) -> dict[str, dict[str, Any]]:
+    """Return explicit fields or auditable profile markers trusted for pronouns."""
+
+    metadata: dict[str, dict[str, Any]] = {}
+    for anchors, id_keys, is_character_anchor in (
+        (profile.get("character_anchors", []) or [], ("character_id", "anchor_id"), True),
+        (profile.get("object_anchors", []) or [], ("object_id", "anchor_id"), False),
+        (profile.get("scene_anchors", []) or [], ("scene_id", "anchor_id"), False),
+    ):
+        for anchor in anchors:
+            if not isinstance(anchor, Mapping):
+                continue
+            entity_id = next((anchor.get(key) for key in id_keys if anchor.get(key)), None)
+            values: dict[str, Any] = {
+                key: anchor[key]
+                for key in ("entity_type", "gender")
+                if isinstance(anchor.get(key), str) and anchor[key].strip()
+            }
+            if entity_id and is_character_anchor:
+                anchor_id = str(anchor.get("anchor_id") or entity_id)
+                marker_gender, marker_evidence = _profile_marker_gender(
+                    anchor,
+                    anchor_id=anchor_id,
+                    profile_sha256=profile_sha256,
+                )
+                declared_gender = values.get("gender")
+                if declared_gender and marker_gender and declared_gender != marker_gender:
+                    raise CaptionContractError(
+                        f"anchor {anchor_id} structured gender conflicts with its profile marker"
+                    )
+                if declared_gender:
+                    values["gender_evidence"] = {
+                        "anchor_id": anchor_id,
+                        "field": "gender",
+                        "profile_sha256": profile_sha256,
+                        "value": declared_gender,
+                    }
+                elif marker_gender and marker_evidence:
+                    values["gender"] = marker_gender
+                    values["gender_evidence"] = marker_evidence
+            if entity_id and values:
+                metadata[str(entity_id)] = values
+    return metadata
+
+
 def build_caption_visual_contract_from_project(
     root: str | Path,
     *,
@@ -838,7 +1487,9 @@ def build_caption_visual_contract_from_project(
     captions = list(captions_raw.values()) if isinstance(captions_raw, dict) else list(captions_raw)
     if not isinstance(captions, list) or not captions:
         raise CaptionContractError("CAPTION_BINDINGS.json contains no captions")
+    profile_path = root / _PROJECT_VISUAL_PROFILE_RELATIVE
     profile = _load_project_json(root, _PROJECT_VISUAL_PROFILE_RELATIVE)
+    profile_sha256 = hashlib.sha256(profile_path.read_bytes()).hexdigest()
     name_maps = _build_project_entity_name_maps(profile)
     if not release_id:
         release_id = cap_doc.get("release_id") or package.get("release_id") or "unknown"
@@ -847,6 +1498,7 @@ def build_caption_visual_contract_from_project(
         beats=beats,
         captions=captions,
         entity_name_maps=name_maps,
+        entity_metadata=_build_project_entity_metadata(profile, profile_sha256=profile_sha256),
     )
     document = build_caption_visual_contract_document(release_id=release_id, contracts=contracts)
     if validate_only:

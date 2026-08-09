@@ -159,13 +159,8 @@ def classify_proposition(
         raise PropositionClassifierError(
             f"shot {shot_id} has no caption text, so no visual proposition can be derived"
         )
-    entities = [str(item).strip() for item in source_entities if str(item).strip()]
-    if not entities:
-        raise PropositionClassifierError(
-            f"shot {shot_id} source beats declare no requiredEntities; refusing to guess a subject"
-        )
-
     caption_blob = "".join(captions)
+    entities = [str(item).strip() for item in source_entities if str(item).strip()]
     search_blob = caption_blob + _normalize(description)
     characters = _anchor_terms(character_anchors or {})
     scenes = _anchor_terms(scene_anchors or {})
@@ -190,6 +185,11 @@ def classify_proposition(
             entity_visibility=(),
             surrogate_objects=(),
             source_terms=tuple(entities),
+        )
+
+    if not entities:
+        raise PropositionClassifierError(
+            f"shot {shot_id} has no caption-grounded visible entity; refusing to guess a subject"
         )
 
     anchor_hits = _matched(search_blob, characters) + _matched(search_blob, objects)

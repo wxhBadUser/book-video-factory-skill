@@ -197,15 +197,19 @@ def build_imagegen_prompt(
         scene_mode = str(shot.get("scene_mode", "")).strip()
         if not narration:
             raise VisualContractError("literary oil shot requires narration_text")
-        if not isinstance(entities, list) or not entities or not all(
+        if not isinstance(entities, list) or not all(
             isinstance(entity, str) and entity.strip() for entity in entities
         ):
             raise VisualContractError(
-                "literary oil shot requires nonempty semantic_entities"
+                "literary oil shot requires semantic_entities to be a string list"
             )
         if scene_mode not in SCENE_MODE_GUIDANCE:
             raise VisualContractError(
                 "literary oil shot requires a supported scene_mode"
+            )
+        if not entities and scene_mode != "landscape":
+            raise VisualContractError(
+                "literary oil shot requires nonempty semantic_entities outside a landscape shot"
             )
         paint = _required_mapping(
             art_direction,

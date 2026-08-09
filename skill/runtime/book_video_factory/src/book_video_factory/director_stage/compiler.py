@@ -402,14 +402,21 @@ def _task_for_scene(
             if item.natural_language and item.natural_language not in must_not_show:
                 must_not_show.append(item.natural_language)
         contract_sha_inputs.append(contract.content_sha256())
+    abstract_contract_without_subject = bool(scene_contracts) and not must_show and all(
+        contract.narrative_function in {"theory", "author_background", "transition", "closing"}
+        for contract in scene_contracts
+    )
     caption_visual_contract_sha256 = (
         hashlib.sha256("|".join(sorted(contract_sha_inputs)).encode("utf-8")).hexdigest()
         if contract_sha_inputs else None
     )
-    anchor_refs = list(scene.get("anchorRefs", []))
+    anchor_refs = [] if abstract_contract_without_subject else list(scene.get("anchorRefs", []))
     character_anchors = [continuity[item] for item in anchor_refs if item in continuity]
     identity_tasks = sorted({front_tasks[item] for item in anchor_refs if item in front_tasks})
-    required = list(scene.get("requiredEntities", []))
+    # A v2 Caption Visual Contract is authoritative over the Beat template.
+    # In particular, an abstract/theory caption with no text-grounded entity
+    # must not regain a Beat person as the proposition or prompt subject.
+    required = list(must_show) if scene_contracts else list(scene.get("requiredEntities", []))
     forbidden = [*profile.get("forbidden_traits", []), *scene.get("forbiddenEntities", [])]
     light = profile["lighting_profiles"][0]
     beat_ids = [
@@ -445,7 +452,7 @@ def _task_for_scene(
         "narration_text": caption_text,
         "semantic_entities": required,
         "forbidden_entities": forbidden,
-        "scene_mode": _scene_mode(scene),
+        "scene_mode": "landscape" if abstract_contract_without_subject else _scene_mode(scene),
         "lighting_intent": {
             "key": str(light["key"]),
             "fill": str(light["fill"]),

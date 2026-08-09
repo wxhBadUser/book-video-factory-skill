@@ -15,6 +15,7 @@ matched its caption. This file pins the wiring:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import unittest
@@ -22,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from book_video_factory.director_stage.compiler import _task_for_scene
+from book_video_factory.semantic_alignment.caption_contract import CaptionVisualContract
 from book_video_factory.semantic_alignment.models import VisualProposition
 from book_video_factory.semantic_alignment.prompting import (
     PromptBindingError,
@@ -176,6 +178,42 @@ class DirectorTaskSemanticBindingTests(unittest.TestCase):
             captionIds=["c2"],
         )
         self.assertIn("author_background", task["prompt"])
+
+    def test_theory_contract_drops_beat_person_from_task_subject_inputs(self) -> None:
+        """A Beat-only person cannot bypass an abstract Caption Visual Contract."""
+        text = "这本书真正可怕的地方，是命运对好人反复的碾压。"
+        contract = CaptionVisualContract(
+            caption_id="c3",
+            caption_text=text,
+            caption_text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            section_id="S1",
+            source_beat_ids=("B-001",),
+            narrative_function="theory",
+            scene_state={
+                "visible_character_ids": [],
+                "location_id": "",
+                "time_context": "",
+                "action_state": text,
+                "continuity_state": {"pronoun_resolutions": []},
+            },
+            visual_mode="symbolic_or_abstract",
+        )
+        task = _task_for_scene(
+            scene(
+                captionIds=["c3"],
+                description="阴天的田野",
+                requiredEntities=["福贵"],
+                narrativeFunction="theory",
+            ),
+            PROFILE,
+            VISUAL_ASSETS,
+            {"c3": {"text": text}},
+            CANVAS,
+            caption_contracts={"c3": contract},
+        )
+        self.assertEqual(task["required_entities"], [])
+        self.assertEqual(task["visual_proposition"]["mode"], "Abstract")
+        self.assertNotIn("福贵", task["prompt"])
 
     def test_two_identical_scenes_produce_identical_tasks(self) -> None:
         first = self.build()
