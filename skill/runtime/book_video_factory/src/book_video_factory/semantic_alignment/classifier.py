@@ -54,6 +54,7 @@ DEFAULT_LIGHTING = "DUSK_SOFT"
 DEFAULT_PALETTE = "EARTH_DUSK"
 
 ABSTRACT_ALLOWED_NARRATIVE_FUNCTIONS = {
+    "opening",
     "theory",
     "author_background",
     "transition",
@@ -262,25 +263,37 @@ def classify_proposition(
             source_terms=(),
         )
     if mode_hint == "literal" and not entities:
-        if narrative_function == "opening" and _QUESTION_RE.search(caption_blob):
-            return VisualProposition(
-                mode="Abstract",
-                subject="纯气氛，无叙事指称",
-                action="",
-                environment="",
-                mood="悬置、留白",
-                lighting=lighting,
-                palette=palette,
-                rationale_text=(
-                    f"Opening Caption「{_excerpt(caption_blob)}」是明确设问且没有 must_show；"
-                    "画面不得继承 Beat 人物，只提供开场悬念气氛"
-                ),
-                entity_visibility=(),
-                surrogate_objects=(),
-                source_terms=(),
-            )
         raise PropositionClassifierError(
             f"shot {shot_id} declares Literal but its Caption Contract must_show set is empty"
+        )
+
+    if mode_hint == "literal":
+        return VisualProposition(
+            mode="Literal",
+            subject="、".join(entities),
+            action=_normalize(caption_blob),
+            environment=(
+                _matched(search_blob, scenes)[0][2]
+                if _matched(search_blob, scenes)
+                else (_normalize(description).strip() or "与原著时代一致的环境")
+            ),
+            mood="随旁白语气，克制不夸张",
+            lighting=lighting,
+            palette=palette,
+            rationale_text=(
+                f"Caption Contract declares visual_mode=literal; every must_show entity is visible "
+                f"for 「{_excerpt(caption_blob)}」"
+            ),
+            entity_visibility=tuple(
+                EntityVisibility(
+                    entity_id=entity,
+                    natural_language=entity,
+                    must_be_visible=True,
+                )
+                for entity in entities
+            ),
+            surrogate_objects=(),
+            source_terms=tuple(captions),
         )
 
     is_question = bool(_QUESTION_RE.search(caption_blob))

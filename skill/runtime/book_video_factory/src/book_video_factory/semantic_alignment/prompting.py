@@ -36,6 +36,10 @@ import re
 from typing import Any, Iterable, Mapping, Sequence
 
 from book_video_factory.semantic_alignment.caption_grouping import NARRATIVE_FUNCTIONS
+from book_video_factory.semantic_alignment.contract_bindings import (
+    ContractBindingError,
+    normalize_contract_bindings,
+)
 from book_video_factory.semantic_alignment.models import VisualProposition
 
 PROMPT_BLOCK_ORDER: tuple[str, ...] = (
@@ -141,6 +145,7 @@ def build_aligned_prompt_blocks(
         raise PromptSpecError(f"unknown proposition mode {proposition.mode!r}")
 
     visible = [item for item in proposition.entity_visibility if item.must_be_visible]
+    contract_must_show = [str(item).strip() for item in must_show if str(item).strip()]
     if proposition.mode == "Literal" and not visible:
         raise PromptSpecError(
             "Literal proposition must declare at least one entity that has to be visible"
@@ -148,6 +153,20 @@ def build_aligned_prompt_blocks(
     if proposition.mode == "Abstract" and visible:
         raise PromptSpecError(
             "Abstract proposition may not require any narrative referent to be visible"
+        )
+    if proposition.mode == "Abstract" and contract_must_show:
+        raise PromptSpecError("Abstract proposition cannot satisfy a nonempty must_show contract")
+    visible_terms = {
+        term
+        for item in visible
+        for term in (str(item.entity_id).strip(), str(item.natural_language).strip())
+        if term
+    }
+    missing_visible = [item for item in contract_must_show if item not in visible_terms]
+    if proposition.mode == "Literal" and missing_visible:
+        raise PromptSpecError(
+            "Literal proposition dropped Caption Contract must_show entities: "
+            + ", ".join(missing_visible)
         )
     if proposition.mode == "Symbolic" and not proposition.surrogate_objects:
         raise PromptSpecError("Symbolic proposition must name at least one surrogate object")
@@ -181,7 +200,6 @@ def build_aligned_prompt_blocks(
             for item in visible
         ) or "; ".join(proposition.surrogate_objects)
         required_visible = f"Must be clearly recognisable in frame: {described}."
-    contract_must_show = [str(item).strip() for item in must_show if str(item).strip()]
     if contract_must_show:
         required_visible += (
             " Per the Caption Visual Contract, this frame MUST show: "
@@ -204,7 +222,7 @@ def build_aligned_prompt_blocks(
     blocks.append(
         "[6/9 FORBIDDEN] Must not appear or become primary: "
         + (", ".join(forbidden) if forbidden else "no shot-specific prohibitions")
-        + ". Never include text, captions, logo, watermark, UI or border."
+        + ". Never include text, captions, title, logo, watermark, UI or border."
     )
 
     blocks.append(
@@ -289,11 +307,12 @@ def compute_prompt_binding(
         if not isinstance(caption_group_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", caption_group_sha256):
             raise PromptSpecError("caption_group_sha256 must be a 64-char hex digest")
         bound_ids = [str(item.get("caption_id", "")).strip() for item in contract_bindings]
-        bound_hashes = [str(item.get("caption_visual_contract_sha256", "")) for item in contract_bindings]
-        if bound_ids != ids or len(set(bound_ids)) != len(bound_ids):
-            raise PromptSpecError("caption contract bindings must exactly match ordered caption ids")
-        if any(not re.fullmatch(r"[0-9a-f]{64}", item) for item in bound_hashes):
-            raise PromptSpecError("caption contract bindings require 64-char content hashes")
+        try:
+            contract_bindings = normalize_contract_bindings(
+                contract_bindings, expected_caption_ids=ids
+            )
+        except ContractBindingError as error:
+            raise PromptSpecError(str(error)) from error
         binding.update({
             "group_id": group_id,
             "caption_contract_bindings": contract_bindings,
@@ -312,6 +331,10 @@ def verify_prompt_binding(
     group_id: str | None = None,
     caption_contract_bindings: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]] | None = None,
     caption_group_sha256: str | None = None,
+    caption_ids: Sequence[str] | None = None,
+    scene_id: str | None = None,
+    shot_id: str | None = None,
+    beat_ids: Sequence[str] | None = None,
 ) -> None:
     """Fail closed when the caption, proposition, prompt, or contract drifted.
 
@@ -344,6 +367,15 @@ def verify_prompt_binding(
             f"prompt body changed since it was bound "
             f"(binding {binding['prompt_sha256'][:12]}, actual {expected_prompt[:12]})"
         )
+    expected_fields = {
+        "caption_ids": list(caption_ids) if caption_ids is not None else None,
+        "scene_id": scene_id,
+        "shot_id": shot_id,
+        "beat_ids": list(beat_ids) if beat_ids is not None else None,
+    }
+    for field, expected in expected_fields.items():
+        if expected is not None and binding.get(field) != expected:
+            raise PromptBindingError(f"prompt binding {field} changed since it was built")
     if caption_visual_contract_sha256 is not None:
         bound = binding.get("caption_visual_contract_sha256")
         if bound != caption_visual_contract_sha256:
@@ -354,6 +386,22 @@ def verify_prompt_binding(
     has_group_fields = [field in binding for field in _GROUP_BINDING_FIELDS]
     if any(has_group_fields) and not all(has_group_fields):
         raise PromptBindingError("prompt binding has a partial caption group binding")
+    if all(has_group_fields):
+        missing_expectations = [
+            name
+            for name, value in {
+                "caption_ids": caption_ids,
+                "scene_id": scene_id,
+                "shot_id": shot_id,
+                "beat_ids": beat_ids,
+            }.items()
+            if value is None
+        ]
+        if missing_expectations:
+            raise PromptBindingError(
+                "current caption group verification requires expected "
+                + ", ".join(missing_expectations)
+            )
     if group_id is not None or caption_contract_bindings is not None or caption_group_sha256 is not None:
         if not all(has_group_fields):
             raise PromptBindingError("prompt binding is missing caption group fields")

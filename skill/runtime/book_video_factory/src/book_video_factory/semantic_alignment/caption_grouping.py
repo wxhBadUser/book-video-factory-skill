@@ -373,7 +373,7 @@ def _image_group(
         contract_bindings=tuple(
             {
                 "caption_id": str(item.get("caption_id") or item.get("id") or ""),
-                "caption_visual_contract_sha256": str(contract.content_sha256()),
+                "content_sha256": str(contract.content_sha256()),
             }
             for item, contract in members
         ),

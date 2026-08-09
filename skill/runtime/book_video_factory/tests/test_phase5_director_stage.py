@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import copy
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
+import phase1_fixture_factory
+import phase2_fixture_factory
+from phase1_fixture_factory import build_phase1_inputs, build_phase1_originality
 from phase2_fixture_factory import write_json
 from phase4_fixture_factory import (
     build_approved_phase3_project,
@@ -81,7 +85,21 @@ class DirectorStageTests(unittest.TestCase):
             _validate_storyboard([scene], audio_meta)
 
     def prepare(self, base: Path) -> Path:
-        project = build_approved_phase3_project(base)
+        inputs = copy.deepcopy(build_phase1_inputs())
+        old_opening = "一个人连续失败八十四天，还会不会再出海？"
+        new_opening = "圣地亚哥连续失败八十四天，圣地亚哥还会不会再出海？"
+        script = inputs["script"]
+        for version_name in ("release_version", "performance_version", "audit_version"):
+            version = script[version_name]
+            for section in version["sections"]:
+                if section["section_id"] == "S01":
+                    section["text"] = section["text"].replace(old_opening, new_opening)
+            version["text"] = "".join(section["text"] for section in version["sections"])
+        script["script_text"] = script["release_version"]["text"]
+        inputs["originality"] = build_phase1_originality(script["release_version"]["text"])
+        with mock.patch.object(phase1_fixture_factory, "build_phase1_inputs", return_value=inputs), \
+             mock.patch.object(phase2_fixture_factory, "build_phase1_inputs", return_value=inputs):
+            project = build_approved_phase3_project(base)
         input_path, lexicon_path = write_phase4_inputs(project)
         generate_audio_stage(project, input_path, lexicon_path, runner=fake_hbg_audio_runner)
         plan_path = project / "04_audio/STORYBOARD_AUDIO_PLAN.json"

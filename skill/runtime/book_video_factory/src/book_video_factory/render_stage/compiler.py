@@ -209,13 +209,80 @@ def _copy(root: Path, workspace: Path, relative: str) -> Path:
     return target
 
 
+def _current_director_storyboard(root: Path) -> list[dict[str, Any]]:
+    timeline_path = root / "05_director/DIRECTOR_TIMELINE.json"
+    timeline = _load(timeline_path, "current Director timeline")
+    if timeline.get("schema_version") != "director-timeline.v1":
+        raise RenderStageError("current Director timeline schema is invalid")
+    scenes = timeline.get("scenes")
+    if not isinstance(scenes, list) or not scenes or timeline.get("scene_count") != len(scenes):
+        raise RenderStageError("current Director timeline scene set is invalid")
+    audio = _load(root / "audio_meta.json", "audio metadata")
+    body = audio.get("body")
+    opening = audio.get("opening")
+    if not isinstance(body, Mapping) or not isinstance(opening, Mapping):
+        raise RenderStageError("audio metadata has no body timeline")
+    if float(timeline.get("body_start", -1)) != float(opening.get("bodyStart", -2)) or float(
+        timeline.get("body_duration", -1)
+    ) != float(body.get("duration", -2)):
+        raise RenderStageError("current Director timeline is not bound to the audio timeline")
+    if timeline.get("audio_meta_sha256") is not None and timeline.get("audio_meta_sha256") != sha256_file(
+        root / "audio_meta.json"
+    ):
+        raise RenderStageError("current Director timeline audio metadata evidence is stale")
+
+    rendered: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for scene in scenes:
+        if not isinstance(scene, Mapping):
+            raise RenderStageError("current Director timeline contains an invalid scene")
+        scene_id = str(scene.get("scene_id", ""))
+        caption_ids = scene.get("caption_ids")
+        start = scene.get("start")
+        end = scene.get("end")
+        duration = scene.get("duration")
+        if (
+            not scene_id
+            or scene_id in seen
+            or not isinstance(caption_ids, list)
+            or not caption_ids
+            or isinstance(start, bool)
+            or not isinstance(start, (int, float))
+            or isinstance(end, bool)
+            or not isinstance(end, (int, float))
+            or isinstance(duration, bool)
+            or not isinstance(duration, (int, float))
+            or abs(float(end) - float(start) - float(duration)) > 0.002
+        ):
+            raise RenderStageError(f"current Director timeline scene is invalid: {scene_id or '?'}")
+        seen.add(scene_id)
+        rendered.append({
+            "id": scene_id,
+            "sourceBeatIds": list(scene.get("source_beat_ids", [])),
+            "chapter": int(scene.get("chapter", 0)),
+            "start": float(start),
+            "end": float(end),
+            "duration": float(duration),
+            "captionIds": [str(item) for item in caption_ids],
+            "cue": str(scene.get("narrative_cue", "")),
+            "description": str(scene.get("visual_description", "")),
+            "semanticRationale": str(scene.get("semantic_rationale", "")),
+            "requiredEntities": list(scene.get("required_entities", [])),
+            "forbiddenEntities": list(scene.get("forbidden_entities", [])),
+            "riskFlags": list(scene.get("risk_flags", [])),
+            "anchorRefs": list(scene.get("anchor_refs", [])),
+            "participants": dict(scene.get("participants", {})),
+            "motion": str(scene.get("motion", "hold")),
+            "generationMode": str(scene.get("generation_mode", "single")),
+        })
+    return rendered
+
+
 def _workspace_payloads(root: Path, render_input: Mapping[str, Any], manifest: Mapping[str, Any]) -> tuple[dict[str, bytes], list[str]]:
-    storyboard = json.loads((root / "STORYBOARD.json").read_text(encoding="utf-8"))
-    if not isinstance(storyboard, list) or not storyboard:
-        raise RenderStageError("final storyboard is missing")
+    storyboard = _current_director_storyboard(root)
     by_scene = {item["scene_id"]: item for item in manifest["assets"]}
     if set(by_scene) != {item.get("id") for item in storyboard}:
-        raise RenderStageError("scene assets and final storyboard differ")
+        raise RenderStageError("scene assets and current Director timeline differ")
     rendered_storyboard: list[dict[str, Any]] = []
     scene_paths: list[str] = []
     for scene in storyboard:
@@ -250,6 +317,7 @@ def _workspace_payloads(root: Path, render_input: Mapping[str, Any], manifest: M
         "PROJECT_SPEC.json": _pretty(spec),
         "STORYBOARD.json": _pretty(rendered_storyboard),
         "audio_meta.json": _pretty(audio),
+        "05_director/DIRECTOR_TIMELINE.json": (root / "05_director/DIRECTOR_TIMELINE.json").read_bytes(),
         "package.json": _pretty({
             "private": True,
             "scripts": {"render": f"npx --yes hyperframes@{render_input['hyperframes_version']} render"},
@@ -266,6 +334,9 @@ def _populate_workspace(
     payloads, scene_paths = _workspace_payloads(root, render_input, scene_manifest)
     for relative in ("SCRIPT_SOURCE.md", "SCRIPT.md", "CHARACTERS.md", "HBG_STYLE.json"):
         _copy(root, staging, relative)
+    caption_bindings = root / "04_audio/CAPTION_BINDINGS.json"
+    if caption_bindings.is_file() and not caption_bindings.is_symlink():
+        _copy(root, staging, "04_audio/CAPTION_BINDINGS.json")
     for relative in scene_paths:
         _copy(root, staging, relative)
     audio_meta = json.loads(payloads["audio_meta.json"])
@@ -276,6 +347,9 @@ def _populate_workspace(
         audio_meta.get("opening", {}).get("flash", {}).get("audio"),
         render_input["bgm_source"],
     ]
+    body_vtt = audio_meta.get("body", {}).get("vtt")
+    if isinstance(body_vtt, str) and body_vtt:
+        audio_paths.append(body_vtt)
     if include_preview and render_input["opening"]["preview_video"]:
         audio_paths.append(render_input["opening"]["preview_video"] )
     for relative in sorted({item for item in audio_paths if isinstance(item, str) and item}):

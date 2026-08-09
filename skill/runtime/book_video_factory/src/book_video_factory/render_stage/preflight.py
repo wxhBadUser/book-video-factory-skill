@@ -16,9 +16,11 @@ from book_video_factory.hbg_bridge.runner import repository_root
 from book_video_factory.hbg_bridge.shell import bash_executable, path_for_bash
 from book_video_factory.manifests import safe_project_output, sha256_file
 from book_video_factory.semantic_alignment.vision_review import (
+    CurrentVisionEvidence,
     MissingVisionEvidenceError,
     VisionReviewError,
     validate_review_decision,
+    verify_current_evidence,
 )
 from book_video_factory.semantic_alignment.caption_contract import (
     load_caption_visual_contract_document,
@@ -29,6 +31,10 @@ from book_video_factory.semantic_alignment.caption_grouping import (
 )
 from book_video_factory.semantic_alignment.models import VisualProposition
 from book_video_factory.semantic_alignment.prompting import PromptBindingError, verify_prompt_binding
+from book_video_factory.semantic_alignment.contract_bindings import (
+    ContractBindingError,
+    aggregate_contract_bindings_sha256,
+)
 from book_video_factory.semantic_alignment.vision_review.contracts import VisionEvidence
 from book_video_factory.semantic_alignment.vision_review.evidence import (
     StaleVisionEvidenceError,
@@ -81,6 +87,8 @@ def _scene_review_vision_blockers(
     decision_path: Path,
     assets_by_task: Mapping[str, Any] | None = None,
     root: Path | None = None,
+    *,
+    require_current: bool = False,
 ) -> list[str]:
     """Return the task ids whose scene review decision lacks a vision binding.
 
@@ -112,21 +120,16 @@ def _scene_review_vision_blockers(
     if not isinstance(decisions, list):
         raise RenderPreflightError("scene review decision has no decisions")
     blockers: list[str] = []
-    caption_prompt_by_task: Mapping[str, tuple[str, str]] | None = None
+    task_map: Mapping[str, Mapping[str, Any]] | None = None
     if assets_by_task is not None:
         search_root = root if root is not None else decision_path.parent.parent
         try:
             from book_video_factory.production_visuals.registry import _tasks as _load_tasks
 
             task_map = _load_tasks(search_root)
-            caption_prompt_by_task = {
-                str(tid): (str(t.get("caption_text", "")), str(t.get("prompt", "")))
-                for tid, t in task_map.items()
-                if isinstance(t, Mapping)
-            }
         except Exception:
-            # Cannot source the authoritative caption/prompt -> fail closed below.
-            caption_prompt_by_task = None
+            # Cannot source authoritative Group/Proposition/Prompt bindings.
+            task_map = None
     for item in decisions:
         if not isinstance(item, dict):
             raise RenderPreflightError("scene review decision item is invalid")
@@ -134,16 +137,86 @@ def _scene_review_vision_blockers(
         if not _REQUIRED_DECISION_FIELDS <= keys or not keys <= (_REQUIRED_DECISION_FIELDS | _OPTIONAL_DECISION_FIELDS):
             raise RenderPreflightError("scene review decision item fields are invalid")
         task_id = item.get("task_id")
+        evidence_payload = item.get("vision_evidence")
+        is_current = isinstance(evidence_payload, Mapping) and {
+            "caption_group_sha256", "proposition_sha256", "generation_provider",
+            "semantic_review_status", "reality_review_status", "identity_review_status",
+        } <= set(evidence_payload)
+        if require_current and not is_current:
+            blockers.append(task_id)
+            continue
+        if is_current:
+            if (
+                item.get("legacy_pass") is True
+                or item.get("semantic_review_status") != "pass"
+                or item.get("reality_review_status") != "pass"
+                or item.get("identity_review_status") not in {"pass", "not_applicable"}
+                or assets_by_task is None
+                or task_map is None
+            ):
+                blockers.append(task_id)
+                continue
+            task = task_map.get(str(task_id))
+            asset = assets_by_task.get(str(task_id))
+            if not isinstance(task, Mapping) or not isinstance(asset, Mapping):
+                blockers.append(task_id)
+                continue
+            identity_evidence = asset.get("identity_reference_evidence")
+            if not isinstance(identity_evidence, list):
+                blockers.append(task_id)
+                continue
+            expected_identity_tasks = [str(value) for value in task.get("identity_reference_task_ids", [])]
+            if [str(value.get("task_id", "")) for value in identity_evidence if isinstance(value, Mapping)] != expected_identity_tasks:
+                blockers.append(task_id)
+                continue
+            try:
+                search_root = root if root is not None else decision_path.parent.parent
+                image_path = safe_project_output(search_root, Path(str(asset.get("path", ""))))
+                identity_paths = tuple(
+                    safe_project_output(search_root, Path(str(value.get("path", ""))))
+                    for value in identity_evidence
+                )
+                proposition = VisualProposition.from_mapping(task.get("visual_proposition", {}))
+                evidence = CurrentVisionEvidence.from_mapping(evidence_payload)
+                if evidence.shot_id != str(task.get("shot_id", "")):
+                    raise StaleVisionEvidenceError("current review shot identity is stale")
+                if (
+                    item.get("semantic_review_status") != evidence.semantic_review_status
+                    or item.get("reality_review_status") != evidence.reality_review_status
+                    or item.get("identity_review_status") != evidence.identity_review_status
+                ):
+                    raise StaleVisionEvidenceError(
+                        "scene decision statuses do not match current pixel-review evidence"
+                    )
+                verify_current_evidence(
+                    evidence,
+                    image_path=image_path,
+                    caption_group_sha256=str(task.get("prompt_binding", {}).get("caption_group_sha256", "")),
+                    prompt_sha256=hashlib.sha256(str(task.get("prompt", "")).encode("utf-8")).hexdigest(),
+                    proposition_sha256=proposition.content_sha256(),
+                    visible_persistent_character_ids=tuple(str(value) for value in task.get("anchor_refs", [])),
+                    identity_reference_paths=identity_paths,
+                    generation_provider=str(asset.get("provider", "")),
+                    require_pass=True,
+                )
+            except (OSError, TypeError, ValueError, VisionReviewError, StaleVisionEvidenceError):
+                blockers.append(task_id)
+            continue
         try:
             validate_review_decision({**item, "shot_id": task_id}, require_pass=True)
         except (MissingVisionEvidenceError, VisionReviewError):
             blockers.append(task_id)
             continue
         if assets_by_task is not None:
-            evidence_payload = item.get("vision_evidence")
             asset_path = assets_by_task.get(task_id)
+            if isinstance(asset_path, Mapping):
+                asset_path = search_root / str(asset_path.get("path", ""))
             if isinstance(evidence_payload, Mapping) and asset_path is not None:
-                pair = caption_prompt_by_task.get(task_id) if caption_prompt_by_task is not None else None
+                task = task_map.get(str(task_id)) if task_map is not None else None
+                pair = (
+                    (str(task.get("caption_text", "")), str(task.get("prompt", "")))
+                    if isinstance(task, Mapping) else None
+                )
                 if pair is None:
                     # No authoritative caption/prompt available -> cannot prove
                     # the approval is current, so the render is blocked.
@@ -156,7 +229,7 @@ def _scene_review_vision_blockers(
                         caption_text=pair[0],
                         prompt_text=pair[1],
                     )
-                except StaleVisionEvidenceError:
+                except (StaleVisionEvidenceError, VisionReviewError):
                     blockers.append(task_id)
     return blockers
 
@@ -248,10 +321,10 @@ def _contract_currency_blockers(contract_path: Path, root: Path, release_id: str
             blockers.append(str(tid))
             continue
         bindings = [dict(item) for item in group.get("contract_bindings", [])]
-        expected_contract_sha = hashlib.sha256(
-            "|".join(str(item.get("caption_visual_contract_sha256", "")) for item in bindings).encode("utf-8")
-        ).hexdigest()
         try:
+            expected_contract_sha = aggregate_contract_bindings_sha256(
+                bindings, expected_caption_ids=[str(item) for item in task.get("caption_ids", [])]
+            )
             proposition = VisualProposition.from_mapping(task.get("visual_proposition", {}))
             verify_prompt_binding(
                 task.get("prompt_binding", {}),
@@ -262,8 +335,12 @@ def _contract_currency_blockers(contract_path: Path, root: Path, release_id: str
                 group_id=group_id,
                 caption_contract_bindings=bindings,
                 caption_group_sha256=str(group.get("caption_group_sha256", "")),
+                caption_ids=[str(item) for item in task.get("caption_ids", [])],
+                scene_id=str(task.get("scene_id", "")),
+                shot_id=str(task.get("shot_id", "")),
+                beat_ids=[str(item) for item in task.get("source_beat_ids", [])],
             )
-        except (PromptBindingError, TypeError, ValueError):
+        except (ContractBindingError, PromptBindingError, TypeError, ValueError):
             blockers.append(str(tid))
             continue
         if task.get("caption_visual_contract_sha256") != expected_contract_sha:
@@ -505,8 +582,13 @@ def preflight_render(
             task_id = asset.get("task_id")
             asset_rel = asset.get("path")
             if isinstance(task_id, str) and isinstance(asset_rel, str):
-                assets_by_task[task_id] = root / asset_rel
-    vision_blockers = _scene_review_vision_blockers(decision_path, assets_by_task)
+                assets_by_task[task_id] = asset
+    try:
+        vision_blockers = _scene_review_vision_blockers(
+            decision_path, assets_by_task, root, require_current=True
+        )
+    except RenderPreflightError as error:
+        vision_blockers = [f"vision_alignment:{error}"]
     # L5: remediation render requires persisted current v2 Contract + Grouping.
     contract_path = root / _CONTRACT_RELATIVE
     contract_blockers: list[str] = []

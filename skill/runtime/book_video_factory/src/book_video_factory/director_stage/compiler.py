@@ -28,9 +28,16 @@ from book_video_factory.semantic_alignment.validation import (
     validate_visual_proposition,
 )
 from book_video_factory.semantic_alignment.prompting import (
+    PromptBindingError,
     PromptSpecError,
     build_aligned_prompt_blocks,
     compute_prompt_binding,
+    verify_prompt_binding,
+)
+from book_video_factory.semantic_alignment.contract_bindings import (
+    ContractBindingError,
+    aggregate_contract_bindings_sha256,
+    normalize_contract_bindings,
 )
 from book_video_factory.visual_assets import build_imagegen_prompt
 
@@ -111,6 +118,99 @@ def _load_jsonl(path: Path, label: str) -> list[dict[str, Any]]:
     if not values:
         raise DirectorStageError(f"{label} is empty")
     return values
+
+
+def _validate_production_image_task(task: Mapping[str, Any]) -> None:
+    """Validate a current Group-bound task before it is emitted or consumed."""
+
+    required = (
+        "task_id",
+        "scene_id",
+        "shot_id",
+        "caption_ids",
+        "caption_text",
+        "caption_visual_contract_sha256",
+        "narrative_function",
+        "source_beat_ids",
+        "prompt",
+        "prompt_sha256",
+        "visual_proposition",
+        "prompt_binding",
+    )
+    missing = [field for field in required if field not in task]
+    if missing:
+        raise DirectorStageError(
+            "production image task is missing required fields: " + ", ".join(missing)
+        )
+    narrative_function = str(task.get("narrative_function", "")).strip()
+    if narrative_function not in NARRATIVE_FUNCTIONS:
+        raise DirectorStageError("production image task narrative_function is invalid")
+    caption_ids = [str(item).strip() for item in task.get("caption_ids", [])]
+    beat_ids = [str(item).strip() for item in task.get("source_beat_ids", [])]
+    if not caption_ids or any(not item for item in caption_ids):
+        raise DirectorStageError("production image task caption_ids are invalid")
+    if not beat_ids or any(not item for item in beat_ids):
+        raise DirectorStageError("production image task source_beat_ids are invalid")
+    raw_binding = task.get("prompt_binding")
+    if not isinstance(raw_binding, Mapping):
+        raise DirectorStageError("production image task prompt_binding is invalid")
+    raw_contract_bindings = raw_binding.get("caption_contract_bindings")
+    if not isinstance(raw_contract_bindings, list):
+        raise DirectorStageError(
+            "production image task caption contract bindings require content_sha256"
+        )
+    try:
+        contract_bindings = normalize_contract_bindings(
+            raw_contract_bindings, expected_caption_ids=caption_ids
+        )
+        aggregate_sha = aggregate_contract_bindings_sha256(
+            contract_bindings, expected_caption_ids=caption_ids
+        )
+    except ContractBindingError as error:
+        raise DirectorStageError(
+            f"production image task caption contract bindings require content_sha256: {error}"
+        ) from error
+    if task.get("caption_visual_contract_sha256") != aggregate_sha:
+        raise DirectorStageError("production image task contract aggregate SHA is stale")
+    proposition_raw = task.get("visual_proposition")
+    if not isinstance(proposition_raw, Mapping):
+        raise DirectorStageError("production image task visual_proposition is invalid")
+    proposition = VisualProposition.from_mapping(proposition_raw)
+    if proposition.mode not in {"Literal", "Symbolic", "Abstract"}:
+        raise DirectorStageError("production image task proposition mode is invalid")
+    if proposition.mode in {"Literal", "Symbolic"} and (
+        not proposition.action.strip() or not proposition.environment.strip()
+    ):
+        raise DirectorStageError(
+            f"production image task {proposition.mode} proposition requires action and environment"
+        )
+    if proposition.mode == "Literal" and not any(
+        item.must_be_visible for item in proposition.entity_visibility
+    ):
+        raise DirectorStageError(
+            "production image task Literal proposition requires visible entities"
+        )
+    if proposition.mode == "Symbolic" and not proposition.surrogate_objects:
+        raise DirectorStageError(
+            "production image task Symbolic proposition requires surrogate objects"
+        )
+    try:
+        verify_prompt_binding(
+            raw_binding,
+            caption_text=str(task.get("caption_text", "")),
+            proposition=proposition,
+            prompt=str(task.get("prompt", "")),
+            caption_visual_contract_sha256=aggregate_sha,
+            group_id=str(raw_binding.get("group_id", "")),
+            caption_contract_bindings=contract_bindings,
+            caption_group_sha256=str(raw_binding.get("caption_group_sha256", "")),
+            caption_ids=caption_ids,
+            scene_id=str(task.get("scene_id", "")),
+            shot_id=str(task.get("shot_id", "")),
+            beat_ids=beat_ids,
+        )
+    except (PromptBindingError, TypeError, ValueError) as error:
+        raise DirectorStageError(f"production image task prompt binding is stale: {error}") from error
 
 
 def _visual_art_direction(profile: Mapping[str, Any]) -> dict[str, Any]:
@@ -478,7 +578,6 @@ def _task_for_scene(
             raise DirectorStageError(f"scene {scene.get('id')} caption contract bindings do not exactly match its captions")
     must_show: list[str] = []
     must_not_show: list[str] = []
-    contract_sha_inputs: list[str] = []
     for contract in scene_contracts:
         for item in contract.must_show:
             if item.natural_language and item.natural_language not in must_show:
@@ -486,12 +585,19 @@ def _task_for_scene(
         for item in contract.must_not_show_as_primary:
             if item.natural_language and item.natural_language not in must_not_show:
                 must_not_show.append(item.natural_language)
-        contract_sha_inputs.append(contract.content_sha256())
     contract_without_subject = bool(scene_contracts) and not must_show
-    caption_visual_contract_sha256 = (
-        hashlib.sha256("|".join(sorted(contract_sha_inputs)).encode("utf-8")).hexdigest()
-        if contract_sha_inputs else None
-    )
+    caption_visual_contract_sha256: str | None = None
+    if caption_group is not None:
+        try:
+            caption_visual_contract_sha256 = aggregate_contract_bindings_sha256(
+                group_bindings, expected_caption_ids=caption_ids
+            )
+        except ContractBindingError as error:
+            raise DirectorStageError(f"scene {scene.get('id')} has invalid contract bindings: {error}") from error
+    elif scene_contracts:
+        raise DirectorStageError(
+            f"scene {scene.get('id')} has Caption Contracts but no exact Caption Group binding"
+        )
     anchor_refs = (
         _contract_anchor_refs(scene, scene_contracts, continuity, front_tasks)
         if scene_contracts
@@ -516,11 +622,11 @@ def _task_for_scene(
         )
     narrative_function = _scene_narrative_function(scene)
     visual_modes = {contract.visual_mode for contract in scene_contracts}
-    if len(visual_modes) != 1:
+    if scene_contracts and len(visual_modes) != 1:
         raise DirectorStageError(
             f"scene {scene.get('id')} Caption Contracts disagree on visual_mode: {sorted(visual_modes)}"
         )
-    visual_mode = next(iter(visual_modes))
+    visual_mode = next(iter(visual_modes)) if visual_modes else ""
     symbolic_mapping = (
         _approved_symbolic_mapping(profile, caption_texts)
         if visual_mode in {"symbolic", "symbolic_or_abstract"}
@@ -607,6 +713,7 @@ def _task_for_scene(
         "schema_version": "production-image-task.v1",
         "task_id": task_id,
         "scene_id": scene["id"],
+        "shot_id": shot["shot_id"],
         "release_id": profile["release_id"],
         "generation_lane": "host-imagegen",
         "generation_mode": generation_mode,
@@ -691,6 +798,7 @@ def _scene_for_caption_group(
     group: Mapping[str, Any],
     captions: Mapping[str, Mapping[str, Any]],
     upstream_by_caption: Mapping[str, Mapping[str, Any]],
+    caption_contracts: Mapping[str, Any],
 ) -> dict[str, Any]:
     caption_ids = [str(item) for item in group.get("caption_ids", [])]
     group_id = str(group.get("group_id", ""))
@@ -727,10 +835,10 @@ def _scene_for_caption_group(
         raise DirectorStageError(f"caption group {group_id} time window is stale")
     risk_flags = ordered_union("riskFlags")
     allowed = list(dict.fromkeys(
-        str(item)
-        for scene in evidence
-        for item in scene.get("participants", {}).get("allowed", [])
-        if str(item).strip()
+        str(character_id)
+        for caption_id in caption_ids
+        for character_id in caption_contracts[caption_id].scene_state.get("visible_character_ids", [])
+        if str(character_id).strip()
     ))
     forbidden_participants = list(dict.fromkeys(
         str(item)
@@ -756,7 +864,12 @@ def _scene_for_caption_group(
         "forbiddenEntities": ordered_union("forbiddenEntities"),
         "riskFlags": risk_flags,
         "anchorRefs": ordered_union("anchorRefs"),
-        "participants": {"allowed": allowed, "forbidden": forbidden_participants},
+        "participants": {
+            "count": len(allowed),
+            "mode": "environmental" if not allowed else ("single_character" if len(allowed) == 1 else "multi_character"),
+            "allowed": allowed,
+            "forbidden": forbidden_participants,
+        },
         "motion": str(evidence[0]["motion"]),
         "generationMode": "single" if risk_flags else str(evidence[0].get("generationMode", "single")),
         "narrativeFunction": str(group.get("narrative_function", "")),
@@ -838,7 +951,7 @@ def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
                 raise DirectorStageError(f"caption {key} appears in more than one upstream storyboard scene")
             upstream_by_caption[key] = upstream_scene
     group_scenes = [
-        _scene_for_caption_group(group, captions, upstream_by_caption)
+        _scene_for_caption_group(group, captions, upstream_by_caption, caption_contracts)
         for group in groups
     ]
     scenes: list[dict[str, Any]] = []
@@ -890,6 +1003,7 @@ def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
             caption_contracts=caption_contracts,
             caption_group=scene_group,
         )
+        _validate_production_image_task(task)
         tasks.append(task)
         used_group_ids.add(group_id)
         vp = task.get("visual_proposition") or {}

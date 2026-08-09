@@ -14,9 +14,13 @@ a drifted image/caption/prompt hash, or a missing provider (which surfaces
 from __future__ import annotations
 
 from .contracts import (
+    IDENTITY_REVIEW_STATUSES,
     PARITY_VERDICTS,
     PASSING_VERDICTS,
     PROVIDER_VERIFICATION_KEYS,
+    REVIEW_STATUSES,
+    CurrentReviewResult,
+    CurrentVisionEvidence,
     MissingVisionEvidenceError,
     ParityResult,
     StaleVisionEvidenceError,
@@ -26,12 +30,16 @@ from .contracts import (
     VisionReviewError,
     register_provider_key,
 )
-from .evaluator import review_shot
+from .evaluator import review_current_shot, review_shot
 from .evidence import (
+    CURRENT_SCHEMA_VERSION,
     SCHEMA_VERSION,
+    build_current_vision_evidence_document,
     build_vision_evidence_document,
+    load_current_vision_evidence_document,
     load_vision_evidence_document,
     validate_review_decision,
+    verify_current_evidence,
     verify_evidence_current,
 )
 from .provider import (
@@ -51,7 +59,10 @@ from .provider import (
 __all__ = [
     "PARITY_VERDICTS",
     "PASSING_VERDICTS",
+    "REVIEW_STATUSES",
+    "IDENTITY_REVIEW_STATUSES",
     "SCHEMA_VERSION",
+    "CURRENT_SCHEMA_VERSION",
     "VISION_PROVIDER_ALLOWLIST",
     "VISION_REVIEW_PROVIDER_RELATIVE",
     "VISION_REVIEW_PROVIDER_SCHEMA",
@@ -65,16 +76,22 @@ __all__ = [
     "register_provider_key",
     "register_claude_provider",
     "ParityResult",
+    "CurrentReviewResult",
     "VisionEvidence",
+    "CurrentVisionEvidence",
     "VisionReviewError",
     "MissingVisionEvidenceError",
     "StaleVisionEvidenceError",
     "VisionProviderError",
     "UntrustedProviderError",
     "build_vision_evidence_document",
+    "build_current_vision_evidence_document",
     "load_vision_evidence_document",
+    "load_current_vision_evidence_document",
     "review_shot",
+    "review_current_shot",
     "validate_review_decision",
     "validate_vision_provider",
     "verify_evidence_current",
+    "verify_current_evidence",
 ]

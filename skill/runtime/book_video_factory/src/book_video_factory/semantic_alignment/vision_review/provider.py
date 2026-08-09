@@ -25,10 +25,12 @@ from pathlib import Path
 from .contracts import (
     PARITY_VERDICTS,
     PROVIDER_VERIFICATION_KEYS,
+    CurrentReviewResult,
     ParityResult,
     UntrustedProviderError,
     VisionProviderError,
     VisionReviewError,
+    _current_evidence_signature,
     _evidence_signature,
     register_provider_key,
 )
@@ -138,6 +140,14 @@ class BaseVisionProvider(abc.ABC):
             key=key,
         )
 
+    def _sign_current_evidence(self, **fields: object) -> str:
+        key = self.signing_secret or PROVIDER_VERIFICATION_KEYS.get(self.name, "")
+        if not key:
+            raise VisionProviderError(
+                f"provider {self.name!r} has no signing secret; it cannot mint current evidence"
+            )
+        return _current_evidence_signature(key=key, **fields)
+
     def review(self, *, image_bytes: bytes, caption_text: str, prompt_text: str) -> ParityResult:
         if not isinstance(image_bytes, (bytes, bytearray)) or len(image_bytes) == 0:
             raise VisionProviderError(
@@ -159,6 +169,51 @@ class BaseVisionProvider(abc.ABC):
                 f"provider {self.name!r} returned unknown verdict {result.verdict!r}"
             )
         return result
+
+    def review_current(
+        self,
+        *,
+        image_bytes: bytes,
+        caption_group_text: str,
+        proposition_text: str,
+        prompt_text: str,
+        identity_reference_bytes: tuple[bytes, ...],
+    ) -> CurrentReviewResult:
+        if not isinstance(image_bytes, (bytes, bytearray)) or not image_bytes:
+            raise VisionProviderError("current vision review requires nonempty scene image pixels")
+        if not str(caption_group_text).strip():
+            raise VisionProviderError("current vision review requires all Caption Group text")
+        if not str(proposition_text).strip():
+            raise VisionProviderError("current vision review requires the Visual Proposition")
+        if not str(prompt_text).strip():
+            raise VisionProviderError("current vision review requires the bound Prompt")
+        if any(not isinstance(payload, (bytes, bytearray)) or not payload for payload in identity_reference_bytes):
+            raise VisionProviderError("current vision review requires nonempty identity-reference pixels")
+        result = self._review_current(
+            image_bytes=bytes(image_bytes),
+            caption_group_text=str(caption_group_text),
+            proposition_text=str(proposition_text),
+            prompt_text=str(prompt_text),
+            identity_reference_bytes=tuple(bytes(payload) for payload in identity_reference_bytes),
+        )
+        if not isinstance(result, CurrentReviewResult):
+            raise VisionProviderError(
+                f"provider {self.name!r} did not return a CurrentReviewResult"
+            )
+        return result
+
+    def _review_current(
+        self,
+        *,
+        image_bytes: bytes,
+        caption_group_text: str,
+        proposition_text: str,
+        prompt_text: str,
+        identity_reference_bytes: tuple[bytes, ...],
+    ) -> CurrentReviewResult:
+        raise VisionProviderError(
+            f"provider {self.name!r} has no current three-axis pixel-review adapter"
+        )
 
     @abc.abstractmethod
     def _review(self, *, image_bytes: bytes, caption_text: str, prompt_text: str) -> ParityResult:

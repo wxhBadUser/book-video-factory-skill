@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .contracts import (
+    CurrentVisionEvidence,
     MissingVisionEvidenceError,
     StaleVisionEvidenceError,
     VisionEvidence,
@@ -26,6 +27,7 @@ from .contracts import (
 )
 
 SCHEMA_VERSION = "vision-evidence.v1"
+CURRENT_SCHEMA_VERSION = "vision-evidence.v2"
 
 
 def _sha_text(text: str) -> str:
@@ -69,6 +71,114 @@ def load_vision_evidence_document(document: Mapping[str, Any]) -> dict[str, Visi
         evidence.verify()
         loaded[str(shot_id)] = evidence
     return loaded
+
+
+def build_current_vision_evidence_document(
+    release_id: str, evidences: Iterable[CurrentVisionEvidence]
+) -> dict[str, Any]:
+    reviews: dict[str, Any] = {}
+    for evidence in evidences:
+        evidence.verify()
+        if evidence.shot_id in reviews:
+            raise VisionReviewError(f"duplicate current vision evidence for shot {evidence.shot_id}")
+        reviews[evidence.shot_id] = evidence.to_dict()
+    return {
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "release_id": str(release_id),
+        "reviews": reviews,
+    }
+
+
+def load_current_vision_evidence_document(
+    document: Mapping[str, Any],
+    *,
+    current_bindings: Mapping[str, Mapping[str, Any]],
+) -> dict[str, CurrentVisionEvidence]:
+    if document.get("schema_version") != CURRENT_SCHEMA_VERSION:
+        raise VisionReviewError(
+            f"current vision evidence document has unexpected schema {document.get('schema_version')!r}"
+        )
+    reviews = document.get("reviews")
+    if not isinstance(reviews, Mapping):
+        raise VisionReviewError("current vision evidence document has no reviews map")
+    if not isinstance(current_bindings, Mapping) or set(map(str, current_bindings)) != set(map(str, reviews)):
+        raise VisionReviewError(
+            "current vision evidence load requires exactly one current artifact binding per review"
+        )
+    loaded: dict[str, CurrentVisionEvidence] = {}
+    for shot_id, payload in reviews.items():
+        if not isinstance(payload, Mapping):
+            raise VisionReviewError(f"current vision evidence for {shot_id!r} is not a mapping")
+        evidence = CurrentVisionEvidence.from_mapping({**payload, "shot_id": shot_id})
+        evidence.verify()
+        binding = current_bindings.get(str(shot_id))
+        if not isinstance(binding, Mapping):
+            raise VisionReviewError(f"current artifact binding for {shot_id!r} is not a mapping")
+        try:
+            verify_current_evidence(evidence, **dict(binding))
+        except TypeError as error:
+            raise VisionReviewError(
+                f"current artifact binding for {shot_id!r} is incomplete or has unknown fields"
+            ) from error
+        loaded[str(shot_id)] = evidence
+    return loaded
+
+
+def verify_current_evidence(
+    evidence: CurrentVisionEvidence,
+    *,
+    image_path: str | Path,
+    caption_group_sha256: str,
+    prompt_sha256: str,
+    proposition_sha256: str,
+    visible_persistent_character_ids: tuple[str, ...],
+    identity_reference_paths: tuple[str | Path, ...],
+    generation_provider: str,
+    require_pass: bool = False,
+) -> None:
+    """Pure fail-closed validator for Render integration and later manifest loads."""
+
+    evidence.verify()
+    image = Path(image_path)
+    if image.is_symlink() or not image.is_file():
+        raise StaleVisionEvidenceError(
+            f"shot {evidence.shot_id}: reviewed image is gone or symlinked: {image}"
+        )
+    if _sha_file(image) != evidence.image_sha256:
+        raise StaleVisionEvidenceError(f"shot {evidence.shot_id}: image changed since current review")
+    for label, actual, expected in (
+        ("Caption Group", str(caption_group_sha256), evidence.caption_group_sha256),
+        ("Prompt", str(prompt_sha256), evidence.prompt_sha256),
+        ("Proposition", str(proposition_sha256), evidence.proposition_sha256),
+        ("generation provider", str(generation_provider), evidence.generation_provider),
+    ):
+        if actual != expected:
+            raise StaleVisionEvidenceError(f"shot {evidence.shot_id}: {label} changed since current review")
+    visible = tuple(str(value) for value in visible_persistent_character_ids)
+    if visible != evidence.visible_persistent_character_ids:
+        raise StaleVisionEvidenceError(
+            f"shot {evidence.shot_id}: visible persistent character order changed since current review"
+        )
+    paths = tuple(Path(value) for value in identity_reference_paths)
+    if len(paths) != len(evidence.identity_anchor_sha256):
+        raise StaleVisionEvidenceError(
+            f"shot {evidence.shot_id}: identity reference count changed since current review"
+        )
+    current_anchors: list[str] = []
+    for index, path in enumerate(paths):
+        if path.is_symlink() or not path.is_file():
+            raise StaleVisionEvidenceError(
+                f"shot {evidence.shot_id}: identity reference {index} is gone or symlinked"
+            )
+        current_anchors.append(_sha_file(path))
+    if tuple(current_anchors) != evidence.identity_anchor_sha256:
+        raise StaleVisionEvidenceError(
+            f"shot {evidence.shot_id}: ordered identity anchor pixels changed since current review"
+        )
+    if require_pass and not evidence.is_pass():
+        raise VisionReviewError(
+            f"shot {evidence.shot_id}: semantic/reality/identity current review is not fully passing"
+        )
 
 
 def verify_evidence_current(

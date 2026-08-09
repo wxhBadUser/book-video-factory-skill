@@ -67,6 +67,20 @@ VISUAL_ASSETS = {"assets": [{"task_id": "ANCHOR_C001_FRONT"}]}
 CANVAS = {"orientation": "landscape", "width": 1920, "height": 1080}
 
 
+def current_group(*contracts: CaptionVisualContract) -> dict:
+    return CaptionGroup(
+        group_id="G-UNIT",
+        caption_ids=tuple(contract.caption_id for contract in contracts),
+        start=0.0,
+        end=3.0,
+        narrative_function=contracts[0].narrative_function,
+        contract_bindings=tuple(
+            {"caption_id": contract.caption_id, "content_sha256": contract.content_sha256()}
+            for contract in contracts
+        ),
+    ).to_dict()
+
+
 def scene(**overrides: object) -> dict:
     base = {
         "id": "scene-001",
@@ -242,6 +256,7 @@ class DirectorTaskSemanticBindingTests(unittest.TestCase):
             {"c3": {"text": text}},
             CANVAS,
             caption_contracts={"c3": contract},
+            caption_group=current_group(contract),
         )
         self.assertEqual(task["required_entities"], [])
         self.assertEqual(task["visual_proposition"]["mode"], "Abstract")
@@ -280,6 +295,7 @@ class DirectorTaskSemanticBindingTests(unittest.TestCase):
             {"c-role": {"text": text}},
             CANVAS,
             caption_contracts={"c-role": contract},
+            caption_group=current_group(contract),
         )
         self.assertEqual(task["anchor_refs"], [])
         self.assertEqual(task["identity_reference_task_ids"], [])
@@ -314,6 +330,7 @@ class DirectorTaskSemanticBindingTests(unittest.TestCase):
             scene(captionIds=["c-c004"], anchorRefs=["C002", "C003", "C004"]),
             profile, assets, {"c-c004": {"text": text}}, CANVAS,
             caption_contracts={"c-c004": contract},
+            caption_group=current_group(contract),
         )
         self.assertEqual(task["anchor_refs"], ["C004"])
         self.assertEqual(task["identity_reference_task_ids"], ["ANCHOR_C004_FRONT"])
@@ -350,6 +367,7 @@ class DirectorTaskSemanticBindingTests(unittest.TestCase):
             scene(captionIds=["c-order"], anchorRefs=["C004", "C002", "C003"]),
             profile, assets, {"c-order": {"text": text}}, CANVAS,
             caption_contracts={"c-order": contract},
+            caption_group=current_group(contract),
         )
         self.assertEqual(task["anchor_refs"], ["C004", "C002"])
         self.assertEqual(task["identity_reference_task_ids"], ["ANCHOR_C004_FRONT", "ANCHOR_C002_FRONT"])
@@ -375,6 +393,7 @@ class DirectorTaskSemanticBindingTests(unittest.TestCase):
                 scene(captionIds=["c-missing-c004"], anchorRefs=["C001"]),
                 PROFILE, VISUAL_ASSETS, {"c-missing-c004": {"text": text}}, CANVAS,
                 caption_contracts={"c-missing-c004": contract},
+                caption_group=current_group(contract),
             )
 
     def test_two_identical_scenes_produce_identical_tasks(self) -> None:
@@ -456,6 +475,10 @@ def validate_against_schema(value: Any, schema: dict, path: str = "$") -> list[s
             unexpected = sorted(set(value) - set(properties))
             if unexpected:
                 errors.append(f"{path}: unexpected properties {unexpected}")
+        for branch in schema.get("allOf", []):
+            condition = branch.get("if")
+            if condition is None or not validate_against_schema(value, condition, path):
+                errors.extend(validate_against_schema(value, branch.get("then", {}), path))
     return errors
 
 
@@ -504,7 +527,7 @@ class ProductionImageTaskSchemaTests(unittest.TestCase):
             narrative_function="plot",
             contract_bindings=({
                 "caption_id": "c1",
-                "caption_visual_contract_sha256": contract.content_sha256(),
+                "content_sha256": contract.content_sha256(),
             },),
         ).to_dict()
         return _task_for_scene(

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "production_image_task.v1.schema.json",
   "type": "object",
-  "required": ["schema_version", "task_id", "scene_id", "generation_lane", "generation_mode", "caption_ids", "caption_text", "caption_visual_contract_sha256", "prompt", "prompt_sha256", "visual_proposition", "prompt_binding", "output_target"],
+  "required": ["schema_version", "task_id", "scene_id", "shot_id", "generation_lane", "generation_mode", "caption_ids", "caption_text", "caption_visual_contract_sha256", "narrative_function", "source_beat_ids", "prompt", "prompt_sha256", "visual_proposition", "prompt_binding", "output_target"],
   "properties": {
     "schema_version": {"const": "production-image-task.v1"},
     "generation_lane": {"const": "host-imagegen"},
@@ -24,8 +24,8 @@
       "properties": {
         "mode": {"enum": ["Literal", "Symbolic", "Abstract"]},
         "subject": {"type": "string", "minLength": 1},
-        "action": {"type": "string", "minLength": 1},
-        "environment": {"type": "string", "minLength": 1},
+        "action": {"type": "string"},
+        "environment": {"type": "string"},
         "mood": {"type": "string", "minLength": 1},
         "lighting": {"type": "string", "minLength": 1},
         "palette": {"type": "string", "minLength": 1},
@@ -46,6 +46,25 @@
         "surrogate_objects": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "source_terms": {"type": "array", "items": {"type": "string", "minLength": 1}}
       },
+      "allOf": [
+        {
+          "if": {"properties": {"mode": {"enum": ["Literal", "Symbolic"]}}, "required": ["mode"]},
+          "then": {
+            "properties": {
+              "action": {"minLength": 1},
+              "environment": {"minLength": 1}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"mode": {"const": "Literal"}}, "required": ["mode"]},
+          "then": {"properties": {"entity_visibility": {"minItems": 1}}}
+        },
+        {
+          "if": {"properties": {"mode": {"const": "Symbolic"}}, "required": ["mode"]},
+          "then": {"properties": {"surrogate_objects": {"minItems": 1}}}
+        }
+      ],
       "additionalProperties": false
     },
     "prompt_binding": {
@@ -72,10 +91,10 @@
           "minItems": 1,
           "items": {
             "type": "object",
-            "required": ["caption_id", "caption_visual_contract_sha256"],
+            "required": ["caption_id", "content_sha256"],
             "properties": {
               "caption_id": {"type": "string", "minLength": 1},
-              "caption_visual_contract_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+              "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
             },
             "additionalProperties": false
           }

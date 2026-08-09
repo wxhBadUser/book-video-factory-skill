@@ -62,6 +62,39 @@ def _load(path: Path, label: str) -> dict[str, Any]:
     return value
 
 
+def verify_identity_reference_evidence_current(
+    project: Path, evidence: object
+) -> list[dict[str, Any]]:
+    """Re-hash every ordered identity-reference file recorded in a scene asset."""
+
+    root = project.expanduser().resolve()
+    if not isinstance(evidence, list):
+        raise SceneAssetError("identity reference evidence must be an ordered array")
+    verified: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    required = {"task_id", "path", "sha256", "role"}
+    for index, item in enumerate(evidence):
+        if not isinstance(item, dict) or set(item) != required:
+            raise SceneAssetError(f"identity reference evidence {index} fields are invalid")
+        task_id = item.get("task_id")
+        if not isinstance(task_id, str) or not task_id.strip() or task_id in seen:
+            raise SceneAssetError("identity reference evidence task IDs are invalid")
+        if item.get("role") != "identity_reference":
+            raise SceneAssetError(f"identity reference evidence {task_id} has an invalid role")
+        try:
+            path = safe_project_output(root, Path(str(item.get("path", ""))))
+        except (TypeError, ValueError) as error:
+            raise SceneAssetError(f"identity reference evidence {task_id} path is unsafe") from error
+        if path.is_symlink() or not path.is_file():
+            raise SceneAssetError(f"identity reference evidence is missing or symlinked: {task_id}")
+        current_sha = sha256_file(path)
+        if current_sha != item.get("sha256"):
+            raise SceneAssetError(f"identity reference evidence is stale: {task_id}")
+        seen.add(task_id)
+        verified.append(item)
+    return verified
+
+
 def _tasks(root: Path) -> dict[str, dict[str, Any]]:
     path = root / "05_director/IMAGE_TASKS.jsonl"
     if path.is_symlink() or not path.is_file():
@@ -148,6 +181,7 @@ def _manifest(root: Path, release_id: str, director_sha: str, count: int, provid
                 f"scene asset {item.get('task_id')} provider {item.get('provider')!r} "
                 f"does not match its generation_lane {item.get('generation_lane')!r}"
             )
+        verify_identity_reference_evidence_current(root, item.get("identity_reference_evidence"))
         seen.add(item["task_id"]); hashes.add(item["sha256"])
     asset_providers = {item.get("provider") for item in assets}
     if manifest_provider == "mixed":

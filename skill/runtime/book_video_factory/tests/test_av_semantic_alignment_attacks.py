@@ -182,7 +182,7 @@ def _write_current_contract_group_and_task(root: Path) -> tuple[Path, dict]:
     )
     prompt = "PROMPT"
     contract_sha = hashlib.sha256(
-        "|".join(item["caption_visual_contract_sha256"] for item in group["contract_bindings"]).encode("utf-8")
+        "|".join(item["content_sha256"] for item in group["contract_bindings"]).encode("utf-8")
     ).hexdigest()
     binding = compute_prompt_binding(
         caption_ids=group["caption_ids"], caption_text=caption["text"], proposition=proposition,
@@ -193,6 +193,7 @@ def _write_current_contract_group_and_task(root: Path) -> tuple[Path, dict]:
     )
     return contract_path, {
         "schema_version": "production-image-task.v1", "task_id": "SCENE_1", "scene_id": "S1",
+        "shot_id": "SHOT_S1", "source_beat_ids": ["B1"],
         "caption_ids": group["caption_ids"], "caption_text": caption["text"], "prompt": prompt,
         "visual_proposition": proposition.to_dict(), "prompt_binding": binding,
         "caption_visual_contract_sha256": contract_sha,
