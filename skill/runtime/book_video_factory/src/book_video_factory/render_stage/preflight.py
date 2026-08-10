@@ -130,6 +130,31 @@ def _scene_review_vision_blockers(
         except Exception:
             # Cannot source authoritative Group/Proposition/Prompt bindings.
             task_map = None
+    # The caption prose the evidence is re-checked against comes from the live
+    # Caption Visual Contract, not from the frozen copy inside IMAGE_TASKS.jsonl.
+    # That is what makes a post-approval caption edit show up as stale evidence.
+    live_caption_texts: dict[str, str] | None = None
+    live_group_ids: dict[str, str] | None = None
+    if require_current:
+        contract_root = root if root is not None else decision_path.parent.parent
+        try:
+            contracts = load_caption_visual_contract_document(contract_root / _CONTRACT_RELATIVE)
+            live_caption_texts = {
+                str(caption_id): str(contract.caption_text)
+                for caption_id, contract in contracts.items()
+            }
+            grouping = load_current_caption_grouping_document(contract_root)
+            live_group_ids = {}
+            for group in grouping.get("groups", []):
+                if not isinstance(group, Mapping):
+                    continue
+                group_id = str(group.get("group_id", ""))
+                for caption_id in group.get("caption_ids", []):
+                    live_group_ids[str(caption_id)] = group_id
+        except Exception as error:
+            raise RenderPreflightError(
+                f"current scene review requires the live caption contract and grouping: {error}"
+            ) from error
     if require_current:
         if assets_by_task is None or task_map is None:
             raise RenderPreflightError(
@@ -211,9 +236,28 @@ def _scene_review_vision_blockers(
                     raise StaleVisionEvidenceError(
                         "scene decision statuses do not match current pixel-review evidence"
                     )
+                task_caption_ids = tuple(str(value) for value in task.get("caption_ids", []))
+                if live_caption_texts is None or live_group_ids is None:
+                    raise StaleVisionEvidenceError(
+                        "current scene review has no live caption contract to verify against"
+                    )
+                missing = [cid for cid in task_caption_ids if cid not in live_caption_texts]
+                if not task_caption_ids or missing:
+                    raise StaleVisionEvidenceError(
+                        f"reviewed captions are no longer in the caption contract: {missing}"
+                    )
+                live_groups = {live_group_ids.get(cid, "") for cid in task_caption_ids}
+                if len(live_groups) != 1 or "" in live_groups:
+                    raise StaleVisionEvidenceError(
+                        "reviewed captions are no longer covered by exactly one caption group"
+                    )
                 verify_current_evidence(
                     evidence,
                     image_path=image_path,
+                    task_id=str(task_id),
+                    group_id=live_groups.pop(),
+                    caption_ids=task_caption_ids,
+                    caption_texts={cid: live_caption_texts[cid] for cid in task_caption_ids},
                     caption_group_sha256=str(task.get("prompt_binding", {}).get("caption_group_sha256", "")),
                     prompt_sha256=hashlib.sha256(str(task.get("prompt", "")).encode("utf-8")).hexdigest(),
                     proposition_sha256=proposition.content_sha256(),

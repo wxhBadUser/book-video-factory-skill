@@ -24,6 +24,7 @@ from .contracts import (
     StaleVisionEvidenceError,
     VisionEvidence,
     VisionReviewError,
+    caption_text_set_sha256 as compute_caption_text_set_sha256,
 )
 
 SCHEMA_VERSION = "vision-evidence.v1"
@@ -128,6 +129,10 @@ def verify_current_evidence(
     evidence: CurrentVisionEvidence,
     *,
     image_path: str | Path,
+    task_id: str,
+    group_id: str,
+    caption_ids: tuple[str, ...],
+    caption_texts: Mapping[str, str],
     caption_group_sha256: str,
     prompt_sha256: str,
     proposition_sha256: str,
@@ -136,7 +141,16 @@ def verify_current_evidence(
     generation_provider: str,
     require_pass: bool = False,
 ) -> None:
-    """Pure fail-closed validator for Render integration and later manifest loads."""
+    """Pure fail-closed validator for Render integration and later manifest loads.
+
+    ``caption_texts`` must be the caption prose as it stands *right now* in the
+    authoritative Caption Visual Contract, keyed by caption id, and
+    ``caption_ids`` must be the current Caption Group's order. The reviewed
+    caption hash is recomputed from those live values and compared against the
+    hash the reviewer recorded. Editing a single character of a caption after
+    approval therefore invalidates the evidence instead of silently riding it
+    into the render.
+    """
 
     evidence.verify()
     image = Path(image_path)
@@ -146,7 +160,20 @@ def verify_current_evidence(
         )
     if _sha_file(image) != evidence.image_sha256:
         raise StaleVisionEvidenceError(f"shot {evidence.shot_id}: image changed since current review")
+    current_caption_ids = tuple(str(value) for value in caption_ids)
+    if current_caption_ids != evidence.caption_ids:
+        raise StaleVisionEvidenceError(
+            f"shot {evidence.shot_id}: reviewed caption id order changed since current review"
+        )
+    # Recomputed from live contract prose -- never read from the evidence or any
+    # caller-supplied hash field.
+    current_caption_text_sha = compute_caption_text_set_sha256(
+        current_caption_ids, caption_texts
+    )
     for label, actual, expected in (
+        ("task identity", str(task_id), evidence.task_id),
+        ("Caption Group identity", str(group_id), evidence.group_id),
+        ("Caption text", current_caption_text_sha, evidence.caption_text_set_sha256),
         ("Caption Group", str(caption_group_sha256), evidence.caption_group_sha256),
         ("Prompt", str(prompt_sha256), evidence.prompt_sha256),
         ("Proposition", str(proposition_sha256), evidence.proposition_sha256),

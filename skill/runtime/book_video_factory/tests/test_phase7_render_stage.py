@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -111,6 +112,8 @@ def _signed_scene_evidence(project: Path, asset_rel: str, task_id: str) -> dict[
     )["captions"]
     evidence = review_current_shot(
         shot_id=str(task["shot_id"]),
+        task_id=str(task["task_id"]),
+        prompt_binding=task["prompt_binding"],
         image_path=project / asset_rel,
         caption_group=group,
         caption_texts={caption_id: bindings[caption_id]["text"] for caption_id in task["caption_ids"]},
@@ -270,6 +273,8 @@ class RenderStageTests(unittest.TestCase):
                     "note": "Current v2 integration pixels reviewed.",
                     "vision_evidence": review_current_shot(
                         shot_id=task["shot_id"],
+                        task_id=str(task["task_id"]),
+                        prompt_binding=task["prompt_binding"],
                         image_path=project / assets[task["task_id"]]["path"],
                         caption_group=groups[task["prompt_binding"]["group_id"]],
                         caption_texts={caption_id: captions[caption_id]["text"] for caption_id in task["caption_ids"]},
@@ -399,6 +404,106 @@ class RenderStageTests(unittest.TestCase):
                 json.loads(blocked.report_path.read_text(encoding="utf-8"))[
                     "vision_review_blockers"
                 ][0],
+            )
+
+    # ------------------------------------------------------------------
+    # FINAL-2: Anchor / Identity drift must be blocked at the REAL Render
+    # Preflight entrypoint (preflight_render). Director compile, task loading,
+    # identity-anchor parsing and current-manifest hashing stay REAL; only the
+    # final FFmpeg/HBG encoding (and the env style/disk checks) are mocked.
+    #   E  normal current anchor             -> Preflight PASS
+    #   F  anchor byte drift                 -> stale -> FAIL
+    #   G  identity-reference record tamper  -> stale -> FAIL
+    #   H  identity anchor swapped to a different entity -> stale -> FAIL
+    # The fixture uses a single persistent character (C001 圣地亚哥), so H is
+    # demonstrated at the evidence-file level: a character's identity-reference
+    # anchor is replaced by a different entity's anchor, exactly the failure
+    # mode a 凤霞<->家珍 swap would trigger (the substituted bytes no longer
+    # match the recorded identity-reference hash).
+    # ------------------------------------------------------------------
+
+    @contextmanager
+    def _final2_fixture(self):
+        golden = Path(os.environ.get("FINAL2_GOLDEN_DIR", ""))
+        if not golden.is_absolute():
+            golden = repository_root() / ".workbuddy/scratch/final2_golden"
+        if golden.is_dir() and (golden / "06_visual_production/SCENE_ASSET_MANIFEST.json").is_file():
+            with tempfile.TemporaryDirectory() as raw:
+                project = Path(raw) / "proj"
+                shutil.copytree(golden, project)
+                director = SimpleNamespace(
+                    manifest_path=project / "05_director/DIRECTOR_STAGE_MANIFEST.json"
+                )
+                manifest = json.loads(
+                    (project / "06_visual_production/SCENE_ASSET_MANIFEST.json").read_text(encoding="utf-8")
+                )
+                yield project, project / "07_render/RENDER_INPUT.json", manifest, director
+        else:
+            with self._real_group_render_fixture() as (
+                project, render_input, manifest, _timeline, _rendered, _legacy, director,
+            ):
+                yield project, render_input, manifest, director
+
+    def _preflight_with_mock_env(self, project, render_input, director):
+        with mock.patch(
+            "book_video_factory.render_stage.compiler.compile_director_stage",
+            return_value=director,
+        ):
+            return preflight_render(
+                project, render_input,
+                command_runner=passing_preflight_runner,
+                process_lister=lambda: [],
+            )
+
+    def test_final2_E_normal_identity_anchor_preflight_passes(self) -> None:
+        with self._final2_fixture() as (project, render_input, _manifest, director):
+            result = self._preflight_with_mock_env(project, render_input, director)
+            self.assertEqual(result.next_stage_status, "ready_for_hbg_render")
+            report = json.loads(result.report_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["vision_review_blockers"], [])
+            self.assertEqual(report["caption_visual_contract_blockers"], [])
+
+    def test_final2_F_anchor_byte_drift_blocks(self) -> None:
+        with self._final2_fixture() as (project, render_input, manifest, director):
+            anchored = next(a for a in manifest["assets"] if a["identity_reference_evidence"])
+            anchor_path = project / anchored["identity_reference_evidence"][0]["path"]
+            anchor_path.write_bytes(anchor_path.read_bytes() + b"\x00anchor-drift")
+            result = self._preflight_with_mock_env(project, render_input, director)
+            self.assertEqual(result.next_stage_status, "blocked_by_visual_semantic_alignment")
+            self.assertIn(
+                "identity reference evidence is stale",
+                json.loads(result.report_path.read_text(encoding="utf-8"))["vision_review_blockers"][0],
+            )
+
+    def test_final2_G_identity_reference_record_tamper_blocks(self) -> None:
+        with self._final2_fixture() as (project, render_input, manifest, director):
+            anchored = next(a for a in manifest["assets"] if a["identity_reference_evidence"])
+            anchored["identity_reference_evidence"][0]["sha256"] = "0" * 64
+            (project / "06_visual_production/SCENE_ASSET_MANIFEST.json").write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            # Force the render preflight to re-run the scene-approval registry
+            # gate (which re-verifies the recorded identity-reference hash), since
+            # the tampered manifest changes the render-input digest.
+            (project / "07_render/RENDER_MANIFEST.json").unlink(missing_ok=True)
+            result = self._preflight_with_mock_env(project, render_input, director)
+            self.assertEqual(result.next_stage_status, "blocked_by_visual_semantic_alignment")
+            self.assertIn(
+                "identity reference evidence is stale",
+                json.loads(result.report_path.read_text(encoding="utf-8"))["vision_review_blockers"][0],
+            )
+
+    def test_final2_H_identity_reference_swap_blocks(self) -> None:
+        with self._final2_fixture() as (project, render_input, manifest, director):
+            anchored = next(a for a in manifest["assets"] if a["identity_reference_evidence"])
+            anchor_path = project / anchored["identity_reference_evidence"][0]["path"]
+            wrong_anchor = project / "assets/generated/anchors/ANCHOR_SCENE_HARBOR.png"
+            anchor_path.write_bytes(wrong_anchor.read_bytes())
+            result = self._preflight_with_mock_env(project, render_input, director)
+            self.assertEqual(result.next_stage_status, "blocked_by_visual_semantic_alignment")
+            self.assertIn(
+                "identity reference evidence is stale",
+                json.loads(result.report_path.read_text(encoding="utf-8"))["vision_review_blockers"][0],
             )
 
     def test_render_workspace_stages_on_project_volume_for_atomic_publish(self) -> None:

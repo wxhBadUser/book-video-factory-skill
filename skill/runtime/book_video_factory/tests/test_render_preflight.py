@@ -133,6 +133,8 @@ class RenderPreflightTests(unittest.TestCase):
         )["captions"]
         evidence = review_current_shot(
             shot_id=task["shot_id"],
+            task_id=task["task_id"],
+            prompt_binding=task["prompt_binding"],
             image_path=image,
             caption_group=group,
             caption_texts={caption_id: bindings[caption_id]["text"] for caption_id in task["caption_ids"]},

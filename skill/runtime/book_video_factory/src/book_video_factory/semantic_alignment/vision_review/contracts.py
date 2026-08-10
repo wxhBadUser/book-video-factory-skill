@@ -24,6 +24,16 @@ _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 # A real parity judgement names what it saw; a bare "ok" is not evidence.
 MIN_REASONING_CHARS = 12
 
+# The Director joins one Caption Group's ordered caption prose with this exact
+# separator before it hashes the result into
+# ``IMAGE_TASK.prompt_binding.caption_text_sha256`` (see
+# ``director_stage.compiler`` and ``semantic_alignment.prompting``). The current
+# vision reviewer recomputes the very same payload from the caption texts it
+# actually handed to the model, so ``caption_text_set_sha256`` is directly
+# comparable to the Prompt binding. A reviewer that was shown unrelated or
+# reordered caption prose therefore cannot mint evidence at all.
+CAPTION_TEXT_JOINER = " / "
+
 
 class VisionReviewError(RuntimeError):
     """A vision review record or decision is malformed, missing or not a pass."""
@@ -73,6 +83,47 @@ def _hmac_sign(key: str, payload: str) -> str:
     return hmac.new(key.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def canonical_caption_text_payload(
+    caption_ids: Any, caption_texts: Mapping[str, Any]
+) -> str:
+    """Return the ordered caption prose exactly as the Prompt bound it.
+
+    ``caption_ids`` fixes the order (it comes from the Caption Group), and
+    ``caption_texts`` supplies the prose. The result is the same string the
+    Director hashed into ``prompt_binding.caption_text_sha256``, which is what
+    makes the two hashes comparable. Every structural defect -- an empty or
+    duplicated id list, a text set that does not exactly cover the ids, an
+    empty or untrimmed caption -- fails closed here rather than silently
+    producing a hash over partial content.
+    """
+
+    ids = [str(value) for value in (caption_ids or ())]
+    if (
+        not ids
+        or len(set(ids)) != len(ids)
+        or any(not value.strip() or value != value.strip() for value in ids)
+    ):
+        raise VisionReviewError("reviewed caption id order is empty, duplicated or malformed")
+    if not isinstance(caption_texts, Mapping) or {str(key) for key in caption_texts} != set(ids):
+        raise VisionReviewError(
+            "reviewed caption text set must exactly cover the ordered caption ids"
+        )
+    texts: list[str] = []
+    for caption_id in ids:
+        text = caption_texts.get(caption_id)
+        if not isinstance(text, str) or not text.strip() or text != text.strip():
+            raise VisionReviewError(f"reviewed caption text is invalid: {caption_id}")
+        texts.append(text)
+    return CAPTION_TEXT_JOINER.join(texts)
+
+
+def caption_text_set_sha256(caption_ids: Any, caption_texts: Mapping[str, Any]) -> str:
+    """SHA-256 over the ordered caption prose that was really under review."""
+
+    payload = canonical_caption_text_payload(caption_ids, caption_texts)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _evidence_signature(
     *,
     provider: str,
@@ -105,6 +156,10 @@ def _evidence_signature(
 def _current_evidence_signature(
     *,
     provider: str,
+    task_id: str,
+    group_id: str,
+    caption_ids: tuple[str, ...],
+    caption_text_set_sha256: str,
     vision_call_id: str,
     generation_provider: str,
     image_sha256: str,
@@ -126,6 +181,10 @@ def _current_evidence_signature(
     payload = "\n".join(
         [
             str(provider),
+            str(task_id),
+            str(group_id),
+            *[f"caption:{value}" for value in caption_ids],
+            str(caption_text_set_sha256),
             str(vision_call_id),
             str(generation_provider),
             str(image_sha256),
@@ -171,9 +230,35 @@ class CurrentReviewResult:
 
 @dataclass(frozen=True)
 class CurrentVisionEvidence:
-    """Signed v2 evidence for one Caption Group image and all identity anchors."""
+    """Signed v2 evidence for one Caption Group image and all identity anchors.
+
+    Field names map onto the audited evidence contract as follows::
+
+        shot_id                   -> shot_id
+        task_id                   -> task_id
+        group_id                  -> group_id
+        caption_ids               -> caption_ids
+        caption_text_set_sha256   -> caption_text_set_sha256
+        caption_group_sha256      -> group_sha256
+        proposition_sha256        -> visual_proposition_sha256
+        prompt_sha256             -> prompt_sha256
+        image_sha256              -> image_sha256
+        vision_provider           -> provider
+        vision_call_id            -> provider_call_id
+        {semantic,reality,identity}_review_status     -> verdict (three axes)
+        {semantic,reality,identity}_review_reasoning  -> reasoning (three axes)
+
+    ``caption_text_set_sha256`` is never accepted from a caller: it is
+    recomputed inside ``review_current_shot`` from the ordered caption prose
+    that was actually handed to the vision provider, and it must equal the
+    ``caption_text_sha256`` recorded in the IMAGE_TASK prompt binding.
+    """
 
     shot_id: str
+    task_id: str
+    group_id: str
+    caption_ids: tuple[str, ...]
+    caption_text_set_sha256: str
     vision_provider: str
     vision_call_id: str
     generation_provider: str
@@ -196,6 +281,10 @@ class CurrentVisionEvidence:
     def to_dict(self) -> dict[str, Any]:
         return {
             "shot_id": self.shot_id,
+            "task_id": self.task_id,
+            "group_id": self.group_id,
+            "caption_ids": list(self.caption_ids),
+            "caption_text_set_sha256": self.caption_text_set_sha256,
             "vision_provider": self.vision_provider,
             "vision_call_id": self.vision_call_id,
             "generation_provider": self.generation_provider,
@@ -220,8 +309,17 @@ class CurrentVisionEvidence:
     def from_mapping(cls, mapping: Mapping[str, Any]) -> "CurrentVisionEvidence":
         anchors = mapping.get("identity_anchor_sha256", ())
         visible = mapping.get("visible_persistent_character_ids", ())
+        caption_ids = mapping.get("caption_ids", ())
         return cls(
             shot_id=str(mapping.get("shot_id", "")),
+            task_id=str(mapping.get("task_id", "")),
+            group_id=str(mapping.get("group_id", "")),
+            caption_ids=(
+                tuple(str(value) for value in caption_ids)
+                if isinstance(caption_ids, (list, tuple))
+                else ()
+            ),
+            caption_text_set_sha256=str(mapping.get("caption_text_set_sha256", "")),
             vision_provider=str(mapping.get("vision_provider", "")),
             vision_call_id=str(mapping.get("vision_call_id", "")),
             generation_provider=str(mapping.get("generation_provider", "")),
@@ -265,9 +363,23 @@ class CurrentVisionEvidence:
             raise VisionReviewError(f"shot {self.shot_id}: current evidence has no generation provider")
         if self.generation_provider == self.vision_provider:
             raise VisionReviewError(f"shot {self.shot_id}: generation provider may not review its own image")
+        # The reviewed unit of work must name itself. Without task_id/group_id the
+        # evidence cannot be re-bound to the IMAGE_TASK that produced the prompt,
+        # and a record could be replayed against a different task.
+        if not self.task_id.strip():
+            raise VisionReviewError(f"shot {self.shot_id}: current evidence has no task id")
+        if not self.group_id.strip():
+            raise VisionReviewError(f"shot {self.shot_id}: current evidence has no caption group id")
+        if not self.caption_ids:
+            raise VisionReviewError(f"shot {self.shot_id}: current evidence names no reviewed captions")
+        if len(set(self.caption_ids)) != len(self.caption_ids):
+            raise VisionReviewError(f"shot {self.shot_id}: reviewed caption ids are duplicated")
+        if any(not value.strip() for value in self.caption_ids):
+            raise VisionReviewError(f"shot {self.shot_id}: reviewed caption ids are invalid")
         for label, value in (
             ("image_sha256", self.image_sha256),
             ("caption_group_sha256", self.caption_group_sha256),
+            ("caption_text_set_sha256", self.caption_text_set_sha256),
             ("prompt_sha256", self.prompt_sha256),
             ("proposition_sha256", self.proposition_sha256),
         ):
@@ -311,6 +423,10 @@ class CurrentVisionEvidence:
             )
         expected = _current_evidence_signature(
             provider=self.vision_provider,
+            task_id=self.task_id,
+            group_id=self.group_id,
+            caption_ids=self.caption_ids,
+            caption_text_set_sha256=self.caption_text_set_sha256,
             vision_call_id=self.vision_call_id,
             generation_provider=self.generation_provider,
             image_sha256=self.image_sha256,

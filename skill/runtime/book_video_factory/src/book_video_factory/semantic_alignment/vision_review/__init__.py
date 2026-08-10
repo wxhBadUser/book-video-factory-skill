@@ -14,6 +14,7 @@ a drifted image/caption/prompt hash, or a missing provider (which surfaces
 from __future__ import annotations
 
 from .contracts import (
+    CAPTION_TEXT_JOINER,
     IDENTITY_REVIEW_STATUSES,
     PARITY_VERDICTS,
     PASSING_VERDICTS,
@@ -28,6 +29,8 @@ from .contracts import (
     VisionEvidence,
     VisionProviderError,
     VisionReviewError,
+    canonical_caption_text_payload,
+    caption_text_set_sha256,
     register_provider_key,
 )
 from .evaluator import review_current_shot, review_shot
@@ -68,6 +71,9 @@ __all__ = [
     "VISION_REVIEW_PROVIDER_SCHEMA",
     "FORBIDDEN_VISION_PROVIDERS",
     "PROVIDER_VERIFICATION_KEYS",
+    "CAPTION_TEXT_JOINER",
+    "canonical_caption_text_payload",
+    "caption_text_set_sha256",
     "BaseVisionProvider",
     "LocalVisionProvider",
     "ClaudeVisionProvider",
