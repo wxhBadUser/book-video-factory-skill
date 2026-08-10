@@ -35,6 +35,15 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _narration(index: int) -> str:
+    """Realistic narration that matches the grounded semantic rationales."""
+    if index <= 5:
+        return "凤霞出嫁那天，婚礼队伍举着红布从画面这头走到那头。"
+    if index <= 10:
+        return "福贵弯着腰在竹匾里收豆子，画面里满是金黄。"
+    return "老牛在暮色里低头吃草，侧影安静。"
+
+
 def _project(base: Path) -> tuple[Path, dict, dict, list[dict]]:
     project = base / "project"
     project.mkdir()
@@ -63,8 +72,9 @@ def _project(base: Path) -> tuple[Path, dict, dict, list[dict]]:
                 "start": round((i - 1) * 0.8, 3),
                 "end": round(i * 0.8, 3),
                 "duration": 0.8,
-                "text": f"字幕{i}",
-                "text_sha256": _sha(f"字幕{i}".encode()),
+                "text": _narration(i),
+                "text_sha256": _sha(_narration(i).encode()),
+                "narrative_function": "plot",
                 "restoration_status": "display-restored",
                 "allowShort": True,
             }
@@ -153,18 +163,18 @@ def _valid(project: Path) -> dict:
         ],
         "shots": [
             _shot(
-                "as001", ["B001"], [f"caption-{i:04d}" for i in range(1, 6)], 1, "字幕1",
+                "as001", ["B001"], [f"caption-{i:04d}" for i in range(1, 6)], 1, _narration(1),
                 required=["凤霞", "婚礼队伍"], rationale=GROUNDED_RATIONALE_ONE,
                 anchors=["C001"], participants=["C001"],
             ),
             _shot(
-                "as002", ["B002"], [f"caption-{i:04d}" for i in range(6, 11)], 1, "字幕6",
+                "as002", ["B002"], [f"caption-{i:04d}" for i in range(6, 11)], 1, _narration(6),
                 required=["福贵", "豆子"], rationale=GROUNDED_RATIONALE_TWO,
                 risks=["hands", "tool_use"], mode="single",
                 anchors=["C001"], participants=["C001"],
             ),
             _shot(
-                "as003", ["B003"], [f"caption-{i:04d}" for i in range(11, 17)], 2, "字幕11",
+                "as003", ["B003"], [f"caption-{i:04d}" for i in range(11, 17)], 2, _narration(11),
                 required=["老牛"], rationale=GROUNDED_RATIONALE_THREE,
             ),
         ],

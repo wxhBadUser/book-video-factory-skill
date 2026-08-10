@@ -4,7 +4,13 @@
   "book_title": "老人与海",
   "author": "欧内斯特·海明威",
   "source_level": "A",
+  "evidence_level": "A",
   "research_status": "ready",
+  "rights_status": "cleared",
+  "public_release_allowed": true,
+  "rights_evidence": [
+    {"type": "copyright_status", "value": "public_domain"}
+  ],
   "is_full_text": true,
   "coverage": "full_text_available",
   "source_dir": "source",

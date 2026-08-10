@@ -18,6 +18,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from book_video_factory.semantic_alignment.contract_bindings import (
+    aggregate_contract_bindings_sha256,
+)
+from book_video_factory.semantic_alignment.models import VisualProposition
+from book_video_factory.semantic_alignment.prompting import compute_prompt_binding
 from book_video_factory.semantic_alignment.vision_review import (
     LocalVisionProvider,
     ParityResult,
@@ -143,16 +148,66 @@ class PreflightVisionEvidenceGateTests(unittest.TestCase):
     def _write_tasks(self, *ids: str) -> Path:
         path = self.root / "05_director" / "IMAGE_TASKS.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
-        lines = [
-            json.dumps({
+        # The gate re-verifies signed vision evidence against the director task
+        # queue (IMAGE_TASKS.jsonl); every line must be a schema-valid production
+        # image task, or the queue fails closed and the shot is blocked. The
+        # tasks are built with the implementation helpers so the contract binding,
+        # aggregate SHA, prompt binding and proposition hashes are internally
+        # consistent and pass validate_production_image_task.
+        proposition = VisualProposition(
+            mode="Abstract",
+            subject="subject",
+            action="",
+            environment="",
+            mood="mood",
+            lighting="lighting",
+            palette="palette",
+            rationale_text="rationale",
+            entity_visibility=(),
+            surrogate_objects=(),
+            source_terms=(),
+        )
+        lines = []
+        for index, tid in enumerate(ids, start=1):
+            caption_id = f"caption-{index:04d}"
+            caption_contract_bindings = [
+                {"caption_id": caption_id, "content_sha256": "a" * 64}
+            ]
+            contract_sha = aggregate_contract_bindings_sha256(
+                caption_contract_bindings, expected_caption_ids=[caption_id]
+            )
+            binding = compute_prompt_binding(
+                caption_ids=[caption_id],
+                caption_text=CAPTION,
+                proposition=proposition,
+                prompt=PROMPT,
+                scene_id=tid,
+                beat_ids=["beat-001"],
+                shot_id=tid,
+                caption_visual_contract_sha256=contract_sha,
+                group_id=f"group-{index:04d}",
+                caption_contract_bindings=caption_contract_bindings,
+                caption_group_sha256="b" * 64,
+            )
+            task = {
                 "schema_version": "production-image-task.v1",
                 "task_id": tid,
                 "scene_id": tid,
+                "shot_id": tid,
+                "generation_lane": "host-imagegen",
+                "generation_mode": "single",
+                "caption_ids": [caption_id],
                 "caption_text": CAPTION,
+                "caption_visual_contract_sha256": contract_sha,
+                "narrative_function": "plot",
+                "source_beat_ids": ["beat-001"],
                 "prompt": PROMPT,
-            }, ensure_ascii=False)
-            for tid in ids
-        ]
+                "prompt_sha256": hashlib.sha256(PROMPT.encode("utf-8")).hexdigest(),
+                "visual_proposition": proposition.to_dict(),
+                "prompt_binding": binding,
+                "output_target": f"06_visual_production/SCENE_ASSETS/{tid}.png",
+            }
+            lines.append(json.dumps(task, ensure_ascii=False))
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 

@@ -107,7 +107,7 @@ def test_same_scene_captions_with_different_durations_share_one_image() -> None:
         "caption-0001",
         "caption-0002",
     ]
-    assert [binding["caption_visual_contract_sha256"] for binding in group.contract_bindings] == [
+    assert [binding["content_sha256"] for binding in group.contract_bindings] == [
         first.content_sha256(),
         second.content_sha256(),
     ]
@@ -353,7 +353,7 @@ def test_boundary_audit_records_every_merge_or_required_split_from_contracts() -
         contracts={first.caption_id: first, second.caption_id: second, third.caption_id: third},
     )
 
-    assert document["schema_version"] == "caption-grouping-audit.v1"
+    assert document["schema_version"] == "caption-grouping-audit.v2"
     assert document["caption_count"] == 3
     assert document["boundary_count"] == 2
     assert document["merge_count"] == 1
@@ -571,7 +571,7 @@ def test_stale_persisted_v2_fails_closed_but_validate_only_uses_current_memory_c
         build_caption_grouping_from_project(project)
     preview = build_caption_grouping_from_project(project, validate_only=True)
 
-    assert preview["groups"][0]["contract_bindings"][0]["caption_visual_contract_sha256"] != stale_sha
+    assert preview["groups"][0]["contract_bindings"][0]["content_sha256"] != stale_sha
     assert persisted.read_bytes() == stale_bytes
     assert not (audio_dir / "CAPTION_GROUPING_AUDIT.json").exists()
 
