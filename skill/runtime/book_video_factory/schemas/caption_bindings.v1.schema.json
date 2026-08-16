@@ -25,7 +25,8 @@
           "semantic_rationale": {"type": "string", "minLength": 1},
           "semantic_bridge_mode": {"enum": ["direct", "symbolic"]},
           "rationale_is_boilerplate": {"type": "boolean"},
-          "restoration_status": {"const": "display-restored"}
+          "restoration_status": {"const": "display-restored"},
+          "source_section_id": {"type": "string", "minLength": 1}
         }
       }
     },

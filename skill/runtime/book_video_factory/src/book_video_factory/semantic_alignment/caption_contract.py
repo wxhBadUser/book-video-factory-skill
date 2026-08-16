@@ -50,6 +50,272 @@ _LITERAL_FUNCTIONS = {"opening", "plot"}
 _SYMBOLIC_ALLOWED_FUNCTIONS = {"theory", "author_background", "transition", "closing"}
 _HARD_SPLIT_EVENTS = frozenset({"none", "death", "birth", "climax", "hero", "high_risk_action", "enter_exit"})
 
+# FIX 2 (pilot R2): registers that may still use Literal when the caption
+# itself names concrete, drawable referents. Narrative Function decides how the
+# frame is treated, not whether the caption has visible referents.
+_CONCRETE_CAPABLE_FUNCTIONS = _LITERAL_FUNCTIONS | {"theory", "author_background", "transition", "closing"}
+
+# FIX 1 (pilot R2): deterministic observable-event lexicon. A concrete plot
+# caption must translate into visual evidence the image model can be asked to
+# show, otherwise the contract is not defensible and the pipeline fails closed.
+_EVENT_RULES: tuple[tuple[tuple[str, ...], str, str, tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        ("死", "撑死", "咽气", "去世", "枪毙", "没了", "离世", "送葬", "埋"),
+        "death_aftermath",
+        "非血腥的死亡后果（按成因）",
+        ("克制、非血腥的死亡后果语境",),
+        ("当事人健康站立或微笑",),
+    ),
+    (
+        ("绑在柱子", "绑到柱子", "绑上柱子", "刑柱", "枪决", "执行队", "行刑", "开枪", "枪声"),
+        "execution_at_post",
+        "刑场执行（绑柱/枪决）",
+        (
+            "刑场执行状态：被绑在刑柱上或行刑队举枪（按字幕）",
+            "绳子和刑柱清晰可见",
+            "克制、非血腥",
+        ),
+        ("当事人被押着行走或自由站立交谈",),
+    ),
+    (
+        ("壮丁", "当兵", "被抓", "拉去"),
+        "conscription",
+        "被抓壮丁/从军",
+        (
+            "被抓壮丁、押送或从军的场景（按字幕）",
+            "克制、非血腥",
+        ),
+        (),
+    ),
+    (
+        ("怀孕", "生孩子", "产房", "生啦", "大出血"),
+        "pregnancy_birth",
+        "怀孕/家人反应",
+        (
+            "孕妇腹部状态与家人围聚反应（克制）",
+            "婚后/家中语境，不出现婚礼现场",
+        ),
+        ("婚礼现场或无关场景",),
+    ),
+    (
+        ("战场", "战争", "打仗", "围困"),
+        "battlefield",
+        "战场",
+        (
+            "战场/战壕/硝烟与军装人群（按字幕）",
+            "克制、非血腥",
+        ),
+        (),
+    ),
+    (
+        ("歪在", "摔在", "倒下", "瘫"),
+        "collapse",
+        "倒地/瘫软",
+        (
+            "人物倒地或瘫软（克制、非血腥）",
+            "相关物件在场（按字幕）",
+        ),
+        ("健康站立或正常活动",),
+    ),
+    (
+        ("郎中", "大夫", "医馆", "请医", "求医", "看病", "抓药"),
+        "medical_visit",
+        "急切求医/求助",
+        (
+            "求医语境清晰可见：郎中/大夫或医馆（药柜、招牌、诊脉）",
+            "人物正在走向或抵达求医地点",
+            "神情急切、求助",
+        ),
+        ("无医疗语境的无目的行走", "人物在街市闲逛"),
+    ),
+    (
+        ("抽血", "献血", "针管", "注射", "血"),
+        "blood_loss",
+        "持续抽血/失血虚弱",
+        (
+            "抽血/针管等医疗语境在场（按字幕）",
+            "脸色苍白、虚弱（克制、非血腥）",
+        ),
+        ("健康奔跑或兴奋状态",),
+    ),
+    (
+        ("回来了", "回来", "回家"),
+        "return_home",
+        "归家/重逢",
+        (
+            "人物回到家中/村口：正在进门或刚抵达，重逢的空间关系清晰",
+            "家人面向归来者、相迎或同框",
+            "随身行囊/到达姿态（时代允许时）",
+        ),
+        ("人物独自站立、无互动", "像家族合影般的静止群像", "同框出现字幕未点名的额外亲属/邻居"),
+    ),
+    (
+        ("下地去了", "走出去", "离开了", "出城"),
+        "departure_absence",
+        "人物已离开（缺席状态）",
+        (
+            "人物离开后的空间关系（背影远去，或门开向田野）",
+            "留在原处的关键物件清晰可见（按字幕）",
+        ),
+        ("人物仍坐在原处无所事事",),
+    ),
+    (
+        ("民谣", "收集民谣", "下乡"),
+        "folk_song_collection",
+        "采风/收集",
+        (
+            "下乡收集民谣的年轻人在村口或田边与村民交谈、记录",
+            "身背布袋或手拿笔记本",
+            "旧时代乡村装束",
+        ),
+        ("现代装束或电子设备",),
+    ),
+    (
+        ("出嫁", "婚礼", "嫁"),
+        "wedding",
+        "出嫁/婚礼",
+        (
+            "新娘与嫁衣/花轿清晰可见",
+            "婚礼队列或村口喜事气氛（锣鼓、红布）",
+        ),
+        ("老牛等与字幕无关的物件成为画面主体",),
+    ),
+    (
+        ("炊烟", "袅袅"),
+        "smoke_rising",
+        "静谧的黄昏/清晨",
+        (
+            "多股炊烟从农舍屋顶袅袅升起",
+            "农舍与屋顶轮廓清晰",
+            "乡村远景、天色渐暗或清晨",
+        ),
+        (),
+    ),
+    (
+        ("只剩", "只剩下", "只剩得"),
+        "solitude_leftover",
+        "孤寂/相依",
+        (
+            "空旷场景中仅剩字幕点名的老人与老牛",
+            "老人与老牛相互依存的孤独构图",
+        ),
+        ("其他家人同框成为主体",),
+    ),
+    (
+        ("写《", "写作", "创作", "灵感", "自序", "美国民歌", "民歌"),
+        "author_creation_context",
+        "创作之前的语境",
+        (
+            "写作语境：旧式写字台、稿纸、纸笔，或民歌唱片/乐谱",
+            "书中故事人物不得成为主体",
+        ),
+        ("已出版的《活着》成书作为主体", "书中故事人物作为主体"),
+    ),
+)
+
+# Scene Span event containers.  One container == one stable representative
+# frame; micro-actions inside the container never force a new image.  A
+# retrospective death mention (death_mention) is narration-only and must NOT
+# change the frame by itself.
+_EVENT_CONTAINERS: dict[str, str] = {
+    "death_aftermath": "death_aftermath",
+    "death_mention": "death_mention",
+    "execution_at_post": "execution_at_post",
+    "conscription": "execution_transport",
+    "pregnancy_birth": "family_household",
+    "battlefield": "battlefield",
+    "collapse": "physical_collapse",
+    "medical_visit": "medical_visit",
+    "blood_loss": "medical_visit",
+    "return_home": "return_home",
+    "departure_absence": "departure_absence",
+    "folk_song_collection": "folk_song_collection",
+    "wedding": "wedding",
+    "smoke_rising": "landscape_mood",
+    "solitude_leftover": "solitude_leftover",
+    "author_creation_context": "author_creation_context",
+}
+
+# Inside an execution-at-post, 绑柱 -> 举枪 -> 开枪 -> 倒下 -> 死亡 all share
+# ONE event container.  The normalizer folds the generic aftermath/collapse
+# rules into execution_at_post so the container does not over-cut the scene.
+_EXECUTION_NORMALIZABLE_PREDICATES = frozenset({"death_aftermath", "collapse"})
+
+# FIX (single-frame coverability review): death must be cause-specific, and a
+# retrospective mention of a dead person must not force on-screen corpse
+# imagery (which would spoil or contradict the surrounding captions).
+_DEATH_KEYWORDS: tuple[str, ...] = ("死", "撑死", "咽气", "去世", "枪毙", "没了", "离世", "送葬", "埋")
+_DEATH_CAUSE_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("撑死", "吃豆", "吃多了", "豆子"), "overeating_beans"),
+    (("枪毙", "刑场"), "execution"),
+    (("生孩子", "大出血", "产"), "childbirth"),
+    (("抽血", "献血", "针管", "注射", "血"), "blood_loss"),
+    (("病逝", "病重", "病死", "病"), "illness"),
+    (("淹", "车祸", "压死", "砸"), "accident"),
+)
+_DEATH_REFERENCE_MARKERS: tuple[str, ...] = (
+    "写死", "死去", "读到", "送葬", "埋", "想起", "记得", "名字", "家人",
+)
+_DEATH_ONSCREEN_MARKERS: tuple[str, ...] = (
+    "撑死", "咽气", "枪毙", "抽血", "血流", "倒下", "摔在", "歪在", "心跳", "大出血", "断了气",
+)
+_DEATH_EVIDENCE: dict[str, tuple[str, ...]] = {
+    "overeating_beans": (
+        "身体完全瘫软/倒伏，姿态与普通睡眠不相容（侧倒床边或地上、被发现在豆旁）",
+        "无反应、不省人事的姿势",
+        "豆子与事件直接关联：有明显吃过/剩余/散落的豆子（按字幕）",
+        "克制、非血腥的死亡后果语境",
+    ),
+    "blood_loss": (
+        "身体虚弱/瘫软倒下，脸色苍白（克制、非血腥）",
+        "抽血/针管等医疗语境在场（按字幕）",
+        "从兴奋或正常状态转入无反应",
+    ),
+    "execution": ("刑场/枪决语境，克制不血腥", "当事人倒地或跪伏（按字幕）"),
+    "childbirth": ("产房/大出血语境，克制不血腥", "医疗人员或家人围绕"),
+    "illness": ("病榻/病卧语境，克制不血腥",),
+    "accident": ("事故语境（淹/压/砸），克制不血腥",),
+    "unknown": ("克制、非血腥的死亡后果语境",),
+}
+_DEATH_FORBIDDEN: dict[str, tuple[str, ...]] = {
+    "overeating_beans": ("端正坐在椅上像睡着", "平静午睡姿态", "正在进食", "微笑", "看起来清醒"),
+    "blood_loss": ("健康奔跑或兴奋状态", "正常进食、说笑"),
+    "default": ("当事人健康站立或微笑",),
+}
+
+# Single-frame coverability (review): per-caption visual state label used by
+# the grouping gate to reject mutually incompatible event phases.
+_ALIVE_ACTIVE_KEYWORDS: tuple[str, ...] = (
+    "说", "问", "喊", "回答", "跑", "笑", "高兴", "站", "活着", "跳", "唱", "走",
+)
+
+# Event-only literal captions ("被抓壮丁", "战场上…") name no entity but are
+# perfectly drawable scenes. They get a synthetic must-show referent so the
+# classifier's Literal gate is satisfiable without inventing characters.
+def _event_only_subject(text: str) -> tuple[str, str, str] | None:
+    norm = _norm(text)
+    for keywords, entity_id, natural_language in (
+        (("壮丁", "当兵", "被抓", "拉去"), "ROLE_CONSORT", "被抓壮丁的农民"),
+        (("战场", "战争", "打仗", "围困"), "SCENE_WAR", "战场"),
+    ):
+        for keyword in keywords:
+            if keyword in norm:
+                return entity_id, natural_language, keyword
+    return None
+
+# FIX 3 (pilot R2): explicit author-creation metadata under a plot-register
+# section is a metadata defect, never a silent reinterpretation.
+_AUTHOR_CREATION_MARKERS: tuple[str, ...] = (
+    "写《",
+    "写作",
+    "创作",
+    "灵感",
+    "自序",
+    "美国民歌",
+    "民歌",
+)
+_CREATION_BEFORE_TITLE_RE = re.compile(r"写《[^》]+》\s*之前")
+
 
 class CaptionContractError(RuntimeError):
     """A caption cannot be given a defensible visual contract."""
@@ -90,6 +356,20 @@ def _norm(text: str) -> str:
     return unicodedata.normalize("NFKC", str(text or ""))
 
 
+# 音频旁白把锁定脚本标点全部去掉。与 meaning_blocks._SCRIPT_PUNCT 保持一致
+# （audio_stage 依赖 semantic_alignment，故不反向 import）。
+_BIND_PUNCT = frozenset("，。、！？；：,.;!?…—–·\"'“”‘’「」『』《》（）〈〉【】")
+
+
+def _bind_norm(text: str) -> str:
+    """NFKC + 去标点 + 去空白：用于 caption↔section/beat 的绑定匹配。
+
+    真实旁白流把脚本标点全部去掉；契约绑定若对标点敏感，去标点的 caption
+    （如 "因为那片海说"）永远匹配不上锁定文本（"因为那片海，说白了"）。
+    """
+    return "".join(ch for ch in _norm(text) if ch not in _BIND_PUNCT and not ch.isspace())
+
+
 def _short_name(full_natural_language: str, fallback: str) -> str:
     """Reduce an anchor's descriptive natural-language to a short referent name.
 
@@ -122,10 +402,27 @@ def _entity_display(entity_id: str, name_maps: Iterable[Mapping[str, str]]) -> s
 def _alias_display(entity_id: str) -> str:
     """Longest spoken alias registered for an entity id (e.g. OBJ_OX -> 牛)."""
 
-    aliases = _ENTITY_ALIASES.get(str(entity_id))
+    aliases = _ENTITY_ALIASES.get(str(entity_id)) or _ROLE_DISPLAY_ALIASES.get(str(entity_id))
     if aliases:
         return max(aliases, key=len)
     return ""
+
+
+def _scene_terms_in_text(text: str) -> list[str]:
+    """Scene display names literally named by the text (e.g. 战场/医院/街市)."""
+
+    norm = _norm(text)
+    found: list[str] = []
+    for entity_id, aliases in _ENTITY_ALIASES.items():
+        if not str(entity_id).startswith("SCENE_"):
+            continue
+        for alias in aliases:
+            if alias and alias in norm:
+                display = _alias_display(entity_id) or alias
+                if display not in found:
+                    found.append(display)
+                break
+    return found
 
 
 @dataclass(frozen=True)
@@ -166,6 +463,61 @@ class CaptionEntityEvidence:
 
 
 @dataclass(frozen=True)
+class VisualEventState:
+    """FIX 1 (pilot R2): observable visual event state for one caption.
+
+    Entities alone are not enough: a frame may list the right nouns while
+    depicting the wrong event ("苦根 + 豆子" but the child is healthy and
+    sitting). This record carries the predicate, the state and the concrete
+    visual evidence the image must establish, plus states that would
+    contradict the caption and are therefore forbidden.
+    """
+
+    action_predicate: str
+    cause_type: str = ""
+    is_reference_death: bool = False
+    actors: tuple[str, ...] = ()
+    participant_roles: tuple[str, ...] = ()
+    objects: tuple[str, ...] = ()
+    subject_state: str = ""
+    required_observable_evidence: tuple[str, ...] = ()
+    forbidden_contradictory_state: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "action_predicate": self.action_predicate,
+            "cause_type": self.cause_type,
+            "is_reference_death": self.is_reference_death,
+            "actors": list(self.actors),
+            "participant_roles": list(self.participant_roles),
+            "objects": list(self.objects),
+            "subject_state": self.subject_state,
+            "required_observable_evidence": list(self.required_observable_evidence),
+            "forbidden_contradictory_state": list(self.forbidden_contradictory_state),
+        }
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> "VisualEventState":
+        if not isinstance(raw, Mapping):
+            raise CaptionContractError("visual_event_state must be a mapping")
+        return cls(
+            action_predicate=str(raw.get("action_predicate", "")),
+            cause_type=str(raw.get("cause_type", "")),
+            is_reference_death=bool(raw.get("is_reference_death", False)),
+            actors=tuple(str(item) for item in raw.get("actors", []) if str(item).strip()),
+            participant_roles=tuple(str(item) for item in raw.get("participant_roles", []) if str(item).strip()),
+            objects=tuple(str(item) for item in raw.get("objects", []) if str(item).strip()),
+            subject_state=str(raw.get("subject_state", "")),
+            required_observable_evidence=tuple(
+                str(item) for item in raw.get("required_observable_evidence", []) if str(item).strip()
+            ),
+            forbidden_contradictory_state=tuple(
+                str(item) for item in raw.get("forbidden_contradictory_state", []) if str(item).strip()
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class CaptionVisualContract:
     """The authoritative record of what one display caption demands on screen.
 
@@ -194,7 +546,16 @@ class CaptionVisualContract:
 
     visual_focus: str = ""
     visual_mode: str = "literal"
+    visual_state: str = "generic_scene"
+    presence_mode: str = "current"
     semantic_signature: str = ""
+    visual_event_state: VisualEventState | None = None
+    # FIX A (pilot R2.1): exact narrative participant cardinality for concrete
+    # character scenes. A literal scene that names persistent characters must
+    # tell the image model exactly how many story characters may be present.
+    expected_visible_character_ids: tuple[str, ...] = ()
+    expected_narrative_character_count: int = 0
+    allow_unlisted_narrative_characters: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -215,7 +576,13 @@ class CaptionVisualContract:
             "must_not_show_as_primary": [item.to_dict() for item in self.must_not_show_as_primary],
             "visual_focus": self.visual_focus,
             "visual_mode": self.visual_mode,
+            "visual_state": self.visual_state,
+            "presence_mode": self.presence_mode,
             "semantic_signature": self.semantic_signature,
+            "visual_event_state": self.visual_event_state.to_dict() if self.visual_event_state is not None else None,
+            "expected_visible_character_ids": list(self.expected_visible_character_ids),
+            "expected_narrative_character_count": self.expected_narrative_character_count,
+            "allow_unlisted_narrative_characters": self.allow_unlisted_narrative_characters,
         }
 
     @classmethod
@@ -271,7 +638,21 @@ class CaptionVisualContract:
             ),
             visual_focus=str(raw.get("visual_focus", "")),
             visual_mode=str(raw.get("visual_mode", "literal")),
+            visual_state=str(raw.get("visual_state", "generic_scene")),
+            presence_mode=str(raw.get("presence_mode", "current")),
             semantic_signature=str(raw.get("semantic_signature", "")),
+            visual_event_state=(
+                VisualEventState.from_mapping(raw["visual_event_state"])
+                if isinstance(raw.get("visual_event_state"), Mapping)
+                else None
+            ),
+            expected_visible_character_ids=tuple(
+                str(item) for item in raw.get("expected_visible_character_ids", []) if str(item).strip()
+            ),
+            expected_narrative_character_count=int(raw.get("expected_narrative_character_count", 0) or 0),
+            allow_unlisted_narrative_characters=bool(
+                raw.get("allow_unlisted_narrative_characters", True)
+            ),
         )
 
     def content_sha256(self) -> str:
@@ -330,6 +711,8 @@ def _best_beat_for_caption(
     caption_text: str,
     beats: Sequence[Mapping[str, Any]],
     section_text_by_id: Mapping[str, str],
+    *,
+    source_section_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Bind a caption to the locked beat whose cue best overlaps its text.
 
@@ -339,15 +722,19 @@ def _best_beat_for_caption(
     bound to a long section-level beat that merely shares a clause.
     """
 
-    norm = _norm(caption_text)
+    norm = _bind_norm(caption_text)
     if not norm:
         return None
     matches: list[dict[str, Any]] = []
     best_cue_len: int | None = None
     for beat in beats:
-        cue = _norm(beat.get("cue", ""))
+        cue = _bind_norm(beat.get("cue", ""))
         if not cue:
             continue
+        if source_section_id is not None:
+            beat_section = str(beat.get("sectionId") or beat.get("section_id") or "")
+            if beat_section != source_section_id:
+                continue
         if norm in cue or cue in norm:
             cue_len = len(cue)
             if best_cue_len is None or cue_len < best_cue_len:
@@ -377,7 +764,7 @@ def _best_beat_for_caption(
 # from the beat's required-entity ids (which a buggy storyboard can get wrong).
 _ENTITY_ALIASES: dict[str, tuple[str, ...]] = {
     "C001": ("福贵",),
-    "C002": ("福贵",),
+    "C002": ("福贵", "老头", "老人"),
     "C003": ("家珍",),
     "C004": ("凤霞",),
     "C005": ("有庆",),
@@ -394,7 +781,7 @@ _ENTITY_ALIASES: dict[str, tuple[str, ...]] = {
     "OBJ_GRAVE": ("坟", "墓"),
     "SCENE_FIELD": ("田野", "田", "田埂"),
     "SCENE_VILLAGE": ("村", "村口"),
-    "SCENE_STREET": ("街", "镇", "青石板"),
+    "SCENE_STREET": ("街", "镇", "青石板", "城"),
     "SCENE_GAMBLING": ("赌", "赌场"),
     "SCENE_HOSPITAL": ("医院", "产房"),
     "SCENE_EXECUTION": ("刑场", "枪毙"),
@@ -409,6 +796,11 @@ _ENTITY_ALIASES: dict[str, tuple[str, ...]] = {
     "SCENE_SCHOOL": ("私塾", "学校"),
     "SCENE_WAR": ("战场", "战争"),
     "SCENE_WEDDING": ("婚礼", "出嫁"),
+    # FIX 2 (pilot R2): concrete visual referents named by closing/theory
+    # captions must be recognized as drawable, not forced into Abstract.
+    "OBJ_SMOKE": ("炊烟",),
+    "OBJ_FARMHOUSE": ("农舍",),
+    "OBJ_ROOF": ("屋顶",),
 }
 
 
@@ -423,9 +815,27 @@ _CAPTION_LOCAL_ROLES: dict[str, tuple[str, str, str]] = {
     "少爷": ("ROLE_YOUNG_MASTER", "young_master", "male"),
     "老爷": ("ROLE_MASTER", "master", "male"),
     "医生": ("ROLE_DOCTOR", "doctor", ""),
+    # FIX 1 (pilot R2): 郎中/大夫 are caption-local anonymous medical roles,
+    # not persistent identities; they must be drawable without a Cxxx anchor.
+    "郎中": ("ROLE_DOCTOR", "doctor", ""),
+    "大夫": ("ROLE_DOCTOR", "doctor", ""),
     "护士": ("ROLE_NURSE", "nurse", ""),
     "县长": ("ROLE_COUNTY_MAGISTRATE", "county_magistrate", ""),
     "孩子": ("ROLE_CHILD", "child", ""),
+    # FIX 4 (pilot R2): 年轻人/青年 resolve to an anonymous local young-person
+    # role so a caption like "一个下乡收集民谣的年轻人" can be generated
+    # without requiring a persistent Visual Bible identity.
+    "年轻人": ("ROLE_YOUNG_MAN", "young_man", "male"),
+    "青年": ("ROLE_YOUNG_MAN", "young_man", "male"),
+    "余华": ("ROLE_AUTHOR", "author", "male"),
+}
+
+# FIX 3 (pilot R2): display aliases for caption-local anonymous roles so a
+# pronoun-resolved role renders as a human name, never a raw ROLE_ id.
+_ROLE_DISPLAY_ALIASES: dict[str, tuple[str, ...]] = {
+    "ROLE_DOCTOR": ("郎中", "大夫", "医生"),
+    "ROLE_YOUNG_MAN": ("年轻人", "青年"),
+    "ROLE_AUTHOR": ("余华",),
 }
 
 
@@ -444,6 +854,8 @@ _PROFILE_GENDER_MARKERS: dict[str, tuple[str, ...]] = {
     "female": ("女子", "女人", "女孩", "少女", "新娘"),
     "male": ("男子", "男人", "男孩", "少年", "少爷"),
 }
+
+_ANIMAL_MARKERS: tuple[str, ...] = ("老牛", "水牛", "黄牛", "耕牛", "牛犊", "马", "羊", "猪", "狗", "猫", "牲畜", "动物")
 
 
 _CONTEXTUAL_ENTITY_TERMS: dict[str, tuple[str, ...]] = {
@@ -758,12 +1170,16 @@ def _pronoun_candidates(
         declared_type = declared.get("entity_type") if isinstance(declared, Mapping) else None
         declared_gender = declared.get("gender") if isinstance(declared, Mapping) else None
         if pronoun in {"他", "她"} and kind == "char":
+            if declared_type is not None and declared_type != "person":
+                continue
             if _gender_conflicts(pronoun, declared_gender):
                 continue
             candidates.append((entity_id, kind, term))
         elif _is_plural_group_candidate(pronoun, kind):
             candidates.append((entity_id, kind, term))
-        elif pronoun == "它" and (kind != "char" or declared_type is not None):
+        elif pronoun == "它" and kind != "scene" and (
+            kind != "char" or (declared_type is not None and declared_type != "person")
+        ):
             candidates.append((entity_id, kind, term))
     return candidates
 
@@ -850,6 +1266,70 @@ def _entity_evidence(
     )
 
 
+def _active_life_stage_signature(
+    visible_ids: Sequence[str],
+    character_register: Sequence[Mapping[str, Any]] | None,
+) -> dict[str, str]:
+    """Return one active life-stage per story name for the visible characters.
+
+    The register order is authoritative: when a caption resolves both a
+    younger variant and its older self (e.g. C001/C002 都是“福贵”), the later
+    registered stage wins so 青年→中年→老年 is one actor aging, never three
+    random men.  Empty when no register is available (safe degradation).
+    """
+
+    if not character_register:
+        return {}
+    wanted = {str(item) for item in visible_ids if str(item).startswith("C")}
+    if not wanted:
+        return {}
+    by_id: dict[str, tuple[str, str]] = {}
+    ordered: list[str] = []
+    for item in character_register:
+        cid = str(item.get("character_id") or "").strip()
+        if not cid:
+            continue
+        name = str(item.get("name") or item.get("prompt_subject") or cid).strip()
+        stage = str(item.get("life_stage") or "").strip()
+        by_id[cid] = (name, stage)
+        if cid not in ordered:
+            ordered.append(cid)
+    active_by_name: dict[str, str] = {}
+    for cid in ordered:
+        if cid not in wanted:
+            continue
+        active_by_name[by_id[cid][0] or cid] = cid
+    signature: dict[str, str] = {}
+    for cid in sorted(active_by_name.values()):
+        stage = by_id[cid][1]
+        if stage:
+            signature[cid] = stage
+    return signature
+
+
+def _continuity_scene_identity(
+    *,
+    visual_event_state: VisualEventState,
+    action_semantics: Mapping[str, Any],
+    location_id: str,
+) -> str:
+    """Derive the stable Scene Span container for one caption.
+
+    The container is (event class, place), NOT the beat id and NOT the
+    event_instance_id: micro-actions inside one event must never split a span,
+    while a real event/place change does.
+    """
+
+    predicate = visual_event_state.action_predicate
+    container = _EVENT_CONTAINERS.get(predicate, "")
+    if container and container != "death_mention":
+        return f"event:{container}:{location_id or ''}"
+    hard = str(action_semantics.get("hard_split_event") or "none")
+    if hard != "none":
+        return f"event:{hard}:{location_id or ''}"
+    return f"place:{location_id or ''}"
+
+
 def _derive_action_semantics(
     *,
     caption: Mapping[str, Any],
@@ -922,6 +1402,266 @@ def _derive_action_semantics(
     }
 
 
+def _derive_visual_event_state(
+    *,
+    text: str,
+    narrative_function: str,
+    visual_mode: str,
+    must_show: Sequence[CaptionEntityEvidence],
+    location: str,
+) -> VisualEventState:
+    """FIX 1 (pilot R2): derive the observable visual event state for one caption.
+
+    The rules are deterministic and keyword-driven; the first matching rule
+    names the predicate, and every matching rule contributes required evidence
+    (deduplicated). A concrete literal caption that yields no observable
+    requirement at all fails closed rather than shipping a noun-only frame.
+    """
+
+    norm = _norm(text)
+    actors = tuple(
+        item.natural_language for item in must_show if _entity_kind(item.entity_id) in {"char", "group"}
+    )
+    roles = tuple(
+        item.natural_language for item in must_show if str(item.entity_id).startswith("ROLE_")
+    )
+    objects = tuple(
+        item.natural_language for item in must_show if _entity_kind(item.entity_id) == "obj"
+    )
+    matched: list[tuple[str, str, tuple[str, ...], tuple[str, ...]]] = []
+    cause_type = ""
+    is_reference_death = False
+    if any(keyword in norm for keyword in _DEATH_KEYWORDS):
+        cause_type = next(
+            (
+                cause
+                for keywords, cause in _DEATH_CAUSE_RULES
+                if any(keyword in norm for keyword in keywords)
+            ),
+            "unknown",
+        )
+        is_reference_death = (
+            any(marker in norm for marker in _DEATH_REFERENCE_MARKERS)
+            and not any(marker in norm for marker in _DEATH_ONSCREEN_MARKERS)
+        )
+        if is_reference_death:
+            matched.append((
+                "death_mention",
+                "提及死亡（不画尸体、不倒伏）",
+                (
+                    "这是对死亡的回忆或提及，不出现尸体或倒地姿态",
+                    "克制呈现，避免提前剧透或血腥",
+                ),
+                ("尸体或倒地姿态", "血腥特写"),
+            ))
+        else:
+            matched.append((
+                "death_aftermath",
+                f"非血腥的死亡后果（cause={cause_type}）",
+                _DEATH_EVIDENCE.get(cause_type, _DEATH_EVIDENCE["unknown"]),
+                _DEATH_FORBIDDEN.get(cause_type, _DEATH_FORBIDDEN["default"]),
+            ))
+    for keywords, predicate, subject_state, evidence, forbidden in _EVENT_RULES:
+        if any(keyword in norm for keyword in keywords) and predicate != "death_aftermath":
+            matched.append((predicate, subject_state, evidence, forbidden))
+    # 绑柱/枪决/开枪/倒下/死亡 is ONE Scene Span container.  When the
+    # execution rule matches, fold generic death-aftermath and collapse into
+    # execution_at_post so the event container stays stable inside the
+    # execution sequence (用户标准范例：龙二执行段一张图).
+    if any(predicate == "execution_at_post" for predicate, _state, _ev, _forb in matched):
+        matched = [
+            (
+                predicate if predicate not in _EXECUTION_NORMALIZABLE_PREDICATES else "execution_at_post",
+                state,
+                evidence,
+                forbidden,
+            )
+            for predicate, state, evidence, forbidden in matched
+        ]
+    evidence_seen: set[str] = set()
+    evidence: list[str] = []
+    forbidden_seen: set[str] = set()
+    forbidden_states: list[str] = []
+    for _predicate, _subject_state, rule_evidence, rule_forbidden in matched:
+        for item in rule_evidence:
+            if item not in evidence_seen:
+                evidence_seen.add(item)
+                evidence.append(item)
+        for item in rule_forbidden:
+            if item not in forbidden_seen:
+                forbidden_seen.add(item)
+                forbidden_states.append(item)
+
+    if not matched and visual_mode == "literal":
+        concrete_terms = [item.natural_language for item in must_show if item.natural_language]
+        if concrete_terms:
+            evidence.append("字幕点名的实体必须清晰可见：" + "、".join(concrete_terms))
+        if location and location.strip():
+            evidence.append("场景按字幕呈现：" + location.strip())
+        # Fail-closed is enforced at task-build time (DirectorStageError) so a
+        # single undrawable caption cannot block the whole contract document.
+
+    predicate = matched[0][0] if matched else "caption_scene_state"
+    subject_state = matched[0][1] if matched else ""
+    return VisualEventState(
+        action_predicate=predicate,
+        cause_type=cause_type,
+        is_reference_death=is_reference_death,
+        actors=actors,
+        participant_roles=roles,
+        objects=objects,
+        subject_state=subject_state,
+        required_observable_evidence=tuple(evidence),
+        forbidden_contradictory_state=tuple(forbidden_states),
+    )
+
+
+def merge_visual_event_states(
+    contracts: Sequence["CaptionVisualContract"],
+) -> dict[str, Any] | None:
+    """Merge per-caption Visual Event States into one group-level record."""
+
+    states = [
+        contract.visual_event_state
+        for contract in contracts
+        if contract.visual_event_state is not None
+    ]
+    if not states:
+        return None
+
+    def ordered_union(items: Iterable[str]) -> list[str]:
+        out: list[str] = []
+        for item in items:
+            value = str(item).strip()
+            if value and value not in out:
+                out.append(value)
+        return out
+
+    return {
+        # Culmination wins: a setup chain (离开 -> 归来 -> 死亡后果) is
+        # summarised by its last non-generic predicate so the frame focus
+        # reflects the event's outcome, not its setup.
+        "action_predicate": next(
+            (
+                state.action_predicate
+                for state in reversed(states)
+                if state.action_predicate and state.action_predicate != "caption_scene_state"
+            ),
+            states[0].action_predicate,
+        ),
+        "cause_type": next(
+            (state.cause_type for state in states if state.cause_type),
+            "",
+        ),
+        "is_reference_death": any(state.is_reference_death for state in states),
+        "actors": ordered_union(actor for state in states for actor in state.actors),
+        "participant_roles": ordered_union(role for state in states for role in state.participant_roles),
+        "objects": ordered_union(obj for state in states for obj in state.objects),
+        # Culmination wins for the subject state too (a death group must not
+        # report "归家/重逢" as its state because a return caption came first).
+        "subject_state": next(
+            (
+                state.subject_state
+                for state in reversed(states)
+                if state.subject_state
+            ),
+            "",
+        ),
+        "required_observable_evidence": ordered_union(
+            item for state in states for item in state.required_observable_evidence
+        ),
+        "forbidden_contradictory_state": ordered_union(
+            item for state in states for item in state.forbidden_contradictory_state
+        ),
+    }
+
+
+def infer_death_cause(text: str) -> str:
+    """First cause keyword matched in the text (empty when no death-cause keyword)."""
+
+    norm = _norm(text)
+    return next(
+        (
+            cause
+            for keywords, cause in _DEATH_CAUSE_RULES
+            if any(keyword in norm for keyword in keywords)
+        ),
+        "",
+    )
+
+
+def _derive_visual_state(
+    *,
+    text: str,
+    narrative_function: str,
+    visual_mode: str,
+    event_state: VisualEventState | None,
+    must_show: Sequence[CaptionEntityEvidence],
+) -> str:
+    """One deterministic visual-state label per caption (single-frame coverability)."""
+
+    norm = _norm(text)
+    predicate = event_state.action_predicate if event_state is not None else ""
+    cause = event_state.cause_type if event_state is not None else ""
+    reference = event_state.is_reference_death if event_state is not None else False
+    if predicate == "death_mention" or reference:
+        return "death_mention"
+    if predicate == "death_aftermath":
+        return "death_aftermath"
+    if any(keyword in norm for keyword in ("怀孕", "生孩子", "产房", "生啦", "大出血")):
+        return "pregnancy_birth"
+    if predicate == "wedding":
+        return "wedding"
+    if predicate == "medical_visit":
+        return "medical_visit"
+    # G061/62 region: donation chain has four physically distinct phases.
+    if any(keyword in norm for keyword in ("大出血", "组织", "献血", "集合")):
+        return "donation_setup"
+    if any(keyword in norm for keyword in ("血型对", "涨红", "兴奋", "跑到门口", "喊")):
+        return "donation_match"
+    if any(keyword in norm for keyword in ("验血", "血型不对", "认错", "怯生生", "让进去", "十几个")):
+        return "donation_wait"
+    if any(keyword in norm for keyword in ("脱鞋", "第一个跑到", "拖到一边", "跑")):
+        return "donation_rush"
+    if any(keyword in norm for keyword in ("战场", "战争", "打仗", "围困", "枪声", "枪毙")):
+        return "battlefield"
+    if any(keyword in norm for keyword in ("壮丁", "当兵", "拉去", "被抓")):
+        return "conscription"
+    if (
+        (event_state is not None and event_state.action_predicate == "blood_loss")
+        or cause == "blood_loss"
+        or any(keyword in norm for keyword in ("抽血", "献血"))
+    ):
+        if any(keyword in norm for keyword in ("脸白", "嘴唇白", "头晕", "虚弱", "苍白", "抽", "不停", "摔倒", "心跳", "死")):
+            return "blood_loss"
+    if any(keyword in norm for keyword in ("脸白", "嘴唇白", "头晕", "虚弱", "苍白")):
+        return "blood_loss"
+    if any(keyword in norm for keyword in ("歪在", "摔在", "倒下", "瘫")):
+        return "collapse"
+    if any(keyword in norm for keyword in _ALIVE_ACTIVE_KEYWORDS) and any(
+        str(item.entity_id).startswith("C") for item in must_show
+    ):
+        # Speech/active captions with a named character ("听到苦根在背后说")
+        # are an alive interaction even when a departure/return setup precedes
+        # them inside the same caption or group.
+        return "alive_active"
+    if predicate == "departure_absence":
+        return "departure_absence"
+    if predicate == "return_home":
+        return "return_home"
+    if predicate == "folk_song_collection":
+        return "folk_collection"
+    if predicate == "smoke_rising":
+        return "closing_hold"
+    if predicate == "solitude_leftover":
+        return "solitude"
+    if predicate == "author_creation_context":
+        return "author_hold"
+    if narrative_function in {"theory", "transition", "closing"} and visual_mode == "symbolic_or_abstract":
+        return "theory_hold"
+    return "generic_scene"
+
+
 def enrich_captions_to_contracts(
     *,
     script_sections: Sequence[Mapping[str, Any]],
@@ -929,6 +1669,7 @@ def enrich_captions_to_contracts(
     captions: Sequence[Mapping[str, Any]],
     entity_name_maps: Iterable[Mapping[str, str]] = (),
     entity_metadata: Mapping[str, Mapping[str, Any]] | None = None,
+    character_register: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[CaptionVisualContract]:
     """Derive the authoritative Caption Visual Contract for every caption.
 
@@ -936,6 +1677,11 @@ def enrich_captions_to_contracts(
     (for example character anchors, object anchors, scene anchors) used to
     resolve raw entity ids (``C002``, ``OBJ_BOOK``, ``SCENE_FIELD``) to human
     names for the contract's ``must_show`` list.
+
+    ``character_register`` is the ordered HBG Bridge character list carrying
+    ``character_id``/``name``/``life_stage``.  It is used to freeze one active
+    life-stage per story name into ``scene_state.continuity_state`` so Scene
+    Span building can split 青年→中年→老年 without splitting micro-actions.
 
     The caption is the authority for required visible entities. A beat's
     ``requiredEntities`` may disambiguate an explicit caption name or remain
@@ -957,7 +1703,7 @@ def enrich_captions_to_contracts(
         if not sid:
             continue
         section_by_id[sid] = dict(section)
-        section_text_by_id[sid] = _norm(section.get("text", ""))
+        section_text_by_id[sid] = _bind_norm(section.get("text", ""))
 
     lexicon = _build_referent_lexicon(maps)
     beat_list = list(beats)
@@ -970,22 +1716,37 @@ def enrich_captions_to_contracts(
             raise CaptionContractError(f"caption {caption_id} has no text; cannot derive a contract")
         text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-        beat = _best_beat_for_caption(text, beat_list, section_text_by_id)
-        if beat is None:
-            section_matches = [
-                section_id
-                for section_id, section_text in section_text_by_id.items()
-                if section_text and _norm(text) in section_text
-            ]
-            if len(section_matches) != 1:
+        source_section = str(caption.get("source_section_id") or "").strip() or None
+        if source_section is not None:
+            # 对齐记录是权威；但文本必须仍出现在该 section（标点不敏感），否则
+            # 证据与锁定脚本不一致 → fail-closed。
+            if source_section not in section_text_by_id:
                 raise CaptionContractError(
-                    f"caption {caption_id} ({text[:24]!r}) cannot be bound to exactly one locked script section"
+                    f"caption {caption_id} source_section_id {source_section!r} is not a locked script section"
                 )
-            section_id = section_matches[0]
+            if not section_text_by_id[source_section] or _bind_norm(text) not in section_text_by_id[source_section]:
+                raise CaptionContractError(
+                    f"caption {caption_id} ({text[:24]!r}) text does not occur in its aligned section {source_section}"
+                )
+            section_id = source_section
+            beat = _best_beat_for_caption(text, beat_list, section_text_by_id, source_section_id=source_section)
         else:
-            section_id = str(beat.get("sectionId") or beat.get("section_id") or "")
-            if not section_id:
-                raise CaptionContractError(f"caption {caption_id} beat has no section_id")
+            beat = _best_beat_for_caption(text, beat_list, section_text_by_id)
+            if beat is None:
+                section_matches = [
+                    section_id
+                    for section_id, section_text in section_text_by_id.items()
+                    if section_text and _bind_norm(text) in section_text
+                ]
+                if len(section_matches) != 1:
+                    raise CaptionContractError(
+                        f"caption {caption_id} ({text[:24]!r}) cannot be bound to exactly one locked script section"
+                    )
+                section_id = section_matches[0]
+            else:
+                section_id = str(beat.get("sectionId") or beat.get("section_id") or "")
+                if not section_id:
+                    raise CaptionContractError(f"caption {caption_id} beat has no section_id")
         section = section_by_id.get(section_id, {})
         raw_section_nf = section.get("narrative_function")
         if not raw_section_nf:
@@ -1000,6 +1761,18 @@ def enrich_captions_to_contracts(
             raise CaptionContractError(
                 f"caption {caption_id} beat narrative_function conflicts with script section {section_id}: "
                 f"{raw_beat_nf!r} != {raw_section_nf!r}"
+            )
+        # FIX 3 (pilot R2): author-creation metadata under a plot register is a
+        # locked-metadata defect. Do not silently reinterpret it to
+        # author_background; name the section so the script metadata is fixed.
+        author_marker = next((marker for marker in _AUTHOR_CREATION_MARKERS if marker in text), None)
+        if author_marker and narrative_function in _LITERAL_FUNCTIONS:
+            raise CaptionContractError(
+                f"caption {caption_id} ({text[:24]!r}) contains explicit author-creation "
+                f"metadata {author_marker!r} but its locked script section {section_id} "
+                f"is registered {raw_section_nf!r} (plot register). Correct the "
+                "script/section metadata to author_background before generating; the "
+                "pipeline will not silently reinterpret it."
             )
 
         required = [str(item) for item in beat_context.get("requiredEntities", []) if str(item).strip()]
@@ -1033,6 +1806,31 @@ def enrich_captions_to_contracts(
                 reason="caption_local_group",
                 evidence=evidence,
             ))
+        if not must_show:
+            event_only = _event_only_subject(text)
+            if event_only is not None:
+                entity_id, natural_language, matched = event_only
+                must_show.append(_entity_evidence(
+                    entity_id,
+                    natural_language=natural_language,
+                    reason="event_only_subject",
+                    evidence={"text_evidence": matched, "caption_id": caption_id},
+                ))
+
+        # FIX 3 (pilot R2): for "写《活着》之前" style author-background clauses
+        # the finished book (and the author's face) must not be primary
+        # referents -- the image illustrates the act of creation before the
+        # book exists. Demotion happens after pronoun resolution so both stay
+        # auditable, then both move to may_show context.
+        creation_before = (
+            narrative_function == "author_background"
+            and bool(_CREATION_BEFORE_TITLE_RE.search(text))
+        )
+        names_author = (
+            narrative_function == "author_background"
+            and any(role_id == "ROLE_AUTHOR" for role_id, _term, _evidence in local_roles)
+        )
+        demoted_referents: list[CaptionEntityEvidence] = []
 
         pronoun_evidence: list[dict[str, Any]] = []
         resolved_entity_ids: set[str] = set()
@@ -1067,6 +1865,32 @@ def enrich_captions_to_contracts(
                         (entity_id, kind, term)
                         for entity_id, (kind, term) in caption_found.items()
                         if entity_id in current_candidate_ids
+                    ]
+                    # FIX 4 (pilot R2): a caption-local anonymous role named in
+                    # the same caption (e.g. 余华 for "余华说…") is a valid
+                    # pronoun antecedent and must not fall through to a story
+                    # character from the Beat context. The role must appear
+                    # BEFORE the pronoun inside the SAME clause ("他爹是老爷，他
+                    # 是少爷" keeps 爹/老爷/少爷 as predicates, not antecedents).
+                    local_role_lookup = {role_id: evidence for role_id, _term, evidence in local_roles}
+                    pronoun_clause = next(
+                        (
+                            clause for clause in _caption_clauses(text)
+                            if clause["start"] <= pronoun_start < clause["end"]
+                        ),
+                        None,
+                    )
+                    same_caption_candidates = same_caption_candidates + [
+                        (role_id, "char", term)
+                        for role_id, term, _evidence in local_roles
+                        if not _gender_conflicts(
+                            pronoun,
+                            local_role_lookup.get(role_id, {}).get("gender"),
+                        )
+                        and pronoun_clause is not None
+                        and pronoun_clause["start"]
+                        <= int(local_role_lookup[role_id]["caption_span"]["start"])
+                        < pronoun_start
                     ]
                 fallback_due_no_current_candidate = False
             else:
@@ -1263,6 +2087,18 @@ def enrich_captions_to_contracts(
                     ))
                     resolved_entity_ids.add(entity_id)
 
+        # FIX 3 (pilot R2): demote the finished book (creation-before) and the
+        # author's face (author-background register) after pronoun resolution.
+        if creation_before or names_author:
+            demoted_referents = [
+                item for item in must_show
+                if item.entity_id in {"OBJ_BOOK", "ROLE_AUTHOR"}
+            ]
+            must_show = [
+                item for item in must_show
+                if item.entity_id not in {"OBJ_BOOK", "ROLE_AUTHOR"}
+            ]
+
         must_show_ids = {item.entity_id for item in must_show}
         may_show = tuple(
             _entity_evidence(
@@ -1285,14 +2121,93 @@ def enrich_captions_to_contracts(
             for entity_id in forbidden
         )
 
-        visual_mode = "literal" if narrative_function in _LITERAL_FUNCTIONS else "symbolic_or_abstract"
+        # FIX 2 (pilot R2): Narrative Function decides narrative treatment, not
+        # whether the caption has visible referents. A closing/theory caption
+        # that names concrete drawable referents (炊烟/农舍/屋顶/牛/灯/雨/河)
+        # stays Literal; only referent-less captions may fall to symbolic/
+        # abstract. Author-creation "before the book exists" captions keep the
+        # demoted OBJ_BOOK out of the concreteness decision.
+        # FIX 2 (pilot R2): Literal requires concrete referents in the caption
+        # itself, for every register. An opening/plot caption that names
+        # nothing drawable is not Literal-with-empty-must_show; it falls to
+        # symbolic_or_abstract (and is rejected downstream if the register
+        # cannot justify an atmosphere frame). "Before the book was written"
+        # author-background clauses are always symbolic: the finished book and
+        # the author's face are demoted context, not drawable must-show.
+        concrete_ids = {
+            entity_id for entity_id in caption_found
+            if not (demoted_referents and entity_id in {"OBJ_BOOK", "ROLE_AUTHOR"})
+        }
+        effective_roles = [
+            (role_id, term, evidence)
+            for role_id, term, evidence in local_roles
+            if not ((creation_before or names_author) and role_id == "ROLE_AUTHOR")
+        ]
+        # FIX 1 (pilot R2): an observable event keyword ("下地去了", "枪毙",
+        # "请郎中", "炊烟袅袅") is itself a concrete drawable claim even when
+        # the caption names no entity. It keeps the caption Literal so the
+        # event evidence is carried into the prompt.
+        event_rule_hit = any(
+            any(keyword in _norm(text) for keyword in keywords)
+            for keywords, _predicate, _state, _evidence, _forbidden in _EVENT_RULES
+        )
+        concrete_referents = bool(concrete_ids or effective_roles or local_groups or event_rule_hit)
+        visual_mode = (
+            "symbolic_or_abstract"
+            if (creation_before or names_author)
+            else ("literal" if concrete_referents else "symbolic_or_abstract")
+        )
         scene_eid = next((eid for eid in caption_found if eid.startswith("SCENE_")), "")
         location_id = scene_eid or _first_scene(required)
         location = _entity_display(location_id, maps) if location_id else beat_context.get("location") or section.get("chapterTitle", "")
+        if demoted_referents:
+            may_show_context = tuple(
+                _entity_evidence(
+                    item.entity_id,
+                    natural_language=item.natural_language,
+                    reason="author_creation_temporal_context",
+                    evidence={
+                        "caption_id": caption_id,
+                        "caption_text": text,
+                        "note": "named by a 'before writing' clause; context only, never the primary referent",
+                    },
+                )
+                for item in demoted_referents
+            )
+            may_show = may_show_context + may_show
         actions = _split_sentences(beat_context.get("description", "") or text)[:3] or [text]
         visible_character_ids = [
             item.entity_id for item in must_show if _entity_kind(item.entity_id) in {"char", "group"}
         ]
+        visual_event_state = _derive_visual_event_state(
+            text=text,
+            narrative_function=narrative_function,
+            visual_mode=visual_mode,
+            must_show=must_show,
+            location=str(location),
+        )
+        visual_state = _derive_visual_state(
+            text=text,
+            narrative_function=narrative_function,
+            visual_mode=visual_mode,
+            event_state=visual_event_state,
+            must_show=must_show,
+        )
+        presence_mode = (
+            "memory"
+            if narrative_function in {"theory", "author_background"}
+            and any(str(item.entity_id).startswith("C") for item in must_show)
+            else "current"
+        )
+        # FIX A (pilot R2.1): exact participant cardinality. Persistent
+        # characters named by a literal contract are the only narrative
+        # characters allowed in the foreground/midground.
+        expected_character_ids = tuple(
+            sorted({
+                item.entity_id for item in must_show
+                if item.entity_id.startswith("C")
+            })
+        )
         contract = CaptionVisualContract(
             caption_id=caption_id,
             caption_text=text,
@@ -1314,7 +2229,27 @@ def enrich_captions_to_contracts(
                 "location_id": location_id,
                 "time_context": str(beat_context.get("time_context") or section.get("time_context") or ""),
                 "action_state": text,
-                "continuity_state": {"pronoun_resolutions": pronoun_evidence},
+                "continuity_state": {
+                    "pronoun_resolutions": pronoun_evidence,
+                    "life_stage": _active_life_stage_signature(
+                        visible_character_ids, character_register
+                    ),
+                    "scene_identity": _continuity_scene_identity(
+                        visual_event_state=visual_event_state,
+                        action_semantics=_derive_action_semantics(
+                            caption=caption,
+                            caption_id=caption_id,
+                            section_id=section_id,
+                            beat=beat,
+                        ),
+                        location_id=location_id,
+                    ),
+                    "scene_break_before": bool(
+                        caption.get("scene_break_before")
+                        or beat_context.get("scene_break_before")
+                        or beat_context.get("sceneBreakBefore")
+                    ),
+                },
                 "action_semantics": _derive_action_semantics(
                     caption=caption,
                     caption_id=caption_id,
@@ -1327,6 +2262,14 @@ def enrich_captions_to_contracts(
             must_not_show_as_primary=must_not_show,
             visual_focus=_norm(text)[:40],
             visual_mode=visual_mode,
+            visual_state=visual_state,
+            presence_mode=presence_mode,
+            visual_event_state=visual_event_state,
+            expected_visible_character_ids=expected_character_ids,
+            expected_narrative_character_count=len(expected_character_ids),
+            allow_unlisted_narrative_characters=not (
+                visual_mode == "literal" and len(expected_character_ids) > 0
+            ),
         )
         contract = replace(contract, semantic_signature=contract.content_sha256())
         results.append(contract)
@@ -1380,7 +2323,13 @@ def write_caption_visual_contract_document(
     document = build_caption_visual_contract_document(release_id=release_id, contracts=contracts)
     path = Path(root) / "04_audio" / "CAPTION_VISUAL_CONTRACT.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # Canonical serialization: the contract is a hash-tracked artifact, so the
+    # byte form must be byte-identical to the Phase-4 finalize writer (_pretty
+    # emits sort_keys=True UTF-8 with LF newlines). write_text would translate
+    # LF to CRLF on Windows, silently breaking the manifest integrity hash, so
+    # write raw bytes instead.
+    payload = (json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    path.write_bytes(payload)
     return path
 
 
@@ -1419,6 +2368,7 @@ _PROJECT_SCRIPT_PACKAGE_RELATIVE = "02_story_script_故事脚本/SCRIPT_PACKAGE.
 _PROJECT_STORYBOARD_BASE_RELATIVE = "STORYBOARD_BASE.json"
 _PROJECT_CAPTION_BINDINGS_RELATIVE = "04_audio/CAPTION_BINDINGS.json"
 _PROJECT_VISUAL_PROFILE_RELATIVE = "03_images_生成图片/BOOK_VISUAL_PROFILE.json"
+_PROJECT_HBG_BRIDGE_INPUT_RELATIVE = "02_story_script_故事脚本/HBG_BRIDGE_INPUT.json"
 
 
 def _load_project_json(root: Path, relative: str) -> dict[str, Any]:
@@ -1549,6 +2499,20 @@ def _build_project_entity_metadata(
             }
             if entity_id and is_character_anchor:
                 anchor_id = str(anchor.get("anchor_id") or entity_id)
+                if "entity_type" not in values:
+                    animal_hits = [
+                        marker
+                        for field in ("prompt_subject", "name")
+                        for marker in _ANIMAL_MARKERS
+                        if isinstance(anchor.get(field), str) and marker in anchor[field]
+                    ]
+                    if animal_hits:
+                        values["entity_type"] = "animal"
+                        values["animal_type_evidence"] = {
+                            "anchor_id": anchor_id,
+                            "marker": animal_hits[0],
+                            "profile_sha256": profile_sha256,
+                        }
                 marker_gender, marker_evidence = _profile_marker_gender(
                     anchor,
                     anchor_id=anchor_id,
@@ -1579,6 +2543,7 @@ def build_caption_visual_contract_from_project(
     *,
     release_id: str | None = None,
     validate_only: bool = False,
+    caption_bindings: Mapping[str, Any] | None = None,
 ) -> Path | dict[str, Any]:
     """Derive and persist the project's Caption Visual Contract.
 
@@ -1599,7 +2564,11 @@ def build_caption_visual_contract_from_project(
     beats = _load_project_json(root, _PROJECT_STORYBOARD_BASE_RELATIVE)
     if not isinstance(beats, list):
         raise CaptionContractError("STORYBOARD_BASE.json must be an array of beats")
-    cap_doc = _load_project_json(root, _PROJECT_CAPTION_BINDINGS_RELATIVE)
+    cap_doc = (
+        dict(caption_bindings)
+        if caption_bindings is not None
+        else _load_project_json(root, _PROJECT_CAPTION_BINDINGS_RELATIVE)
+    )
     captions_raw = cap_doc.get("captions", {})
     captions = list(captions_raw.values()) if isinstance(captions_raw, dict) else list(captions_raw)
     if not isinstance(captions, list) or not captions:
@@ -1608,6 +2577,20 @@ def build_caption_visual_contract_from_project(
     profile = _load_project_json(root, _PROJECT_VISUAL_PROFILE_RELATIVE)
     profile_sha256 = hashlib.sha256(profile_path.read_bytes()).hexdigest()
     name_maps = _build_project_entity_name_maps(profile)
+    # Life-stage lineage comes from the locked HBG Bridge character register:
+    # C001/C002 (青年/中年福贵) must resolve as one actor aging, never as
+    # unrelated characters. The register is optional so legacy projects without
+    # a bridge input keep working (helper degrades to empty).
+    character_register: list[Mapping[str, Any]] = []
+    bridge_path = root / _PROJECT_HBG_BRIDGE_INPUT_RELATIVE
+    if bridge_path.is_file():
+        try:
+            bridge = json.loads(bridge_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise CaptionContractError(f"contract input unreadable: {_PROJECT_HBG_BRIDGE_INPUT_RELATIVE}: {error}") from error
+        characters = bridge.get("characters") if isinstance(bridge, Mapping) else None
+        if isinstance(characters, list):
+            character_register = [item for item in characters if isinstance(item, Mapping)]
     if not release_id:
         release_id = cap_doc.get("release_id") or package.get("release_id") or "unknown"
     contracts = enrich_captions_to_contracts(
@@ -1616,6 +2599,7 @@ def build_caption_visual_contract_from_project(
         captions=captions,
         entity_name_maps=name_maps,
         entity_metadata=_build_project_entity_metadata(profile, profile_sha256=profile_sha256),
+        character_register=character_register,
     )
     document = build_caption_visual_contract_document(release_id=release_id, contracts=contracts)
     if validate_only:
