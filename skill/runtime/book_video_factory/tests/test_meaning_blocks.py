@@ -62,6 +62,12 @@ def test_single_word_over_cap_is_forced_block():
     assert blocks[0].text == "一个超长不可分割单词"
 
 
+def test_single_word_over_schema_ceiling_rejected():
+    # 单个词超过 schema 兜底上限（12s/60 字）→ fail-closed：产物无法通过自身 schema 校验。
+    with pytest.raises(MeaningBlockError):
+        build_meaning_blocks([WordCue("超长不可分割单词", 0.0, 13.0)])
+
+
 def test_blocks_to_bindings_schema_shape():
     blocks = build_meaning_blocks(CUES)
     doc = blocks_to_caption_bindings(blocks=blocks, release_id="omats-v25")

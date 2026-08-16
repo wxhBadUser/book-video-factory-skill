@@ -31,6 +31,10 @@ _MIN_CHARS = 8
 _MAX_CHARS = 18
 _TARGET_SECONDS = 2.8
 _MAX_SECONDS = 4.0
+# forced_single_word 的兜底上限：与 schema 的 12s/60 字一致。单个词超过此上限
+# 意味着证据畸形到无法进入字幕网格 —— fail-closed（产物无法通过自身 schema 校验）。
+_FORCED_MAX_SECONDS = 12.0
+_FORCED_MAX_CHARS = 60
 
 
 @dataclass(frozen=True)
@@ -130,6 +134,12 @@ def build_meaning_blocks(
         # 单个词自身就超过硬上限：不可再切分，强制单独成块
         # （schema 允许 forced_single_word；该块豁免 4s/18-字 上限）。
         if len(run) == 1 and (duration > max_seconds or length > max_chars):
+            # 超过 schema 兜底上限则 fail-closed（产物无法通过自身 schema 校验）
+            if duration > _FORCED_MAX_SECONDS or length > _FORCED_MAX_CHARS:
+                raise MeaningBlockError(
+                    f"single word {run[0].text!r} exceeds forced-block ceiling "
+                    f"({_FORCED_MAX_SECONDS}s / {_FORCED_MAX_CHARS} chars)"
+                )
             _close("forced_single_word")
         elif text.endswith(_TERMINAL) and length >= min_chars:
             _close("punctuation_terminal")
