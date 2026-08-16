@@ -96,3 +96,13 @@ def test_uncovered_gap_rejected():
     blocks[1]["start"] = 10.0  # gap after block 0
     with pytest.raises(VisualBeatError):
         plan_visual_beats(blocks)
+
+
+def test_timeline_document_validates_against_schema():
+    import json, jsonschema
+    from pathlib import Path
+    beats = plan_visual_beats(BLOCKS)
+    doc = build_visual_timeline_document(release_id="omats-v25", beats=beats,
+                                         source_continuity_sha256="a"*64, source_grouping_sha256="b"*64)
+    schema = json.loads((Path(__file__).parents[1] / "schemas" / "visual_timeline.v1.schema.json").read_text(encoding="utf-8"))
+    jsonschema.validate(doc, schema)

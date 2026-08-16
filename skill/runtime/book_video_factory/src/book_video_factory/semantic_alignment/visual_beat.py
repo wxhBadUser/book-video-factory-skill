@@ -41,7 +41,15 @@ class VisualBeat:
     source_span_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        # Emit JSON-native shapes: tuples -> lists. source_span_id is planner
+        # bookkeeping; the closed visual-timeline.v1 schema
+        # (additionalProperties: false) does not carry it in the doc.
+        data["caption_ids"] = list(data["caption_ids"])
+        data["caption_texts"] = list(data["caption_texts"])
+        data["participants"] = list(data["participants"])
+        data.pop("source_span_id", None)
+        return data
 
 
 def _norm_seconds(value: Any) -> float:

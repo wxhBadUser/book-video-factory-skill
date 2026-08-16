@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "VisualTimelineDocument",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "release_id", "source_continuity_sha256", "beat_count", "median_duration", "p95_duration", "max_duration", "beats"],
+  "properties": {
+    "schema_version": { "const": "visual-timeline.v1" },
+    "release_id": { "type": "string", "minLength": 1 },
+    "source_continuity_sha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+    "source_grouping_sha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+    "beat_count": { "type": "integer", "minimum": 1 },
+    "median_duration": { "type": "number", "minimum": 0, "maximum": 4.500001 },
+    "p95_duration": { "type": "number", "minimum": 0, "maximum": 6.000001 },
+    "max_duration": { "type": "number", "minimum": 0, "maximum": 8.000001 },
+    "holds": { "type": "integer", "minimum": 0 },
+    "beats": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["beat_id", "start", "end", "duration", "caption_ids", "caption_texts", "visual_proposition", "location_id", "participants", "motion", "intentional_hold_reason"],
+        "properties": {
+          "beat_id": { "type": "string", "pattern": "^VB_[0-9]{3}$" },
+          "start": { "type": "number", "minimum": 0 },
+          "end": { "type": "number", "minimum": 0 },
+          "duration": { "type": "number", "minimum": 1.0, "maximum": 8.000001 },
+          "caption_ids": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+          "caption_texts": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+          "visual_proposition": { "type": "string", "minLength": 1 },
+          "location_id": { "type": "string" },
+          "participants": { "type": "array", "items": { "type": "string" } },
+          "motion": { "const": "hold" },
+          "intentional_hold_reason": { "type": "string" }
+        }
+      }
+    }
+  }
+}
