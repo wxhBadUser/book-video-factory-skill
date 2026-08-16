@@ -85,8 +85,8 @@ def test_align_cues_to_script_records_section_per_cue():
         {"section_id": "S01", "text": "老人出海，天还没亮。"},
         {"section_id": "S02", "text": "他独自，迎向风浪。"},
     ]
-    # 旁白 = S01 全部 + S02 前 4 字：老人出海天还没亮他独自迎向
-    narration = "老人出海天还没亮他独自迎向"
+    # 旁白 = S01 全部 + S02 前 4 字：老人出海天还没亮他独自迎
+    narration = "老人出海天还没亮他独自迎"
     cues = [
         {"text": ch, "start": i * 0.3, "end": i * 0.3 + 0.25}
         for i, ch in enumerate(narration)

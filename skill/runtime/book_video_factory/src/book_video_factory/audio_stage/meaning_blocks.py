@@ -53,9 +53,15 @@ class MeaningBlock:
     duration: float
     word_count: int
     split_reason: str
+    # 锁定的脚本 section_id（对齐所得）。契约构建器用它做权威绑定 + 消歧；
+    # 未对齐的块（无 --script-package）为 None，走旧文本子串路径。
+    source_section_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        if data.get("source_section_id") is None:
+            data.pop("source_section_id", None)  # schema 里是 string；None 不进 JSON
+        return data
 
 
 def _norm_len(text: str) -> int:
@@ -65,14 +71,23 @@ def _norm_len(text: str) -> int:
 def build_meaning_blocks(
     cues: Sequence[WordCue | Mapping[str, Any]],
     *,
+    section_ids: Sequence[str | None] | None = None,
     min_chars: int = _MIN_CHARS,
     max_chars: int = _MAX_CHARS,
     target_seconds: float = _TARGET_SECONDS,
     max_seconds: float = _MAX_SECONDS,
     block_prefix: str = "BLK",
 ) -> list[MeaningBlock]:
+    """``section_ids``（与 ``cues`` 等长，每 cue 一个锁定 section_id，可为 None）
+    由 ``align_cues_to_script`` 产出；splitter 记录每个块的 ``source_section_id``
+    （= 块首 cue 的 section）。未传时块不带 section（None），兼容纯证据路径。"""
+    if section_ids is not None and len(section_ids) != len(cues):
+        raise MeaningBlockError(
+            f"section_ids length {len(section_ids)} != cue count {len(cues)}"
+        )
     words: list[WordCue] = []
-    for cue in cues:
+    word_sections: list[str | None] = []
+    for index, cue in enumerate(cues):
         if isinstance(cue, WordCue):
             text = cue.text.strip()
             if not text:
@@ -83,6 +98,7 @@ def build_meaning_blocks(
             if not text:
                 continue
             words.append(WordCue(text, float(cue["start"]), float(cue["end"])))
+        word_sections.append(None if section_ids is None else section_ids[index])
     if not words:
         raise MeaningBlockError("no word cues to split")
     for index in range(1, len(words)):
@@ -93,14 +109,15 @@ def build_meaning_blocks(
 
     blocks: list[MeaningBlock] = []
     run: list[WordCue] = []
+    run_section: str | None = None
 
     def _close(reason: str) -> None:
-        nonlocal run
+        nonlocal run, run_section
         if not run:
             return
         text = "".join(word.text for word in run).strip()
         if not text:
-            run = []
+            run, run_section = [], None
             return
         blocks.append(
             MeaningBlock(
@@ -111,11 +128,12 @@ def build_meaning_blocks(
                 duration=round(run[-1].end - run[0].start, 3),
                 word_count=len(run),
                 split_reason=reason,
+                source_section_id=run_section,
             )
         )
-        run = []
+        run, run_section = [], None
 
-    for word in words:
+    for index, word in enumerate(words):
         # If adding this word would breach a HARD cap, close the run first.
         # Duration/length caps are hard invariants: any run that would breach
         # them closes even when it is <8 chars. Real MiniMax streams carry
@@ -128,6 +146,8 @@ def build_meaning_blocks(
             if probe_dur > max_seconds or probe_len > max_chars:
                 _close("hard_cap")
         run.append(word)
+        if len(run) == 1:
+            run_section = word_sections[index]
         text = "".join(w.text for w in run)
         length = _norm_len(text)
         duration = run[-1].end - run[0].start
@@ -199,6 +219,55 @@ def load_cues_from_evidence(evidence_path: Path, *, body_start: float = 0.0) -> 
     ]
 
 
+# 锁定的脚本用、但旁白流会丢掉的标点。契约构建器 caption_contract._BIND_PUNCT
+# 必须与此一致（audio_stage 依赖 semantic_alignment，反向不成立，故两处各自定义）。
+_SCRIPT_PUNCT = frozenset("，。、！？；：,.;!?…—–·\"'“”‘’「」『』《》（）〈〉【】")
+
+
+def align_cues_to_script(
+    cues: Sequence[Mapping[str, Any]],
+    script_sections: Sequence[Mapping[str, Any]],
+) -> list[str | None]:
+    """把每个 cue 对齐到锁定的脚本 section，返回与 ``cues`` 等长的 section_id 列表。
+
+    真实 MiniMax 旁白 = 锁定脚本去标点后、按连续片段念出（可能跳过整段）。构建
+    ``M`` = 全部 section 按顺序去标点串联；把整段旁白文本作为 ``M`` 的一个连续
+    子串找到（``M.find``），再把每个 cue 的字符映射回其 M 位置 → 得到 section。
+
+    Fail-closed：旁白不是锁定脚本（去标点后）的连续子串 = 无法产出可绑定字幕，
+    拒绝而非产出错位块。空文本 cue 返回 None（不占用 M 位置）。
+    """
+    stream: list[str] = []
+    sec_of: list[str] = []
+    for section in script_sections:
+        sid = str(section.get("section_id") or section.get("id") or "")
+        if not sid:
+            raise MeaningBlockError(f"script section without section_id: {section!r}")
+        for ch in str(section.get("text", "")):
+            if ch in _SCRIPT_PUNCT or ch.isspace():
+                continue
+            stream.append(ch)
+            sec_of.append(sid)
+    stream_text = "".join(stream)
+    narration = "".join(str(cue["text"]) for cue in cues)
+    pos = stream_text.find(narration)
+    if pos < 0:
+        raise MeaningBlockError(
+            "narration is not a contiguous substring of the punct-stripped locked script; "
+            "cannot align cues to sections"
+        )
+    result: list[str | None] = []
+    mpos = pos
+    for cue in cues:
+        text = str(cue["text"])
+        if not text:
+            result.append(None)
+            continue
+        result.append(sec_of[mpos])
+        mpos += len(text)
+    return result
+
+
 def blocks_to_caption_bindings(
     *,
     blocks: Sequence[MeaningBlock | Mapping[str, Any]],
@@ -219,6 +288,7 @@ def blocks_to_caption_bindings(
             block_id=str(b["block_id"]), text=str(b["text"]).strip(),
             start=float(b["start"]), end=float(b["end"]), duration=float(b["duration"]),
             word_count=int(b.get("word_count", 0)), split_reason=str(b.get("split_reason", "")),
+            source_section_id=str(b.get("source_section_id") or "") or None,
         )
         for b in blocks
     ]
@@ -242,6 +312,8 @@ def blocks_to_caption_bindings(
             "rationale_is_boilerplate": False,
             "restoration_status": "display-restored",
         }
+        if blk.source_section_id:
+            captions[cid]["source_section_id"] = blk.source_section_id
         shots[sid] = {
             "shot_id": sid,
             "start": start,

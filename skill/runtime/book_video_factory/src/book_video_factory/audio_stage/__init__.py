@@ -7,7 +7,7 @@ from .contracts import (
 )
 from .meaning_blocks import (
     MeaningBlock, MeaningBlockError, WordCue,
-    blocks_to_caption_bindings, build_meaning_blocks, load_cues_from_evidence,
+    align_cues_to_script, blocks_to_caption_bindings, build_meaning_blocks, load_cues_from_evidence,
 )
 
 __all__ = [
@@ -19,6 +19,7 @@ __all__ = [
     "MeaningBlock",
     "MeaningBlockError",
     "WordCue",
+    "align_cues_to_script",
     "blocks_to_caption_bindings",
     "build_meaning_blocks",
     "load_cues_from_evidence",
