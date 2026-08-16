@@ -143,16 +143,20 @@ def execute_reference_conditioned(
         raise ReferenceRunnerError(f"unsupported reference-conditioned provider: {provider}")
     inputs = tuple(_input_dict(ReferenceInput(**{**item, "image_sha256": str(item.get("image_sha256", ""))})) for item in reference_inputs_from_pack(reference_pack))
     if approved_assets is not None:
-        by_task = {str(a.get("task_id")): a for a in approved_assets if isinstance(a, Mapping)}
+        # Match on the reference IMAGE (path+hash), not reference_id: style_master /
+        # previous_scene references carry non-asset ids (STYLE_MASTER_*, scene ids),
+        # so a task_id keyed lookup would falsely reject them. Every reference image
+        # must be a registered manifest asset with a matching hash (P0-8).
+        by_image = {
+            (str(a.get("path")), str(a.get("sha256"))): a
+            for a in approved_assets if isinstance(a, Mapping)
+        }
         for item in inputs:
-            asset = by_task.get(item["reference_id"])
-            if asset is None:
+            if (item["image_path"], item["image_sha256"]) not in by_image:
                 raise ReferenceRunnerError(
-                    f"reference {item['reference_id']!r} is not registered in VISUAL_ASSET_MANIFEST; refusing to send an unvetted image to the provider"
-                )
-            if str(asset.get("sha256", "")) != item["image_sha256"]:
-                raise ReferenceRunnerError(
-                    f"reference {item['reference_id']!r} hash does not match its manifest asset; refusing to send a stale image"
+                    f"reference {item['reference_id']!r} image {item['image_path']} is not a "
+                    "registered VISUAL_ASSET_MANIFEST asset with matching hash; refusing to "
+                    "send an unvetted image to the provider"
                 )
     attempt_id = uuid.uuid4().hex
     prompt_sha = hashlib.sha256(prompt.encode("utf-8")).hexdigest()

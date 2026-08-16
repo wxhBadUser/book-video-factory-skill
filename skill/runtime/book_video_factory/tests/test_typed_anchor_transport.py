@@ -27,10 +27,13 @@ from book_video_factory.visual_foundation.evidence import (
     load_scene_reference_evidence,
     write_scene_reference_evidence,
 )
+from book_video_factory.visual_foundation.manifests import _visual_asset_manifest
 from book_video_factory.visual_foundation.resolver import (
     resolve_reference_pack,
 )
 from book_video_factory.visual_foundation.runner import (
+    ReferenceRunnerError,
+    execute_reference_conditioned,
     verify_reference_inputs_match_pack,
 )
 
@@ -162,6 +165,30 @@ class TestTypedAnchorTransport(unittest.TestCase):
             normalized = [x for x in normalized if x["role"] != "object_anchor"]  # 造缺失
             with pytest.raises(Exception):
                 verify_reference_inputs_match_pack(normalized, pack)
+
+    def test_runner_gate_accepts_style_master_and_rejects_unregistered(self) -> None:
+        # P0-8: the approved-assets gate must accept references whose reference_id is
+        # NOT an asset task id (style_master -> STYLE_MASTER_*, previous_scene -> scene
+        # id) by matching the reference IMAGE (path+hash) to the manifest; and it must
+        # reject a reference whose image is not a registered manifest asset.
+        with tempfile.TemporaryDirectory() as temp:
+            project = _build_typed_anchor_project(Path(temp))
+            assets = _visual_asset_manifest(project).get("assets", [])
+            pack = resolve_reference_pack(project, _task(), _foundation(project))
+            assert any(r["role"] == "style_master" for r in pack["references"])
+            execute_reference_conditioned(
+                reference_pack=pack, prompt="p", output_path="o.png",
+                provider="host-imagegen", approved_assets=assets,
+            )  # must NOT false-reject the style_master
+            forged = dict(pack)
+            forged["references"] = [{"role": "style_master", "reference_id": "X",
+                                     "image_path": "assets/generated/lookdev/NOT_REG.png",
+                                     "image_sha256": "0" * 64}]
+            with pytest.raises(ReferenceRunnerError):
+                execute_reference_conditioned(
+                    reference_pack=forged, prompt="p", output_path="o.png",
+                    provider="host-imagegen", approved_assets=assets,
+                )
 
 
 if __name__ == "__main__":
