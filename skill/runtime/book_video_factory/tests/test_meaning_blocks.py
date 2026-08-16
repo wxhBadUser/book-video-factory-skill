@@ -69,3 +69,38 @@ def _norm_len(text: str) -> int:
 
 def _strip(text: str) -> str:
     return "".join(ch for ch in text if not ch.isspace() and ch not in "。！？，、；：")
+
+
+import json
+from pathlib import Path
+
+def test_blocks_document_validates_against_schema():
+    import jsonschema
+    blocks = build_meaning_blocks(CUES)
+    doc = {
+        "schema_version": "caption-meaning-block.v1",
+        "release_id": "omats-v25",
+        "block_count": len(blocks),
+        "source_evidence_sha256": "0" * 64,
+        "stats": {
+            "median_duration": 2.8,
+            "p95_duration": 3.9,
+            "max_duration": max(b.duration for b in blocks),
+            "max_chars_any_block": max(_norm_len(b.text) for b in blocks),
+        },
+        "blocks": [b.to_dict() for b in blocks],
+    }
+    schema = json.loads(
+        (Path(__file__).parents[1] / "schemas" / "caption_meaning_block.v1.schema.json").read_text(encoding="utf-8")
+    )
+    jsonschema.validate(doc, schema)
+
+
+def test_caption_bindings_document_validates_against_schema():
+    import jsonschema
+    blocks = build_meaning_blocks(CUES)
+    doc = blocks_to_caption_bindings(blocks=blocks, release_id="omats-v25")
+    schema = json.loads(
+        (Path(__file__).parents[1] / "schemas" / "caption_bindings.v1.schema.json").read_text(encoding="utf-8")
+    )
+    jsonschema.validate(doc, schema)  # 1 shot == 1 block；unbound_captions 为空数组

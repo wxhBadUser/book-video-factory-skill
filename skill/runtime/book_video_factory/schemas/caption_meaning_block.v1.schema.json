@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CaptionMeaningBlockDocument",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "release_id", "block_count", "source_evidence_sha256", "stats", "blocks"],
+  "properties": {
+    "schema_version": { "const": "caption-meaning-block.v1" },
+    "release_id": { "type": "string", "minLength": 1 },
+    "block_count": { "type": "integer", "minimum": 1 },
+    "source_evidence_sha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+    "stats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["median_duration", "p95_duration", "max_duration", "max_chars_any_block"],
+      "properties": {
+        "median_duration": { "type": "number", "minimum": 0 },
+        "p95_duration": { "type": "number", "minimum": 0 },
+        "max_duration": { "type": "number", "minimum": 0, "maximum": 4.000001 },
+        "max_chars_any_block": { "type": "integer", "minimum": 0, "maximum": 18 }
+      }
+    },
+    "blocks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["block_id", "text", "start", "end", "duration", "word_count", "split_reason"],
+        "properties": {
+          "block_id": { "type": "string", "pattern": "^BLK_[0-9]{4}$" },
+          "text": { "type": "string", "minLength": 1 },
+          "start": { "type": "number", "minimum": 0 },
+          "end": { "type": "number", "minimum": 0 },
+          "duration": { "type": "number", "minimum": 0, "maximum": 4.000001 },
+          "word_count": { "type": "integer", "minimum": 1 },
+          "split_reason": { "type": "string", "enum": ["punctuation_terminal", "soft_boundary", "target_reached", "hard_cap", "stream_end", "forced_single_word"] }
+        }
+      }
+    }
+  }
+}
