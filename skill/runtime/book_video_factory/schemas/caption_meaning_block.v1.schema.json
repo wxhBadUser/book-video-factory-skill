@@ -34,7 +34,8 @@
           "end": { "type": "number", "minimum": 0 },
           "duration": { "type": "number", "minimum": 0 },
           "word_count": { "type": "integer", "minimum": 1 },
-          "split_reason": { "type": "string", "enum": ["punctuation_terminal", "soft_boundary", "target_reached", "hard_cap", "stream_end", "forced_single_word"] }
+          "split_reason": { "type": "string", "enum": ["punctuation_terminal", "soft_boundary", "target_reached", "hard_cap", "stream_end", "forced_single_word"] },
+          "source_section_id": { "type": "string", "minLength": 1 }
         },
         "allOf": [
           {
