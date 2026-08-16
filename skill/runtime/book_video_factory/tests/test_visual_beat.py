@@ -91,9 +91,25 @@ def test_document_shape():
         assert key in beats[0].to_dict()
 
 
-def test_uncovered_gap_rejected():
+def test_narration_pauses_bridged_into_contiguous_grid():
+    # A silent pause between spoken blocks is part of the shot: the beat grid must
+    # tile [first, last] with no holes (real narration pauses are bridged, not fatal).
+    blocks = [
+        {"caption_id": f"BLK_{i:04d}", "text": "字" * 12, "start": float(s), "end": float(e), "duration": float(e - s)}
+        for i, (s, e) in enumerate([(0, 2), (2, 4), (4, 6), (6, 8), (9, 11), (11, 13), (13, 15), (15, 17)])
+    ]
+    beats = plan_visual_beats(blocks)
+    grid = sorted(beats, key=lambda b: b.start)
+    assert grid
+    assert abs(grid[0].start - 0.0) < 1e-6
+    assert abs(grid[-1].end - 17.0) < 1e-6
+    for i in range(1, len(grid)):
+        assert grid[i].start - grid[i - 1].end < 1e-6, "grid must have no holes"
+
+
+def test_overlapping_caption_blocks_rejected():
     blocks = _make_blocks(3, dur=2.0)
-    blocks[1]["start"] = 10.0  # gap after block 0
+    blocks[1]["start"] = 1.5  # overlaps block 0 which runs [0.0, 2.0]
     with pytest.raises(VisualBeatError):
         plan_visual_beats(blocks)
 

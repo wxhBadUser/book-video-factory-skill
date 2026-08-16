@@ -70,15 +70,16 @@ def plan_visual_beats(
         ({**dict(c), "start": _norm_seconds(c["start"]), "end": _norm_seconds(c["end"])} for c in captions),
         key=lambda c: (c["start"], c["end"]),
     )
-    # fail closed on coverage gaps
-    for index in range(1, len(ordered)):
-        if ordered[index]["start"] - ordered[index - 1]["end"] > 1e-6:
-            raise VisualBeatError(
-                f"coverage gap between {ordered[index - 1]['caption_id']} and {ordered[index]['caption_id']}"
-            )
+    # fail closed on overlapping caption blocks (a shot grid cannot tile overlaps)
     for index in range(1, len(ordered)):
         if ordered[index]["start"] < ordered[index - 1]["end"] - 1e-6:
             raise VisualBeatError("overlapping caption blocks")
+    # Absorb real narration pauses: the shot grid must tile the body contiguously
+    # (a shot covers the silence between spoken sentences too). A caption's shot
+    # therefore extends to the next caption's start; only genuine overlaps (checked
+    # above, on raw ends) are fatal.
+    for index in range(len(ordered) - 1):
+        ordered[index]["end"] = max(ordered[index]["end"], ordered[index + 1]["start"])
 
     beats: list[VisualBeat] = []
     run: list[dict[str, Any]] = []
