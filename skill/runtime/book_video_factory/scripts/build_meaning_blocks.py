@@ -26,7 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from book_video_factory.audio_stage.meaning_blocks import (  # noqa: E402
-    MeaningBlock, blocks_to_caption_bindings, build_meaning_blocks, load_cues_from_evidence,
+    MeaningBlock, align_cues_to_script, blocks_to_caption_bindings, build_meaning_blocks, load_cues_from_evidence,
 )
 
 
@@ -36,10 +36,23 @@ def main() -> int:
     parser.add_argument("--out", required=True, type=Path, help="directory to write chain artifacts (04_audio/)")
     parser.add_argument("--release-id", required=True)
     parser.add_argument("--body-start", type=float, default=0.0)
+    parser.add_argument("--script-package", type=Path, default=None,
+                        help="SCRIPT_PACKAGE.json（锁定 sections）。提供后按脚本对齐，"
+                             "每个块记录 source_section_id → 契约构建器可绑定")
     args = parser.parse_args()
 
     cues = load_cues_from_evidence(args.evidence, body_start=args.body_start)
-    blocks = build_meaning_blocks(cues)
+    section_ids = None
+    if args.script_package is not None:
+        package = json.loads(args.script_package.read_text(encoding="utf-8"))
+        top = package.get("performance_version")
+        if not isinstance(top, dict) or not isinstance(top.get("sections"), list):
+            top = (package.get("script") or {}).get("performance_version")
+        sections = top.get("sections") if isinstance(top, dict) else None
+        if not isinstance(sections, list) or not sections:
+            raise SystemExit("SCRIPT_PACKAGE.json has no performance_version.sections")
+        section_ids = align_cues_to_script(cues, sections)
+    blocks = build_meaning_blocks(cues, section_ids=section_ids)
     # --evidence 可能指向目录（多分块）：对排序后的 *.json 文件字节求确定性 SHA，
     # 单文件行为不变（read_bytes() 对目录会抛 PermissionError）。
     if args.evidence.is_dir():
