@@ -32,15 +32,25 @@ from .validation import (
     normalize_rationale,
     validate_visual_proposition,
 )
+from .visual_beat import (
+    VisualBeat,
+    VisualBeatError,
+    build_visual_timeline_document,
+    plan_visual_beats,
+)
 
 __all__ = [
     "PROPOSITION_MODES",
     "EntityVisibility",
     "SemanticBridge",
     "SemanticContractError",
+    "VisualBeat",
+    "VisualBeatError",
     "VisualProposition",
+    "build_visual_timeline_document",
     "evaluate_semantic_bridge",
     "is_boilerplate_rationale",
     "normalize_rationale",
+    "plan_visual_beats",
     "validate_visual_proposition",
 ]
