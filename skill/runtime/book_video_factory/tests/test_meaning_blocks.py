@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import pytest
 from book_video_factory.audio_stage.meaning_blocks import (
-    MeaningBlockError, WordCue, build_meaning_blocks, blocks_to_caption_bindings,
+    MeaningBlockError, WordCue, align_cues_to_script, build_meaning_blocks, blocks_to_caption_bindings,
 )
 
 # 28 个"字"，每字 0.4s，模拟 ~11s 口语流，句号在第 12 字后（约 4.8s）
@@ -77,6 +77,49 @@ def test_blocks_to_bindings_schema_shape():
     first = next(iter(doc["captions"].values()))
     for key in ("caption_id", "text", "start", "end", "text_sha256", "restoration_status"):
         assert key in first
+
+
+def test_align_cues_to_script_records_section_per_cue():
+    # 锁定脚本带标点；真实旁白 = 去标点后的连续子串。对齐应给每个 cue 正确的 section。
+    sections = [
+        {"section_id": "S01", "text": "老人出海，天还没亮。"},
+        {"section_id": "S02", "text": "他独自，迎向风浪。"},
+    ]
+    # 旁白 = S01 全部 + S02 前 4 字：老人出海天还没亮他独自迎向
+    narration = "老人出海天还没亮他独自迎向"
+    cues = [
+        {"text": ch, "start": i * 0.3, "end": i * 0.3 + 0.25}
+        for i, ch in enumerate(narration)
+    ]
+    ids = align_cues_to_script(cues, sections)
+    assert ids == ["S01"] * 8 + ["S02"] * 4
+
+
+def test_align_fails_when_narration_not_in_script():
+    sections = [{"section_id": "S01", "text": "老人出海，天还没亮。"}]
+    cues = [{"text": "完全不匹配的旁白", "start": 0.0, "end": 1.0}]
+    with pytest.raises(MeaningBlockError):
+        align_cues_to_script(cues, sections)
+
+
+def test_blocks_record_source_section_id():
+    # splitter 记录每个块的 source_section_id（= 块首 cue 的 section）。
+    sections = [
+        {"section_id": "S01", "text": "老人出海，天还没亮。"},
+        {"section_id": "S02", "text": "他独自，迎向风浪。"},
+    ]
+    narration = "老人出海天还没亮他独自迎向风浪"
+    cues = [
+        {"text": ch, "start": i * 0.35, "end": i * 0.35 + 0.3}
+        for i, ch in enumerate(narration)
+    ]
+    ids = align_cues_to_script(cues, sections)
+    blocks = build_meaning_blocks(cues, section_ids=ids)
+    assert len(blocks) >= 1
+    for b in blocks:
+        assert b.source_section_id in ("S01", "S02")
+    joined = "".join(b.text for b in blocks)
+    assert joined == narration  # 逐字覆盖
 
 
 def _norm_len(text: str) -> int:
