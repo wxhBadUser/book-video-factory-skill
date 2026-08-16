@@ -104,3 +104,35 @@ def test_caption_bindings_document_validates_against_schema():
         (Path(__file__).parents[1] / "schemas" / "caption_bindings.v1.schema.json").read_text(encoding="utf-8")
     )
     jsonschema.validate(doc, schema)  # 1 shot == 1 block；unbound_captions 为空数组
+
+
+def test_aggregates_multi_chunk_evidence():
+    import json, tempfile
+    from book_video_factory.audio_stage.meaning_blocks import build_meaning_blocks, load_cues_from_evidence
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td)
+        # 真实证据形态：顶层 subtitle_timestamps + 每 chunk 自带 duration，
+        # 文件名排序聚合，第二块从累计 5.0s 偏移
+        a_text = "老人出海远航天际"  # 8 字
+        b_text = "他独自迎向风浪"    # 8 字
+        a_ts = [
+            {"index": i, "text": ch, "start": round(0.1 + i * 0.4, 3), "end": round(0.4 + i * 0.4, 3)}
+            for i, ch in enumerate(a_text)
+        ]
+        b_ts = [
+            {"index": i, "text": ch, "start": round(0.1 + i * 0.4, 3), "end": round(0.4 + i * 0.4, 3)}
+            for i, ch in enumerate(b_text)
+        ]
+        (p / "omats-01.json").write_text(
+            json.dumps({"chunk_id": "omats-01", "duration": 5.0, "subtitle_timestamps": a_ts}),
+            encoding="utf-8")
+        (p / "omats-02.json").write_text(
+            json.dumps({"chunk_id": "omats-02", "duration": 3.5, "subtitle_timestamps": b_ts}),
+            encoding="utf-8")
+        cues = load_cues_from_evidence(p)
+        assert cues[0]["start"] == 0.1
+        assert cues[8]["start"] == 5.1  # 第二块已偏移到累计 5.0s 之后
+        blocks = build_meaning_blocks(cues)
+        assert blocks[0].start == 0.1
+        assert all(b.duration <= 4.0 for b in blocks)
+        assert blocks[-1].end > 5.0  # 跨 chunk 聚合成链
