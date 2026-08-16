@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CharacterRegistryDocument",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "release_id", "character_count", "characters"],
+  "properties": {
+    "schema_version": { "const": "character-registry.v1" },
+    "release_id": { "type": "string", "minLength": 1 },
+    "character_count": { "type": "integer", "minimum": 1 },
+    "characters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["character_id", "name", "narrative_role", "life_stage", "immutable_traits", "allowed_changes", "wardrobe_states", "identity_anchor_task_ids", "identity_board_task_id"],
+        "properties": {
+          "character_id": { "type": "string", "pattern": "^C[0-9]{3}$" },
+          "name": { "type": "string", "minLength": 1 },
+          "narrative_role": { "enum": ["protagonist", "supporting", "antagonist", "extra"] },
+          "life_stage": { "type": "string", "minLength": 1 },
+          "immutable_traits": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+          "allowed_changes": { "type": "array", "items": { "type": "string" } },
+          "wardrobe_states": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+          "identity_anchor_task_ids": { "type": "array", "items": { "type": "string", "pattern": "^ANCHOR_C[0-9]{3}_" }, "minItems": 1 },
+          "identity_board_task_id": { "type": "string", "pattern": "^BOARD_C[0-9]{3}$" },
+          "relationships": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}
