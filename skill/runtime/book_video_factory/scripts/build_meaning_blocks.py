@@ -1,17 +1,24 @@
 """P0-1 CLI: CAPTION_MEANING_BLOCKS.json + CAPTION_BINDINGS.json from evidence.
 
-Reads a narration word-cue source:
-  --evidence 04_audio/provider_evidence/AUDIO_GENERATION_EVIDENCE.json  (runtime layout)
-  --evidence 04_audio/evidence/<chunk>.json                            (sample layout, glob)
+Reads a narration word-cue source. SUPPORTED layouts:
+  --evidence 04_audio/evidence/<chunk>.json  (one chunk file with top-level
+             subtitle_timestamps + top-level duration; chunk-relative times)
+  --evidence 04_audio/evidence/              (directory: sorted *.json chunks,
+             each offset by its cumulative duration to the master timeline)
+  --evidence <single.json> with top-level subtitle_timestamps
+The runtime aggregate layout (04_audio/provider_evidence/AUDIO_GENERATION_
+EVIDENCE.json, subtitle_timestamps nested under chunks[]) is NOT yet handled —
+load_cues_from_evidence reads top-level subtitle_timestamps only.
 Offsets chunk-relative timestamps to the master timeline (audio-stage offset
-logic), splits meaning blocks, writes both chain artifacts. Uses
-book_video_factory.audio_stage.provider_timeline.offset_chunk_timestamps for
-the master-time offset so the grid is byte-identical to the real audio master.
+logic), splits meaning blocks, writes both chain artifacts. Body offset is
+applied ONCE in load_cues_from_evidence (--body-start); blocks/bindings then
+carry master-timeline times and are never re-offset.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -33,13 +40,15 @@ def main() -> int:
 
     cues = load_cues_from_evidence(args.evidence, body_start=args.body_start)
     blocks = build_meaning_blocks(cues)
+    # --evidence 可能指向目录（多分块）：对排序后的 *.json 文件字节求确定性 SHA，
+    # 单文件行为不变（read_bytes() 对目录会抛 PermissionError）。
     if args.evidence.is_dir():
-        hasher = __import__("hashlib").sha256()
-        for ev_file in sorted(args.evidence.glob("*.json")):
-            hasher.update(ev_file.read_bytes())
-        evidence_sha = hasher.hexdigest()
+        _hasher = hashlib.sha256()
+        for _ev_file in sorted(args.evidence.glob("*.json")):
+            _hasher.update(_ev_file.read_bytes())
+        evidence_sha = _hasher.hexdigest()
     else:
-        evidence_sha = __import__("hashlib").sha256(args.evidence.read_bytes()).hexdigest()
+        evidence_sha = hashlib.sha256(args.evidence.read_bytes()).hexdigest()
     stats = {
         "median_duration": round(sorted(b.duration for b in blocks)[len(blocks) // 2], 3),
         "p95_duration": round(sorted(b.duration for b in blocks)[max(0, int(len(blocks) * 0.95) - 1)], 3),
@@ -56,10 +65,10 @@ def main() -> int:
     }
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "CAPTION_MEANING_BLOCKS.json").write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+    # blocks 已在 load_cues_from_evidence 里完成 body 偏移，bindings 不再二次偏移
     bindings = blocks_to_caption_bindings(
         blocks=[MeaningBlock(**b) for b in document["blocks"]],
         release_id=args.release_id,
-        body_start=args.body_start,
     )
     (args.out / "CAPTION_BINDINGS.json").write_text(json.dumps(bindings, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"blocks": len(blocks), "max_duration": stats["max_duration"], "stats": stats}, indent=2))

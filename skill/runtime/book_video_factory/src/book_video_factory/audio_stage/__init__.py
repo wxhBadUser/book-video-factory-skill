@@ -5,7 +5,7 @@ from .contracts import (
     validate_pronunciation_lexicon,
     verify_phase4_prerequisites,
 )
-from book_video_factory.audio_stage.meaning_blocks import (
+from .meaning_blocks import (
     MeaningBlock, MeaningBlockError, WordCue,
     blocks_to_caption_bindings, build_meaning_blocks, load_cues_from_evidence,
 )

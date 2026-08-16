@@ -1,6 +1,7 @@
 """P0-1: meaning-block splitter invariants."""
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -52,6 +53,15 @@ def test_empty_stream_rejected():
         build_meaning_blocks([])
 
 
+def test_single_word_over_cap_is_forced_block():
+    # 单个词自身就超过硬上限：不可再切分，强制单独成块（schema 允许 forced_single_word）。
+    blocks = build_meaning_blocks([WordCue("一个超长不可分割单词", 0.0, 4.5)])
+    assert len(blocks) == 1
+    assert blocks[0].split_reason == "forced_single_word"
+    assert blocks[0].duration > 4.0
+    assert blocks[0].text == "一个超长不可分割单词"
+
+
 def test_blocks_to_bindings_schema_shape():
     blocks = build_meaning_blocks(CUES)
     doc = blocks_to_caption_bindings(blocks=blocks, release_id="omats-v25")
@@ -70,9 +80,6 @@ def _norm_len(text: str) -> int:
 def _strip(text: str) -> str:
     return "".join(ch for ch in text if not ch.isspace() and ch not in "。！？，、；：")
 
-
-import json
-from pathlib import Path
 
 def test_blocks_document_validates_against_schema():
     import jsonschema
@@ -111,8 +118,10 @@ def test_aggregates_multi_chunk_evidence():
     from book_video_factory.audio_stage.meaning_blocks import build_meaning_blocks, load_cues_from_evidence
     with tempfile.TemporaryDirectory() as td:
         p = Path(td)
-        # 真实证据形态：顶层 subtitle_timestamps + 每 chunk 自带 duration，
-        # 文件名排序聚合，第二块从累计 5.0s 偏移
+        # 真实证据形态：顶层 subtitle_timestamps（chunk-relative）+ 每 chunk 自带 duration，
+        # 文件名排序聚合，loader 用累计 duration 偏移第二块到 5.0s 之后。
+        # 注意：b_ts 必须是 chunk-relative（不能内嵌 5.0），否则与 loader 的
+        # 累计 duration 偏移重复叠加（实测会得到 8.6 而非 5.1）。
         a_text = "老人出海远航天际"  # 8 字
         b_text = "他独自迎向风浪"    # 8 字
         a_ts = [

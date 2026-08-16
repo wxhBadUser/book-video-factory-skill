@@ -31,7 +31,6 @@ _MIN_CHARS = 8
 _MAX_CHARS = 18
 _TARGET_SECONDS = 2.8
 _MAX_SECONDS = 4.0
-_MIN_SECONDS = 1.2
 
 
 @dataclass(frozen=True)
@@ -66,13 +65,15 @@ def build_meaning_blocks(
     max_chars: int = _MAX_CHARS,
     target_seconds: float = _TARGET_SECONDS,
     max_seconds: float = _MAX_SECONDS,
-    min_seconds: float = _MIN_SECONDS,
     block_prefix: str = "BLK",
 ) -> list[MeaningBlock]:
     words: list[WordCue] = []
     for cue in cues:
         if isinstance(cue, WordCue):
-            words.append(cue)
+            text = cue.text.strip()
+            if not text:
+                continue
+            words.append(WordCue(text, cue.start, cue.end))
         else:
             text = str(cue.get("text", "")).strip()
             if not text:
@@ -126,7 +127,11 @@ def build_meaning_blocks(
         text = "".join(w.text for w in run)
         length = _norm_len(text)
         duration = run[-1].end - run[0].start
-        if text.endswith(_TERMINAL) and length >= min_chars:
+        # 单个词自身就超过硬上限：不可再切分，强制单独成块
+        # （schema 允许 forced_single_word；该块豁免 4s/18-字 上限）。
+        if len(run) == 1 and (duration > max_seconds or length > max_chars):
+            _close("forced_single_word")
+        elif text.endswith(_TERMINAL) and length >= min_chars:
             _close("punctuation_terminal")
         elif text.endswith(_SOFT) and length >= max(min_chars, 10):
             _close("soft_boundary")
@@ -134,10 +139,11 @@ def build_meaning_blocks(
             _close("target_reached")
     _close("stream_end")
 
-    if any(block.duration > max_seconds + 1e-9 for block in blocks):
-        raise MeaningBlockError("internal invariant: a block exceeded the hard 4s cap")
-    if any(_norm_len(block.text) > max_chars for block in blocks):
-        raise MeaningBlockError("internal invariant: a block exceeded the 18-char cap")
+    # 不变量只约束正常块；forced_single_word 是数据本身的产物，豁免。
+    if any(b.duration > max_seconds + 1e-9 and b.split_reason != "forced_single_word" for b in blocks):
+        raise MeaningBlockError(f"internal invariant: a block exceeded the hard {max_seconds}s cap")
+    if any(_norm_len(b.text) > max_chars and b.split_reason != "forced_single_word" for b in blocks):
+        raise MeaningBlockError(f"internal invariant: a block exceeded the {max_chars}-char cap")
     return blocks
 
 
@@ -158,6 +164,10 @@ def load_cues_from_evidence(evidence_path: Path, *, body_start: float = 0.0) -> 
         cursor = body_start
         for file in files:
             doc = json.loads(file.read_text(encoding="utf-8"))
+            if "duration" not in doc:
+                raise MeaningBlockError(
+                    f"chunk {file.name} missing top-level duration; cannot offset master timeline"
+                )
             for item in sorted(doc.get("subtitle_timestamps") or [], key=lambda t: t["start"]):
                 cues.append(
                     {
@@ -166,7 +176,7 @@ def load_cues_from_evidence(evidence_path: Path, *, body_start: float = 0.0) -> 
                         "end": cursor + float(item["end"]),
                     }
                 )
-            cursor += float(doc.get("duration", 0.0))
+            cursor += float(doc["duration"])
         return cues
     doc = json.loads(evidence_path.read_text(encoding="utf-8"))
     return [
@@ -183,14 +193,17 @@ def blocks_to_caption_bindings(
     *,
     blocks: Sequence[MeaningBlock | Mapping[str, Any]],
     release_id: str,
-    body_start: float = 0.0,
 ) -> dict[str, Any]:
     """Wrap meaning blocks into a caption-bindings.v1 document the real chain
     contract builder consumes. One caption == one meaning block; one shot ==
     one caption (the audio-stage storyboard builder re-aggregates them into
     real shots later — grouping only reads ``captions``). Values are
     schema-compliant placeholders that the chain overwrites when it re-reasons
-    over the text (storyboard_plan write-back)."""
+    over the text (storyboard_plan write-back).
+
+    IMPORTANT: ``blocks`` MUST already carry master-timeline times. The caller
+    applies any body offset in ``load_cues_from_evidence`` BEFORE splitting;
+    this function never re-offsets (double-applying body_start was a bug)."""
     normalized: list[MeaningBlock] = [
         b if isinstance(b, MeaningBlock) else MeaningBlock(
             block_id=str(b["block_id"]), text=str(b["text"]).strip(),
@@ -204,8 +217,8 @@ def blocks_to_caption_bindings(
     for index, blk in enumerate(normalized, start=1):
         cid = blk.block_id
         sid = f"SHOT_{index:04d}"
-        start = round(blk.start + body_start, 3)
-        end = round(blk.end + body_start, 3)
+        start = round(blk.start, 3)
+        end = round(blk.end, 3)
         captions[cid] = {
             "caption_id": cid,
             "text": blk.text,
