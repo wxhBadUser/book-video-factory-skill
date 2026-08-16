@@ -5,14 +5,17 @@ import json
 import os
 import statistics
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from book_video_factory.audio_stage.status import audio_stage_status
 from book_video_factory.manifests import safe_project_output, sha256_file
 from book_video_factory.orientation import OrientationError, validate_orientation_contract
-from book_video_factory.semantic_alignment.caption_contract import CaptionVisualContract
+from book_video_factory.semantic_alignment.caption_contract import (
+    CaptionVisualContract,
+    merge_visual_event_states,
+)
 from book_video_factory.semantic_alignment.caption_grouping import (
     CaptionGroupingError,
     NARRATIVE_FUNCTIONS,
@@ -26,6 +29,14 @@ from book_video_factory.semantic_alignment.models import VisualProposition
 from book_video_factory.semantic_alignment.validation import (
     SemanticContractError,
     validate_visual_proposition,
+)
+from book_video_factory.semantic_alignment.group_contract import (
+    aggregate_group_visual_contract,
+)
+from book_video_factory.semantic_alignment.scene_continuity import (
+    SceneContinuityError,
+    build_span_review_groups,
+    load_current_scene_continuity_document,
 )
 from book_video_factory.semantic_alignment.prompting import (
     PromptSpecError,
@@ -67,7 +78,7 @@ _OUTPUTS = (
     "IMAGE_TASKS.jsonl",
     "SHEET_MAP.json",
 )
-_ALLOWED_MOTIONS = {"zoom-in", "zoom-out", "pan-left", "pan-right", "hold"}
+_ALLOWED_MOTIONS = {"hold"}  # new production: static stills, hard cuts only
 _HIGH_RISK = {
     "hands", "phone", "tool_use", "water_action", "animal_contact",
     "body_contact", "reflection", "death_climax", "hero_shot",
@@ -428,21 +439,157 @@ def _contract_anchor_refs(
     continuity: Mapping[str, str],
     front_tasks: Mapping[str, str],
 ) -> list[str]:
-    """Filter Beat anchors to the persistent characters explicitly approved by contracts."""
+    """FIX 4 (pilot R2): derive identity references from the Caption Contract.
+
+    The Caption Visual Contract is authoritative: when it requires a persistent
+    character, the Director takes the approved Visual Profile identity asset
+    directly. The legacy Beat ``anchorRefs`` no longer vetoes the Contract; it
+    may only contribute extra approved continuity context. The pipeline fails
+    only when the required character genuinely has no approved identity asset.
+    """
 
     approved_ids = set().union(*(_persistent_contract_character_ids(contract) for contract in contracts))
     scene_anchor_refs = [str(item) for item in scene.get("anchorRefs", []) if str(item).strip()]
     missing = sorted(
         entity_id for entity_id in approved_ids
-        if entity_id not in scene_anchor_refs
-        or entity_id not in continuity
-        or entity_id not in front_tasks
+        if entity_id not in continuity or entity_id not in front_tasks
     )
     if missing:
         raise DirectorStageError(
-            f"scene {scene.get('id')} lacks an approved persistent identity anchor for {missing}"
+            f"scene {scene.get('id')} Caption Contract requires persistent characters "
+            f"{missing} but no approved Visual Profile identity asset exists; create "
+            "the missing anchor asset before generating"
         )
-    return [entity_id for entity_id in scene_anchor_refs if entity_id in approved_ids]
+    # Contract-derived characters are the only identity references injected
+    # into the prompt. The legacy Beat anchorRefs remain in the task record as
+    # pure context evidence and never bias the frame (e.g. 老牛 must not become
+    # a reference for 凤霞出嫁 merely because the old storyboard listed C010).
+    # Scene order is preserved only as an ordering preference for the approved
+    # contract characters; it can never add or remove an identity.
+    ordered = [
+        entity_id for entity_id in scene_anchor_refs
+        if entity_id in approved_ids
+    ]
+    ordered.extend(
+        entity_id for entity_id in sorted(approved_ids)
+        if entity_id not in ordered
+    )
+    return ordered
+
+
+def _merge_visual_event_state(
+    contracts: Sequence[CaptionVisualContract],
+) -> dict[str, Any] | None:
+    """Merge per-caption Visual Event State into one group-level prompt record."""
+
+    return merge_visual_event_states(contracts)
+
+
+def _participant_constraint(
+    contracts: Sequence[CaptionVisualContract],
+) -> dict[str, Any] | None:
+    """FIX A (pilot R2.1): merge the exact narrative participant constraint."""
+
+    ids: list[str] = []
+    for contract in contracts:
+        for entity_id in contract.expected_visible_character_ids:
+            if entity_id not in ids:
+                ids.append(str(entity_id))
+    if not ids:
+        return None
+    allow_unlisted = any(
+        contract.allow_unlisted_narrative_characters for contract in contracts
+    )
+    return {
+        "expected_visible_character_ids": ids,
+        "expected_narrative_character_count": len(ids),
+        "allow_unlisted_narrative_characters": bool(allow_unlisted),
+    }
+
+
+def _suppress_character_presence(visual_world: str) -> str:
+    """Remove global 'characters are always present' language for non-Literal shots."""
+
+    cleaned = str(visual_world or "").replace("人物渺小但始终在场", "")
+    cleaned = cleaned.replace("；；", "；").replace(";;", ";")
+    return cleaned.strip(" ；;，,　")
+
+
+def _scene_reference_contract(
+    root: Path,
+    profile: Mapping[str, Any],
+    scene: Mapping[str, Any],
+    group_contract: Mapping[str, Any] | None,
+    previous_scene: Mapping[str, Any] | None,
+    vf_policy: str = "required",
+) -> dict[str, Any] | None:
+    """Declarative reference contract for a scene task, derived from the approved Visual
+    Foundation. Returns None for legacy projects that have not built a foundation."""
+    from book_video_factory.visual_foundation.manifests import load_foundation
+
+    release_id = str(profile.get("release_id", ""))
+    try:
+        foundation = load_foundation(root, release_id)
+    except Exception as error:
+        if vf_policy == "required":
+            raise DirectorStageError(f"visual foundation is required but invalid: {error}") from error
+        return None
+    character_ids = [str(item) for item in (group_contract or {}).get("primary_subject_ids", [])]
+    known = {item.character_id: item for item in foundation["character_identities"]}
+    characters = []
+    for cid in character_ids:
+        if cid not in known:
+            continue
+        identity = known[cid]
+        characters.append({
+            "character_id": cid,
+            "life_stage": "",
+            "apparent_age_range": "",
+            "wardrobe_state": "",
+            "narrative_role": identity.narrative_role,
+            "gender_presentation": identity.gender_presentation,
+        })
+    location_id = ""
+    location_reference_type = "none"
+    if isinstance(group_contract, Mapping):
+        loc = str(group_contract.get("location", "")).strip()
+        for anchor in foundation["location_anchors"]:
+            if anchor.location_id == loc or (loc and loc in anchor.aliases):
+                location_id = anchor.location_id
+                break
+        if location_id:
+            location_reference_type = "persistent_location_anchor"
+        elif loc:
+            location_reference_type = "generic_environment_reference"
+    use_previous = False
+    reason = ""
+    if previous_scene is not None:
+        prev_event = ""
+        prev_state = previous_scene.get("event_state")
+        if isinstance(prev_state, Mapping):
+            prev_event = str(prev_state.get("action_predicate", ""))
+        this_event = ""
+        ves = (group_contract or {}).get("visual_event_state")
+        if isinstance(ves, Mapping):
+            this_event = str(ves.get("action_predicate", ""))
+        prev_chars = {str(item) for item in previous_scene.get("anchor_refs", [])}
+        this_chars = {str(item) for item in scene.get("anchorRefs", [])}
+        same_location = str(previous_scene.get("location", "")) == str((group_contract or {}).get("location", ""))
+        adjacent = abs(float(previous_scene.get("end", -1)) - float(scene.get("start", -2))) < 1.0
+        if prev_event and prev_event == this_event and prev_chars == this_chars and same_location and adjacent:
+            use_previous = True
+            reason = "same event instance, same location, same characters, time-adjacent; continuity benefits"
+    return {
+        "schema_version": "visual-reference-contract.v1",
+        "style": {"required": True},
+        "identity": {"required_when_characters_present": True, "characters": characters},
+        "location": {
+            "location_id": location_id,
+            "location_reference_type": location_reference_type,
+            "required_persistent": False,
+        },
+        "continuity": {"use_previous_scene": use_previous, "required": False, "reason": reason},
+    }
 
 
 def _task_for_scene(
@@ -455,6 +602,7 @@ def _task_for_scene(
     known_symbol_registry: Iterable[str] = (),
     caption_contracts: Mapping[str, CaptionVisualContract] | None = None,
     caption_group: Mapping[str, Any] | None = None,
+    reference_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     continuity, front_tasks = _anchor_context(profile, visual_assets)
     caption_ids = list(scene["captionIds"])
@@ -484,15 +632,45 @@ def _task_for_scene(
             raise DirectorStageError(f"scene {scene.get('id')} caption ids do not exactly match its caption group")
         if [str(item.get("caption_id", "")) for item in group_bindings] != caption_ids:
             raise DirectorStageError(f"scene {scene.get('id')} caption contract bindings do not exactly match its captions")
+    narrative_function = _scene_narrative_function(scene)
+    group_contract: dict[str, Any] | None = None
+    if caption_group is not None and caption_contracts is not None:
+        try:
+            group_contract = aggregate_group_visual_contract(
+                group=caption_group,
+                contracts=caption_contracts,
+                captions=captions,
+            )
+        except (CaptionGroupingError, KeyError, TypeError) as error:
+            raise DirectorStageError(
+                f"scene {scene.get('id')} cannot aggregate its Group Visual Contract: {error}"
+            ) from error
+        representative_core = str(caption_group.get("representative_visual_core", "")).strip()
+        if representative_core:
+            group_contract["group_visual_focus"] = representative_core
     must_show: list[str] = []
     must_not_show: list[str] = []
-    for contract in scene_contracts:
-        for item in contract.must_show:
-            if item.natural_language and item.natural_language not in must_show:
-                must_show.append(item.natural_language)
-        for item in contract.must_not_show_as_primary:
-            if item.natural_language and item.natural_language not in must_not_show:
-                must_not_show.append(item.natural_language)
+    if group_contract is not None:
+        # Group Visual Contract decides what one image MUST show. Author
+        # background keeps story characters as supporting context only.
+        must_show = [
+            str(item.get("natural_language", ""))
+            for item in group_contract.get("must_show", [])
+            if str(item.get("natural_language", "")).strip()
+        ]
+        must_not_show = [
+            str(item.get("natural_language", ""))
+            for item in group_contract.get("must_not_show", [])
+            if str(item.get("natural_language", "")).strip()
+        ]
+    else:
+        for contract in scene_contracts:
+            for item in contract.must_show:
+                if item.natural_language and item.natural_language not in must_show:
+                    must_show.append(item.natural_language)
+            for item in contract.must_not_show_as_primary:
+                if item.natural_language and item.natural_language not in must_not_show:
+                    must_not_show.append(item.natural_language)
     contract_without_subject = bool(scene_contracts) and not must_show
     caption_visual_contract_sha256: str | None = None
     if caption_group is not None:
@@ -506,11 +684,15 @@ def _task_for_scene(
         raise DirectorStageError(
             f"scene {scene.get('id')} has Caption Contracts but no exact Caption Group binding"
         )
-    anchor_refs = (
-        _contract_anchor_refs(scene, scene_contracts, continuity, front_tasks)
-        if scene_contracts
-        else list(scene.get("anchorRefs", []))
-    )
+    if scene_contracts:
+        if narrative_function == "author_background":
+            # Author-background frames never depict story characters, so no
+            # persistent story identity anchor is injected.
+            anchor_refs: list[str] = []
+        else:
+            anchor_refs = _contract_anchor_refs(scene, scene_contracts, continuity, front_tasks)
+    else:
+        anchor_refs = list(scene.get("anchorRefs", []))
     character_anchors = [continuity[item] for item in anchor_refs if item in continuity]
     identity_tasks = list(dict.fromkeys(front_tasks[item] for item in anchor_refs if item in front_tasks))
     # A v2 Caption Visual Contract is authoritative over the Beat template.
@@ -528,13 +710,10 @@ def _task_for_scene(
         raise DirectorStageError(
             f"scene {scene.get('id')} declares no sourceBeatIds; the image task cannot be bound"
         )
-    narrative_function = _scene_narrative_function(scene)
     visual_modes = {contract.visual_mode for contract in scene_contracts}
-    if scene_contracts and len(visual_modes) != 1:
-        raise DirectorStageError(
-            f"scene {scene.get('id')} Caption Contracts disagree on visual_mode: {sorted(visual_modes)}"
-        )
-    visual_mode = next(iter(visual_modes)) if visual_modes else ""
+    # Literal dominates inside one concrete event phase: the group frame is
+    # concrete if any caption names a drawable referent.
+    visual_mode = "literal" if "literal" in visual_modes else (next(iter(visual_modes)) if visual_modes else "")
     symbolic_mapping = (
         _approved_symbolic_mapping(profile, caption_texts)
         if visual_mode in {"symbolic", "symbolic_or_abstract"}
@@ -551,6 +730,46 @@ def _task_for_scene(
         symbolic_mapping=symbolic_mapping,
         known_symbol_registry=known_symbol_registry,
     )
+    # Semantic Shot Group (recalibration): the prompt proposition summarises
+    # what ONE image must show for the whole group, instead of concatenating
+    # every caption into the action. The [1/9 CAPTION] block still shows the
+    # group's real captions; the proposition carries the group visual focus.
+    group_visual_focus = (
+        str(group_contract.get("group_visual_focus") or "")
+        if group_contract is not None
+        else ""
+    )
+    if group_visual_focus:
+        proposition = replace(proposition, action=group_visual_focus)
+    # FIX 1 (pilot R2): the group-level observable event state is bound into the
+    # prompt and the image task so the frame must establish the event, not just
+    # the nouns.
+    # The Group Visual Contract is re-derived from the final group text, so the
+    # prompt consumes that authoritative state instead of a stale caption-union.
+    visual_event_state = (
+        group_contract.get("visual_event_state")
+        if group_contract is not None
+        else _merge_visual_event_state(scene_contracts)
+    )
+    if (
+        proposition.mode == "Literal"
+        and visual_event_state is not None
+        and not visual_event_state.get("required_observable_evidence")
+    ):
+        raise DirectorStageError(
+            f"scene {scene.get('id')} is a concrete Literal proposition with no "
+            "observable Visual Event State evidence; fail closed instead of "
+            "generating a noun-only frame"
+        )
+    participant_constraint = _participant_constraint(scene_contracts)
+    art_direction = _visual_art_direction(profile)
+    if proposition.mode != "Literal":
+        # FIX 2 (pilot R2): remove the global "characters are always present"
+        # art-direction language that contradicted abstract/symbolic frames.
+        art_direction = dict(art_direction)
+        art_direction["visual_world"] = _suppress_character_presence(
+            str(art_direction.get("visual_world", ""))
+        )
     shot = {
         "shot_id": "SHOT_" + str(scene["id"]).upper().replace("-", "_").replace(".", "_"),
         "asset_tier": "narrative_scene",
@@ -574,7 +793,11 @@ def _task_for_scene(
         },
         "risk_flags": list(scene.get("riskFlags", [])),
     }
-    art_direction = _visual_art_direction(profile)
+    if proposition.mode == "Symbolic":
+        # A symbolic surrogate is the frame's visible object; stage it as the
+        # primary object instead of a landscape that demands character presence.
+        shot["semantic_entities"] = list(proposition.surrogate_objects)
+        shot["scene_mode"] = "object"
     prompt = build_imagegen_prompt(
         art_direction,
         {**shot, "output_orientation": canvas["orientation"]},
@@ -605,6 +828,19 @@ def _task_for_scene(
             anchors=character_anchors,
             must_show=must_show,
             must_not_show=must_not_show,
+            visual_event_state=visual_event_state,
+            expected_visible_character_ids=(
+                participant_constraint["expected_visible_character_ids"]
+                if participant_constraint else ()
+            ),
+            expected_narrative_character_count=(
+                participant_constraint["expected_narrative_character_count"]
+                if participant_constraint else 0
+            ),
+            allow_unlisted_narrative_characters=(
+                participant_constraint["allow_unlisted_narrative_characters"]
+                if participant_constraint else True
+            ),
         )
     except PromptSpecError as error:
         raise DirectorStageError(
@@ -613,6 +849,25 @@ def _task_for_scene(
     # Caption-first: the priority blocks lead, the legacy art-direction body follows
     # as supporting detail. The model reads the top of the prompt hardest.
     prompt = "\n".join(priority_blocks) + "\n" + prompt
+    narration_only_actions = [
+        str(item).strip()
+        for item in (caption_group or {}).get("narration_only_actions", [])
+        if str(item).strip()
+    ]
+    if narration_only_actions:
+        prompt += (
+            "\nScene-continuity rule: keep one stable representative frame. "
+            "These narrated micro-actions/event phases do not need literal simultaneous depiction: "
+            + ", ".join(narration_only_actions)
+            + ". Do not create an impossible multi-moment composite."
+        )
+    if reference_contract is not None:
+        prompt += (
+            "\nRENDER-STYLE LOCK: this frame must be rendered in the approved book visual "
+            "language only (BOOK_VISUAL_PROFILE + the approved book Style Master). Do not "
+            "switch into illustration, anime, oil painting, concept art, commercial poster, "
+            "or fashion-photography rendering."
+        )
     generation_mode = "single" if scene.get("riskFlags") else str(scene.get("generationMode", "single"))
     if generation_mode not in {"single", "2x2"}:
         raise DirectorStageError(f"scene {scene['id']} has unsupported generation mode")
@@ -657,6 +912,10 @@ def _task_for_scene(
         "caption_visual_contract_sha256": caption_visual_contract_sha256,
         "contract_must_show": must_show,
         "contract_must_not_show": must_not_show,
+        "visual_event_state": visual_event_state,
+        "participant_constraint": participant_constraint,
+        "group_visual_focus": group_visual_focus,
+        "reference_contract": reference_contract,
         "output_target": f"assets/generated/scenes/{scene['id']}.png",
         "status": "planned",
     }
@@ -754,7 +1013,12 @@ def _scene_for_caption_group(
         for item in scene.get("participants", {}).get("forbidden", [])
         if str(item).strip()
     ))
-    scene_id = f"caption-group-{group_id.lower()}"
+    span_id = str(group.get("span_id", ""))
+    scene_id = (
+        f"scene-continuity-{span_id.lower()}"
+        if span_id
+        else f"caption-group-{group_id.lower()}"
+    )
     return {
         "id": scene_id,
         "sourceSceneIds": upstream_scenes,
@@ -781,7 +1045,160 @@ def _scene_for_caption_group(
         "motion": str(evidence[0]["motion"]),
         "generationMode": "single" if risk_flags else str(evidence[0].get("generationMode", "single")),
         "narrativeFunction": str(group.get("narrative_function", "")),
+        "sceneContinuitySpanId": span_id,
     }
+
+
+def _production_group_for_span(
+    span: Mapping[str, Any],
+    groups_by_id: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate fine-grained Caption Groups into one final image unit."""
+
+    span_id = str(span.get("span_id", ""))
+    continuity = {"spans": [span]}
+    grouping = {"groups": list(groups_by_id.values())}
+    try:
+        return build_span_review_groups(continuity=continuity, grouping=grouping)[span_id]
+    except (SceneContinuityError, KeyError) as error:
+        raise DirectorStageError(f"cannot build production group for span {span_id}: {error}") from error
+
+
+def _scene_for_beat(
+    beat: Mapping[str, Any],
+    *,
+    captions: Mapping[str, Mapping[str, Any]],
+    caption_contracts: Mapping[str, Any],
+    caption_group: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Map one approved VisualBeat into the director scene shape (P0-3).
+
+    VISUAL_TIMELINE beats are the authoritative shot grid; each beat becomes
+    exactly one scene (== one production image task). The scene dict mirrors
+    ``_scene_for_caption_group``'s shape so the shared emit/task pipeline
+    consumes it unchanged. The beat carries no upstream storyboard evidence,
+    so source ids are empty and chapter defaults to 0.
+    """
+
+    caption_ids = [str(item) for item in beat.get("caption_ids", [])]
+    beat_id = str(beat.get("beat_id", ""))
+    if not beat_id or not caption_ids:
+        raise DirectorStageError(f"visual beat has no beat_id or caption_ids: {beat!r}")
+    missing = [cid for cid in caption_ids if cid not in captions]
+    if missing:
+        raise DirectorStageError(f"visual beat {beat_id} references unknown captions: {missing}")
+    contracts = [caption_contracts[cid] for cid in caption_ids]
+    allowed = list(dict.fromkeys(
+        str(character_id)
+        for contract in contracts
+        for character_id in contract.scene_state.get("visible_character_ids", [])
+        if str(character_id).strip()
+    ))
+    narrative_function = _scene_narrative_function(caption_group)
+    span_id = str(caption_group.get("span_id", ""))
+    scene_id = f"visual-beat-{beat_id.lower()}"
+    return {
+        "id": scene_id,
+        "sourceSceneIds": [],
+        "sourceShotIds": [],
+        "sourceBeatIds": [beat_id],
+        "chapter": int(caption_group.get("chapter", 0)),
+        "start": float(beat.get("start", 0.0)),
+        "end": float(beat.get("end", 0.0)),
+        "duration": round(float(beat.get("duration", 0.0)), 3),
+        "captionIds": caption_ids,
+        "cue": str((beat.get("caption_texts") or [""])[0]),
+        "description": "",
+        "semanticRationale": "",
+        "requiredEntities": [],
+        "forbiddenEntities": [],
+        "riskFlags": [],
+        "anchorRefs": [],
+        "participants": {
+            "count": len(allowed),
+            "mode": "environmental" if not allowed else ("single_character" if len(allowed) == 1 else "multi_character"),
+            "allowed": allowed,
+            "forbidden": [],
+        },
+        "motion": str(beat.get("motion", "hold")) or "hold",
+        "generationMode": "single",
+        "narrativeFunction": narrative_function,
+        "sceneContinuitySpanId": span_id,
+    }
+
+
+def _scenes_from_visual_timeline(
+    timeline: Mapping[str, Any],
+    *,
+    captions: Mapping[str, Mapping[str, Any]],
+    caption_contracts: Mapping[str, Any],
+    group_by_caption: Mapping[str, Mapping[str, Any]],
+    span_by_caption: Mapping[str, str],
+    span_narrative_by_id: Mapping[str, str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Build (scenes, per-scene caption_groups) from the approved VISUAL_TIMELINE beats.
+
+    Each beat == one scene (one image task). A beat's production 'group' is
+    synthesized by unioning the fine-grained caption groups that intersect the
+    beat's caption_ids; its span_id and narrative_function come from the
+    caption->span map (VISUAL_TIMELINE beat JSON does NOT carry source_span_id).
+    Fail-closed: (a) every caption must exist; (b) a beat whose captions span
+    MORE THAN ONE distinct span, or a caption in no span, cannot be bound to
+    exactly one production group -> error.
+    """
+
+    beats = timeline.get("beats")
+    if not isinstance(beats, list) or not beats:
+        raise DirectorStageError("visual timeline contains no beats")
+    scenes: list[dict[str, Any]] = []
+    scene_groups: list[dict[str, Any]] = []
+    for beat in beats:
+        caption_ids = [str(item) for item in beat.get("caption_ids", [])]
+        if not caption_ids:
+            raise DirectorStageError(f"visual beat {beat.get('beat_id')} has no caption_ids")
+        missing = [cid for cid in caption_ids if cid not in captions]
+        if missing:
+            raise DirectorStageError(f"visual beat {beat['beat_id']} references unknown captions: {missing}")
+        beat_spans = sorted({span_by_caption[cid] for cid in caption_ids if span_by_caption.get(cid)})
+        if len(beat_spans) != 1:
+            raise DirectorStageError(
+                f"visual beat {beat['beat_id']} must map to exactly one scene continuity span, "
+                f"got {beat_spans or 'none'}"
+            )
+        span_id = beat_spans[0]
+        members = [group_by_caption[cid] for cid in caption_ids if group_by_caption.get(cid)]
+        source_group_ids = list(dict.fromkeys(
+            str(g.get("group_id", "")) for g in members if str(g.get("group_id", ""))
+        ))
+        narrative_function = str(
+            span_narrative_by_id.get(span_id) or (members[0].get("narrative_function", "") if members else "")
+        )
+        beat_group: dict[str, Any] = {
+            "group_id": str(beat.get("beat_id", "")),
+            "span_id": span_id,
+            "source_group_ids": source_group_ids,
+            "caption_ids": caption_ids,
+            "start": float(beat.get("start", 0.0)),
+            "end": float(beat.get("end", 0.0)),
+            "duration": float(beat.get("duration", 0.0)),
+            "narrative_function": narrative_function,
+            "location": str(beat.get("location_id", "")),
+            "core_participants": list(beat.get("participants", [])),
+            "representative_visual_core": str(beat.get("visual_proposition", "")),
+            "contract_bindings": [
+                {"caption_id": cid, "content_sha256": caption_contracts[cid].content_sha256()}
+                for cid in caption_ids
+            ],
+        }
+        beat_group["caption_group_sha256"] = hashlib.sha256(
+            json.dumps(beat_group, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        scene = _scene_for_beat(
+            beat, captions=captions, caption_contracts=caption_contracts, caption_group=beat_group,
+        )
+        scenes.append(scene)
+        scene_groups.append(beat_group)
+    return scenes, scene_groups
 
 
 def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
@@ -790,6 +1207,21 @@ def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
     release_id = audio_manifest_probe.get("release_id")
     if not isinstance(release_id, str) or not release_id:
         raise DirectorStageError("audio stage release_id is invalid")
+    from book_video_factory.style_profiles import project_workflow
+    from book_video_factory.visual_foundation.approval import verify_visual_foundation_approval
+    from book_video_factory.visual_foundation.contracts import VisualFoundationError
+    try:
+        vf_policy = project_workflow(root)["visual_foundation_policy"]
+    except Exception as error:
+        raise DirectorStageError(f"cannot resolve visual_foundation_policy: {error}") from error
+    if vf_policy == "required":
+        try:
+            verify_visual_foundation_approval(root, release_id)
+        except VisualFoundationError as error:
+            raise DirectorStageError(
+                f"visual_foundation_policy=required but the visual foundation is missing, "
+                f"unapproved, or stale: {error}"
+            ) from error
     status = audio_stage_status(root, release_id)
     if status != "ready_for_image_task_planning":
         raise DirectorStageError(f"Phase 4 final audio gate is not current: {status}")
@@ -801,14 +1233,20 @@ def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
         "caption_grouping_audit": _project_file(
             root, "04_audio/CAPTION_GROUPING_AUDIT.json", "caption grouping audit"
         ),
+        "scene_continuity_spans": _project_file(
+            root, "04_audio/SCENE_CONTINUITY_SPANS.json", "scene continuity spans"
+        ),
     }
     try:
         grouping = load_current_caption_grouping_document(root)
+        continuity = load_current_scene_continuity_document(root)
         from book_video_factory.semantic_alignment.caption_contract import load_caption_visual_contract_document
 
         caption_contracts = load_caption_visual_contract_document(paths["caption_visual_contract"])
-    except (CaptionGroupingError, OSError, ValueError) as error:
-        raise DirectorStageError(f"current caption visual contract/grouping is unavailable: {error}") from error
+    except (CaptionGroupingError, SceneContinuityError, OSError, ValueError) as error:
+        raise DirectorStageError(
+            f"current caption visual contract/grouping/scene continuity is unavailable: {error}"
+        ) from error
     groups = grouping.get("groups")
     if not isinstance(groups, list) or not groups:
         raise DirectorStageError("caption grouping audit contains no groups")
@@ -821,6 +1259,11 @@ def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
             if not key or key in group_by_caption:
                 raise DirectorStageError("caption grouping audit has missing or duplicate caption coverage")
             group_by_caption[key] = group
+    groups_by_id = {str(group.get("group_id", "")): group for group in groups}
+    spans = continuity.get("spans")
+    if not isinstance(spans, list) or not spans:
+        raise DirectorStageError("scene continuity document contains no spans")
+    production_groups = [_production_group_for_span(span, groups_by_id) for span in spans]
     paths.update({
         "audio_meta": _project_file(root, "audio_meta.json", "audio metadata"),
         "storyboard": _project_file(root, "STORYBOARD.json", "final audio storyboard"),
@@ -860,7 +1303,7 @@ def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
             upstream_by_caption[key] = upstream_scene
     group_scenes = [
         _scene_for_caption_group(group, captions, upstream_by_caption, caption_contracts)
-        for group in groups
+        for group in production_groups
     ]
     scenes: list[dict[str, Any]] = []
     tasks: list[dict[str, Any]] = []
@@ -870,15 +1313,38 @@ def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
     # registry fails any Symbolic proposition, so order matters and the first
     # occurrence of a trope must be seeded by a registered trope / hash-bound
     # symbol upstream of this loop.
-    established_symbols: set[str] = set()
-    for scene, scene_group in zip(group_scenes, groups):
+    # FIX 2 (pilot R2): the project's approved Visual Profile symbolic mappings
+    # are part of the established symbol system and seed the registry directly.
+    established_symbols: set[str] = {
+        str(item.get("surrogate_object", "")).strip()
+        for item in profile.get("symbolic_mappings", [])
+        if isinstance(item, Mapping)
+        and str(item.get("status", "")) == "approved"
+        and str(item.get("surrogate_object", "")).strip()
+    }
+    visualize_path = root / "04_audio" / "VISUAL_TIMELINE.json"
+    has_visual_timeline = visualize_path.is_file() and not visualize_path.is_symlink()
+
+    def _emit_scene(scene: Mapping[str, Any], scene_group: Mapping[str, Any]) -> None:
         scene_caption_ids = [str(item) for item in scene["captionIds"]]
         if [str(item) for item in scene_group.get("caption_ids", [])] != scene_caption_ids:
-            raise DirectorStageError(f"scene {scene['id']} is not exactly one persisted caption group")
+            raise DirectorStageError(f"scene {scene['id']} is not exactly one persisted scene continuity span")
         group_id = str(scene_group.get("group_id", ""))
         if not group_id or group_id in used_group_ids:
-            raise DirectorStageError(f"caption group {group_id or '?'} does not map to exactly one image task")
+            raise DirectorStageError(f"scene continuity span {group_id or '?'} does not map to exactly one image task")
         caption_text = " / ".join(str(captions[item]["text"]) for item in scene["captionIds"])
+        group_contract = aggregate_group_visual_contract(
+            group=scene_group,
+            contracts=caption_contracts,
+            captions=captions,
+        )
+        group_contract["group_visual_focus"] = str(
+            scene_group.get("representative_visual_core") or group_contract.get("group_visual_focus") or ""
+        )
+        previous_scene = scenes[-1] if scenes else None
+        reference_contract = _scene_reference_contract(
+            root, profile, scene, group_contract, previous_scene, vf_policy
+        )
         scenes.append({
             "scene_id": scene["id"],
             "source_beat_ids": list(scene.get("sourceBeatIds", [])),
@@ -900,6 +1366,11 @@ def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
             "participants": dict(scene.get("participants", {})),
             "motion": str(scene["motion"]),
             "generation_mode": "single" if scene.get("riskFlags") else str(scene.get("generationMode", "single")),
+            "location": str((group_contract or {}).get("location", "")),
+            "event_state": dict((group_contract or {}).get("visual_event_state") or {}),
+            "scene_continuity_span_id": str(scene_group.get("span_id", "")),
+            "source_caption_group_ids": list(scene_group.get("source_group_ids", [])),
+            "narration_only_actions": list(scene_group.get("narration_only_actions", [])),
         })
         task = _task_for_scene(
             scene,
@@ -910,6 +1381,7 @@ def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
             known_symbol_registry=tuple(established_symbols),
             caption_contracts=caption_contracts,
             caption_group=scene_group,
+            reference_contract=reference_contract,
         )
         try:
             validate_production_image_task(task)
@@ -919,8 +1391,40 @@ def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
         used_group_ids.add(group_id)
         vp = task.get("visual_proposition") or {}
         established_symbols.update(str(item) for item in (vp.get("surrogate_objects") or ()))
-    if used_group_ids != {str(group.get("group_id", "")) for group in groups}:
-        raise DirectorStageError("caption groups are missing from the production image task coverage")
+
+    if has_visual_timeline:
+        timeline_doc = _load_json(visualize_path, "visual timeline")
+        if timeline_doc.get("schema_version") != "visual-timeline.v1":
+            raise DirectorStageError(
+                f"VISUAL_TIMELINE.json must be visual-timeline.v1, got {timeline_doc.get('schema_version')!r}"
+            )
+        # caption -> span 反查表（VISUAL_TIMELINE beat 不携带 source_span_id）
+        all_span_groups = build_span_review_groups(continuity=continuity, grouping=grouping)
+        span_by_caption = {
+            cid: span_id
+            for span_id, payload in all_span_groups.items()
+            for cid in payload.get("caption_ids", [])
+        }
+        span_narrative_by_id = {
+            str(span.get("span_id", "")): str(span.get("narrative_function", ""))
+            for span in (continuity.get("spans") or []) if str(span.get("span_id", ""))
+        }
+        beat_scenes, beat_scene_groups = _scenes_from_visual_timeline(
+            timeline_doc, captions=captions, caption_contracts=caption_contracts,
+            group_by_caption=group_by_caption, span_by_caption=span_by_caption,
+            span_narrative_by_id=span_narrative_by_id,
+        )
+        raw_scenes = beat_scenes
+        for scene, scene_group in zip(beat_scenes, beat_scene_groups):
+            _emit_scene(scene, scene_group)
+        expected_groups = {str(item.get("group_id", "")) for item in beat_scene_groups}
+    else:
+        raw_scenes = group_scenes
+        for scene, scene_group in zip(group_scenes, production_groups):
+            _emit_scene(scene, scene_group)
+        expected_groups = {str(item.get("group_id", "")) for item in production_groups}
+    if used_group_ids != expected_groups:
+        raise DirectorStageError("scene continuity spans are missing from the production image task coverage")
     durations = [item["duration"] for item in scenes]
     timeline = {
         "schema_version": "director-timeline.v1",
@@ -930,6 +1434,7 @@ def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
         "caption_bindings_sha256": sha256_file(paths["bindings"]),
         "caption_visual_contract_sha256": sha256_file(paths["caption_visual_contract"]),
         "caption_grouping_audit_sha256": sha256_file(paths["caption_grouping_audit"]),
+        "scene_continuity_spans_sha256": sha256_file(paths["scene_continuity_spans"]),
         "visual_profile_sha256": sha256_file(paths["visual_profile"]),
         "visual_approval_sha256": sha256_file(paths["visual_approval"]),
         "scene_count": len(scenes),
@@ -949,12 +1454,12 @@ def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
                 "end": item["end"],
                 "duration": item["duration"],
                 "type": item["motion"],
-                "implementation": "hbg-native-zoom-pan",
+                "implementation": "static-hard-cut",
             }
             for item in scenes
         ],
     }
-    sheet_map = _sheet_plan(tasks, group_scenes)
+    sheet_map = _sheet_plan(tasks, raw_scenes)
     task_bytes = b"".join(_canonical(item) + b"\n" for item in tasks)
     prompt_lines = ["# Production Image Prompts", "", "> Generated deterministically from the approved visual profile and real-audio director timeline.", ""]
     for task in tasks:
