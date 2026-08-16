@@ -592,6 +592,37 @@ def _scene_reference_contract(
     }
 
 
+def _scene_anchor_ids_for(
+    scene: Mapping[str, Any],
+    group_contract: Mapping[str, Any] | None,
+    profile: Mapping[str, Any],
+) -> list[str]:
+    """Declared persistent location anchors for the scene's reference pack.
+
+    Only ids that are actually in the approved profile's scene_anchors are
+    emitted; an unregistered location stays a generic environment reference.
+    """
+    loc = str((group_contract or {}).get("location", "")).strip()
+    anchors = {str(a.get("anchor_id", "")) for a in (profile.get("scene_anchors") or []) if isinstance(a, Mapping)}
+    return [loc] if loc and loc in anchors else []
+
+
+def _object_anchor_ids_for(
+    visual_event_state: Mapping[str, Any] | None,
+    profile: Mapping[str, Any],
+) -> list[str]:
+    """Declared story-object anchors named by the scene's visual event state."""
+    anchors = {str(a.get("anchor_id", "")) for a in (profile.get("object_anchors") or []) if isinstance(a, Mapping)}
+    objects = (visual_event_state or {}).get("objects", []) if isinstance(visual_event_state, Mapping) else []
+    result: list[str] = []
+    for obj in objects:
+        oid = str(obj.get("object_id") or obj.get("anchor_task_id") or "") if isinstance(obj, Mapping) else str(obj)
+        oid = oid.strip()
+        if oid and oid in anchors and oid not in result:
+            result.append(oid)
+    return result
+
+
 def _task_for_scene(
     scene: Mapping[str, Any],
     profile: Mapping[str, Any],
@@ -889,6 +920,8 @@ def _task_for_scene(
         "anchor_refs": anchor_refs,
         "identity_reference_task_ids": identity_tasks,
         "style_reference_ids": list(profile["style_reference_ids"]),
+        "scene_anchor_task_ids": _scene_anchor_ids_for(scene, group_contract, profile),
+        "object_anchor_task_ids": _object_anchor_ids_for(visual_event_state, profile),
         "palette_id": profile["palette_profiles"][0]["palette_id"],
         "lighting_id": profile["lighting_profiles"][0]["lighting_id"],
         "prompt": prompt,

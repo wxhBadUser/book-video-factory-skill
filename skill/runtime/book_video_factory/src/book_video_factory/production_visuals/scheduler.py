@@ -108,6 +108,10 @@ def _load_tasks(root: Path) -> list[dict[str, Any]]:
         identity = task.get("identity_reference_task_ids", [])
         if not isinstance(identity, list) or any(not isinstance(item, str) or not item for item in identity):
             raise GenerationScheduleError(f"production image task {task_id} has invalid identity references")
+        for field in ("character_anchor_task_ids", "scene_anchor_task_ids", "object_anchor_task_ids"):
+            value = task.get(field, [])
+            if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+                raise GenerationScheduleError(f"production image task {task_id} has invalid {field}")
         # L9 generation-provider gate: a task may only be produced by the
         # sanctioned generation lane. ``gemini-web`` / ``flow-web`` / ``imagegen``
         # (the lanes huozhe-r1 shipped 173 misaligned assets on) and any other
@@ -144,6 +148,71 @@ def _registered_task_ids(root: Path) -> set[str]:
         result.add(task_id)
     return result
 
+
+def _registered_assets(root: Path) -> dict[str, dict[str, Any]]:
+    path = root / "06_visual_production/SCENE_ASSET_MANIFEST.json"
+    if path.is_symlink() or not path.is_file():
+        return {}
+    value = _load_json(path, "scene asset manifest")
+    assets = value.get("assets")
+    if not isinstance(assets, list):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for item in assets:
+        if isinstance(item, dict) and isinstance(item.get("task_id"), str):
+            result[item["task_id"]] = item
+    return result
+
+
+def _resolve_reference_packs(root: Path, jobs: list[dict[str, Any]], tasks: list[dict[str, Any]], release_id: str, vf_policy: str) -> list[dict[str, Any]]:
+    """Resolve every task to a concrete approved reference pack before the wave is planned.
+
+    Fail closed when the visual foundation is approved but a required reference cannot be
+    resolved to a current approved image file and SHA-256. Legacy projects without a visual
+    foundation keep the previous scheduler behavior.
+    """
+    from book_video_factory.visual_foundation.approval import verify_visual_foundation_approval
+    from book_video_factory.visual_foundation.manifests import FOUNDATION_MANIFEST_REL, load_foundation
+    from book_video_factory.visual_foundation.resolver import resolve_reference_pack
+
+    if vf_policy == "legacy":
+        return jobs  # explicitly selected legacy behavior: no reference packs
+    if not (root / FOUNDATION_MANIFEST_REL).is_file():
+        raise GenerationScheduleError(
+            "visual_foundation_policy=required but the visual foundation manifest is missing"
+        )
+    verify_visual_foundation_approval(root, release_id)
+    foundation = load_foundation(root, release_id)
+    registered = _registered_assets(root)
+    order = [task["task_id"] for task in tasks]
+    previous_by_task: dict[str, str] = {}
+    for index, task_id in enumerate(order):
+        if index > 0:
+            previous_by_task[task_id] = order[index - 1]
+    by_id = {task["task_id"]: task for task in tasks}
+    resolved: list[dict[str, Any]] = []
+    for job in jobs:
+        packs: dict[str, Any] = {}
+        for task_id in job["task_ids"]:
+            task = by_id[task_id]
+            previous_id = previous_by_task.get(task_id)
+            previous_asset = registered.get(previous_id) if previous_id else None
+            previous_task = by_id.get(previous_id) if previous_id else None
+            try:
+                packs[task_id] = resolve_reference_pack(
+                    root,
+                    task,
+                    foundation,
+                    previous_asset=previous_asset,
+                    previous_scene_id=previous_id,
+                    previous_task=previous_task,
+                )
+            except Exception as error:
+                raise GenerationScheduleError(
+                    f"reference resolution failed for task {task_id}: {error}"
+                ) from error
+        resolved.append({**job, "reference_packs": packs})
+    return resolved
 
 def _build_jobs(tasks: list[dict[str, Any]], sheet_map: dict[str, Any]) -> list[dict[str, Any]]:
     by_id = {task["task_id"]: task for task in tasks}
@@ -217,6 +286,7 @@ def _build_jobs(tasks: list[dict[str, Any]], sheet_map: dict[str, Any]) -> list[
 
 
 def _source_evidence(root: Path, concurrency: int) -> dict[str, Any]:
+    from book_video_factory.visual_foundation.manifests import FOUNDATION_APPROVAL_REL, FOUNDATION_MANIFEST_REL
     paths = {
         "image_tasks": root / "05_director/IMAGE_TASKS.jsonl",
         "sheet_map": root / "05_director/SHEET_MAP.json",
@@ -225,10 +295,15 @@ def _source_evidence(root: Path, concurrency: int) -> dict[str, Any]:
     for label, path in paths.items():
         if path.is_symlink() or not path.is_file():
             raise GenerationScheduleError(f"{label} is missing or symlinked")
-    return {
+    evidence = {
         **{f"{label}_sha256": sha256_file(path) for label, path in paths.items()},
         "concurrency": concurrency,
     }
+    for relative in (FOUNDATION_MANIFEST_REL, FOUNDATION_APPROVAL_REL):
+        path = root / relative
+        if path.is_file() and not path.is_symlink():
+            evidence[f"{Path(relative).name}_sha256"] = sha256_file(path)
+    return evidence
 
 
 def _initial_run(jobs: list[dict[str, Any]], registered: set[str]) -> list[dict[str, Any]]:
@@ -295,6 +370,12 @@ def plan_generation_run(project: Path, *, concurrency: int = 5) -> GenerationPla
     if not isinstance(release_id, str) or not release_id:
         raise GenerationScheduleError("director stage release is invalid")
     jobs = _build_jobs(tasks, sheet_map)
+    from book_video_factory.style_profiles import project_workflow
+    try:
+        vf_policy = project_workflow(root)["visual_foundation_policy"]
+    except Exception as error:
+        raise GenerationScheduleError(f"cannot resolve visual_foundation_policy: {error}") from error
+    jobs = _resolve_reference_packs(root, jobs, tasks, release_id, vf_policy)
     evidence = _source_evidence(root, concurrency)
     input_digest = _digest_bytes(_canonical(evidence))
     plan_path, jobs_path, run_path, attempts_path = _paths(root)
