@@ -52,10 +52,10 @@ def _raw_pipeline_status(project: Path) -> dict[str, Any]:
         if not (video.is_file() and qa.is_file() and sha256_file(video)==final.get("video_sha256") and sha256_file(qa)==final.get("qa_report_sha256")):
             return {"release_id":release_id,"stage":"render","status":"blocked_by_final_integrity","next_action":"restore or regenerate the final render","command":None}
         final_status=final.get("next_stage_status")
-        if final_status=="awaiting_encoded_visual_review":
+        if final_status=="awaiting_encoded_qa":
             return {
                 "release_id":release_id,"stage":"encoded_visual_qa","status":final_status,
-                "next_action":"review every HBG-extracted encoded frame and record semantic, reality, and identity decisions",
+                "next_action":"run machine encoded QA (semantic, reality, identity frame checks)",
                 "command":f"python book_video_factory/scripts/review_encoded_master.py --project '{root}' --decision '{root}/09_qc/ENCODED_REVIEW_DECISION.json'",
             }
         if final_status=="blocked_by_encoded_visual_qa":
@@ -118,17 +118,13 @@ def _raw_pipeline_status(project: Path) -> dict[str, Any]:
                     "next_action":"probe the BGM and record a fixed-gain 15-20 second opening mix candidate",
                     "command":f"python book_video_factory/scripts/calibrate_opening_mix.py --project '{root}' --input '{render_input_path}'",
                 }
-            if mix_status == "awaiting_opening_mix_approval":
-                return {
-                    "release_id":release_id,"stage":"opening_mix","status":mix_status,
-                    "next_action":"review the exact opening preview and fixed BGM gain, then record human approval",
-                    "command":f"python book_video_factory/scripts/approve_opening_mix.py --project '{root}' --calibration '{calibration_path}' --reviewer '<HUMAN>' --note '<APPROVAL_NOTE>'",
-                }
+            # mix_status == "ready_for_render_preflight": machine calibration
+            # passed; opening mix is machine validation, not a human gate.
         return {"release_id":release_id,"stage":"render_preflight","status":"awaiting_render_preflight","next_action":"prepare the locked workspace and run HBG style and long-render preflight","command":f"python book_video_factory/scripts/preflight_render.py --project '{root}' --input '{render_input_path}'"}
     review=_json(root/"06_visual_production/SCENE_REVIEW_REPORT.json")
     if review:
         status=str(review.get("next_stage_status","blocked_by_scene_review"))
-        return {"release_id":release_id,"stage":"scene_visual_review","status":status,"next_action":"obtain explicit human approval" if status=="awaiting_scene_visual_approval" else "repair failed scene images and rebuild review","command":f"python book_video_factory/scripts/approve_scene_assets.py --project '{root}' --reviewer '<HUMAN>' --note '<APPROVAL_NOTE>'" if status=="awaiting_scene_visual_approval" else None}
+        return {"release_id":release_id,"stage":"scene_visual_review","status":status,"next_action":"repair failed scene images and rebuild review" if status=="blocked_by_scene_review" else "scene vision QA passed; proceed to render preflight","command":None}
     scene_manifest=_json(root/"06_visual_production/SCENE_ASSET_MANIFEST.json")
     if scene_manifest:
         count=int(scene_manifest.get("registered_asset_count",0)); total=int(scene_manifest.get("task_count",0))
@@ -331,9 +327,16 @@ def _enhance_status(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         stage = str(result["stage"])
         status = str(result["status"])
 
+    # Canonical production state pauses for exactly THREE human gates:
+    #   1. SCRIPT_APPROVAL              (awaiting_script_approval)
+    #   2. VISUAL_DIRECTION_APPROVAL    (blocked_by_visual_approval)
+    #   3. FINAL_MASTER_APPROVAL        (awaiting_final_master_approval)
+    # Every other check (scene assets, encoded QA, mix, visual foundation,
+    # voice audition, source audit, timeline) is machine validation: it may
+    # block with a blocked_* status but never pauses for a human approval.
     human_review_required = any(
         token in status
-        for token in ("awaiting_script_approval", "awaiting_visual_approval", "awaiting_scene_visual_approval", "awaiting_encoded_visual_review", "awaiting_final_master_approval", "awaiting_opening_mix_approval")
+        for token in ("awaiting_script_approval", "blocked_by_visual_approval", "awaiting_final_master_approval")
     )
     preflight = _json(root / "07_render/RENDER_PREFLIGHT.json") or {}
     mix = _json(root / "07_render/MIX_CALIBRATION.json") or {}

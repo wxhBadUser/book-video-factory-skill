@@ -136,11 +136,10 @@ def _render_input(
     if not isinstance(flash_tasks, list) or not 1 <= len(flash_tasks) <= 9 or any(item not in tasks for item in flash_tasks):
         raise RenderStageError("opening flash task IDs must contain 1-9 known scene tasks")
     if require_preview:
-        from book_video_factory.render_stage.mix_calibration import MixCalibrationError, verify_opening_mix_approval
-        try:
-            verify_opening_mix_approval(root, input_path)
-        except MixCalibrationError as error:
-            raise RenderStageError(f"opening mix does not have current human approval: {error}") from error
+        from book_video_factory.render_stage.mix_calibration import MixCalibrationError, opening_mix_status
+        mix_status, _candidate = opening_mix_status(root, input_path)
+        if mix_status != "ready_for_render_preflight":
+            raise RenderStageError(f"opening mix machine calibration is not current (status={mix_status})")
     return value
 
 
@@ -199,7 +198,7 @@ def _scene_approval(root: Path, director_sha: str, tasks: Mapping[str, Any]) -> 
     approval_path = root / "06_visual_production/SCENE_ASSET_APPROVAL.json"
     approval = _load(approval_path, "scene asset approval")
     if approval.get("schema_version") != "scene-asset-approval.v1" or not approval.get("human_approved") or approval.get("next_stage_status") != "ready_for_render":
-        raise VisualSemanticAlignmentError("scene assets do not have current human approval")
+        raise VisualSemanticAlignmentError("scene assets have not passed machine vision QA")
     manifest_path = root / "06_visual_production/SCENE_ASSET_MANIFEST.json"
     manifest = load_scene_manifest(root, approval.get("release_id"), director_sha, len(tasks))
     if approval.get("scene_asset_manifest_sha256") != sha256_file(manifest_path):
@@ -207,9 +206,8 @@ def _scene_approval(root: Path, director_sha: str, tasks: Mapping[str, Any]) -> 
     by_task = {item["task_id"]: item for item in manifest["assets"]}
     if set(by_task) != set(tasks) or approval.get("asset_hashes") != {task_id: by_task[task_id]["sha256"] for task_id in tasks}:
         raise VisualSemanticAlignmentError("scene asset approval does not bind every current image")
-    event = _project_media(root, approval.get("approval_event_path"), "scene approval event")
-    if sha256_file(event) != approval.get("approval_event_sha256"):
-        raise VisualSemanticAlignmentError("scene approval event is stale")
+    # Scene vision QA is machine validation (auto-advanced); no human approval
+    # event is required. The review report + approval record bind all evidence.
     return approval, manifest
 
 
@@ -411,6 +409,10 @@ def prepare_render_stage(project: Path, input_path: Path) -> RenderStageResult:
     except SceneAssetError as error:
         raise VisualSemanticAlignmentError(f"scene image or identity evidence is not current: {error}") from error
     render_input = _render_input(root, input_path.expanduser().resolve(), approval["release_id"], tasks)
+    # Mix calibration is machine validation; bind the current calibration file
+    # instead of a human OPENING_MIX_APPROVAL.json.
+    from book_video_factory.render_stage.mix_calibration import opening_mix_status
+    _mix_status, mix_calibration_path = opening_mix_status(root, input_path.expanduser().resolve())
     input_hashes = {
         "render_input": sha256_file(input_path.expanduser().resolve()),
         "director_stage": director_sha,
@@ -418,7 +420,7 @@ def prepare_render_stage(project: Path, input_path: Path) -> RenderStageResult:
         "scene_manifest": sha256_file(root / "06_visual_production/SCENE_ASSET_MANIFEST.json"),
         "audio_stage": sha256_file(root / "04_audio/AUDIO_STAGE_MANIFEST.json"),
         "hbg_style": sha256_file(root / "HBG_STYLE.json"),
-        "opening_mix_approval": sha256_file(root / "07_render/OPENING_MIX_APPROVAL.json"),
+        "opening_mix_calibration": sha256_file(mix_calibration_path) if mix_calibration_path and mix_calibration_path.is_file() else "",
     }
     digest = _sha(_canonical(input_hashes))
     workspace = safe_project_output(root, Path(f"07_render/workspaces/{digest[:16]}"))
@@ -751,7 +753,7 @@ def execute_render_stage(
         )
         report["video"] = output.relative_to(root).as_posix()
         report["technical_status"] = "pass"
-        report["status"] = "awaiting_encoded_visual_review"
+        report["status"] = "awaiting_encoded_qa"
         report["encoded_frame_plan_path"] = "09_qc/ENCODED_FRAME_PLAN.json"
         report["encoded_frame_plan_sha256"] = sha256_file(root / "09_qc/ENCODED_FRAME_PLAN.json")
         report["hbg_encoded_sample_count"] = len(frames)
@@ -776,13 +778,13 @@ def execute_render_stage(
             "qa_report_path": report_path.relative_to(root).as_posix(),
             "qa_report_sha256": sha256_file(report_path),
             "renderer": manifest["renderer"],
-            "next_stage_status": "awaiting_encoded_visual_review",
+            "next_stage_status": "awaiting_encoded_qa",
         }
         final_manifest_path.parent.mkdir(parents=True, exist_ok=True)
         final_manifest_path.write_bytes(_pretty(final))
         return RenderStageResult(
             "created", prepared.render_manifest_path, prepared.workspace,
-            output, "awaiting_encoded_visual_review",
+            output, "awaiting_encoded_qa",
         )
     except Exception:
         staging_video.unlink(missing_ok=True)

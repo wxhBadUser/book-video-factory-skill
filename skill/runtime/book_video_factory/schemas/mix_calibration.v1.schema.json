@@ -34,7 +34,7 @@
     "encoded_true_peak_dbtp": {"type": "number", "maximum": -3},
     "true_peak_limit_dbtp": {"const": -3},
     "recorded_at": {"type": "string", "minLength": 1},
-    "next_stage_status": {"const": "awaiting_opening_mix_approval"}
+    "next_stage_status": {"const": "ready_for_render_preflight"}
   },
   "$defs": {
     "probe": {

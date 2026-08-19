@@ -10,7 +10,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-ALLOWED_NARRATIVE_FUNCTIONS = {
+# Phase 1: these are fine-grained beat/section-level functions for the script
+# layer. The scene-level NARRATIVE_FUNCTIONS registry (narrative_functions.py)
+# is the single authority for the visual-semantic layer (SceneSpec, CaptionCue,
+# director stage). These script-section functions are a separate taxonomy and
+# must not be confused with the production narrative function registry.
+ALLOWED_SCRIPT_SECTION_FUNCTIONS = {
     "hook", "world_setup", "character_entry", "desire", "choice", "reward",
     "cost", "escalation", "transition", "midpoint_requestion", "confession",
     "revelation", "reinterpretation", "theory", "modern_mirror", "ending_image",
@@ -107,7 +112,7 @@ def validate_script_beats(payload: dict[str, Any]) -> None:
         _require(_is_nonempty_str(b.get("voice_chunk_id")),
                  f"beats[{i}].voice_chunk_id required (beat→voice 外键)")
         nf = b.get("narrative_function")
-        _require(nf in ALLOWED_NARRATIVE_FUNCTIONS,
+        _require(nf in ALLOWED_SCRIPT_SECTION_FUNCTIONS,
                  f"beats[{i}].narrative_function '{nf}' not allowed (narrative_function)")
 
 
@@ -227,19 +232,18 @@ def validate_narrator_essay_script(payload: dict[str, Any]) -> None:
 # 任一 auto_fail 不得被 15 项总分覆盖。
 
 # 开头 15% 若出现以下任一 token，即视为 deep_thesis 泄漏（最高优先级硬门禁）。
-# 注意：本列表只针对"宣布结论/现代解释"的措辞，不针对故事事实词（如假爵位/死马/Sorrow），
-# 后者由 metaphor-budget 的 forbidden_first_half 在前半段约束，且属证据词，可在前半段出现。
+# Phase 1 refactoring: book-specific metaphor tokens were removed from the
+# generic runtime. These are now supplied per-book by the Creative Route /
+# Agent, not baked into the contract module.
 DEEP_THESIS_LEAK_TOKENS = [
-    "账本", "清算", "制度账本", "制度", "纯洁资产", "纯洁是资产",
     "这本书真正写的是", "真正写的是", "其实写的是", "本质上写的是",
     "这本书其实在写", "深层命题", "社会学结论", "心理学结论",
 ]
 
-# 主隐喻在正式揭示前，前半段禁止持续提醒观众"这是账本"的解释词。
-FORBIDDEN_FIRST_HALF_TOKENS = [
-    "空资产", "第一笔债", "负债", "征信", "收费", "抵押物",
-    "连带责任", "开票", "结清", "账本", "清算",
-]
+# 主隐喻在正式揭示前，前半段禁止持续提醒观众的解释词。
+# Phase 1: book-specific tokens removed; per-book forbidden tokens are
+# injected by the Creative Route configuration.
+FORBIDDEN_FIRST_HALF_TOKENS = []
 
 # 把句子判定为"分析/讲解"的短语标记（用于 Story-First 与聊天松弛度）。
 ANALYSIS_MARKERS = [
@@ -485,9 +489,11 @@ READING_PAIN_TOKENS = [
 ]
 
 # 现代解释锚定标记：理论段必须引用本书独有的象征词，而不是纯通用概念。
+# Phase 1: book-specific tokens removed from generic runtime; per-book
+# anchor hints are injected by the Creative Route / Book Research.
 THEORY_ANCHOR_HINT_MARKERS = [
     "大海", "月亮", "六便士", "窄门", "庄园", "窗", "荒原",
-    "账本", "草地", "玫瑰花", "星球", "鱼", "船", "手",
+    "草地", "玫瑰花", "星球", "鱼", "船", "手",
 ]
 
 

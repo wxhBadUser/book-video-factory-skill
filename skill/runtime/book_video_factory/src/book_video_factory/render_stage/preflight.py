@@ -59,7 +59,7 @@ ProcessLister = Callable[[], list[dict[str, Any]]]
 
 _REPORT_FIELDS = {
     "schema_version", "release_id", "render_manifest_path", "render_manifest_sha256",
-    "opening_mix_approval_sha256", "hbg_vendor_lock_sha256", "workspace", "chosen_renderer",
+    "opening_mix_calibration_sha256", "hbg_vendor_lock_sha256", "workspace", "chosen_renderer",
     "render_job_id", "expected_work_dir", "free_disk_bytes", "free_disk_gib", "required_disk_bytes",
     "required_disk_gib", "style_validation", "hbg_disk_preflight", "existing_work_dirs",
     "recovery_commands",     "vision_review_decision_present", "vision_review_blockers",
@@ -679,13 +679,14 @@ def _record_prepare_visual_block(
     renderer = render_input.get("renderer") if isinstance(render_input, Mapping) else None
     job_id = hashlib.sha256(str(error).encode("utf-8")).hexdigest()[:20]
     vendor_lock = repository_root() / "vendor/hbg-life-simulation/UPSTREAM_LOCK.json"
-    approval_path = root / "07_render/OPENING_MIX_APPROVAL.json"
+    from book_video_factory.render_stage.mix_calibration import opening_mix_status as _oms
+    _ms, _cp = _oms(root, input_path)
     report = {
         "schema_version": "render-preflight.v1",
         "release_id": release_id,
         "render_manifest_path": None,
         "render_manifest_sha256": None,
-        "opening_mix_approval_sha256": sha256_file(approval_path) if approval_path.is_file() else None,
+        "opening_mix_calibration_sha256": sha256_file(_cp) if _cp and _cp.is_file() else None,
         "hbg_vendor_lock_sha256": sha256_file(vendor_lock) if vendor_lock.is_file() else None,
         "workspace": None,
         "chosen_renderer": renderer,
@@ -741,9 +742,11 @@ def preflight_render(
         _verify_vendor(repository_root())
     except RuntimeError as error:
         raise RenderPreflightError(f"HBG vendor integrity failed: {error}") from error
-    approval_path = root / "07_render/OPENING_MIX_APPROVAL.json"
-    if approval_path.is_symlink() or not approval_path.is_file():
-        raise RenderPreflightError("opening mix approval is missing")
+    # Opening mix is machine validation (calibration), not a human approval.
+    from book_video_factory.render_stage.mix_calibration import opening_mix_status
+    mix_status, _candidate = opening_mix_status(root, input_path)
+    if mix_status != "ready_for_render_preflight":
+        raise RenderPreflightError("opening mix machine calibration is missing or invalid")
     runner = command_runner or _default_command
     scripts = repository_root() / "vendor/hbg-life-simulation/scripts"
     style_command = ["node", str(scripts / "validate_style_system.mjs"), str(workspace)]
@@ -829,7 +832,7 @@ def preflight_render(
         "release_id": manifest["release_id"],
         "render_manifest_path": prepared.render_manifest_path.relative_to(root).as_posix(),
         "render_manifest_sha256": render_manifest_sha,
-        "opening_mix_approval_sha256": sha256_file(approval_path),
+        "opening_mix_calibration_sha256": sha256_file(_candidate) if _candidate and _candidate.is_file() else None,
         "hbg_vendor_lock_sha256": sha256_file(repository_root() / "vendor/hbg-life-simulation/UPSTREAM_LOCK.json"),
         "workspace": workspace.relative_to(root).as_posix(),
         "chosen_renderer": manifest["renderer"],
@@ -876,11 +879,14 @@ def verify_render_preflight(project: Path) -> dict[str, Any]:
         raise RenderPreflightError("render preflight report fields are invalid")
     manifest_path = safe_project_output(root, Path(str(report.get("render_manifest_path", ""))))
     manifest = _load(manifest_path, "render manifest")
-    approval_path = root / "07_render/OPENING_MIX_APPROVAL.json"
+    stored_mix_sha = (
+        manifest.get("input_hashes", {}).get("opening_mix_calibration")
+        if isinstance(manifest.get("input_hashes"), dict) else None
+    )
     expected = {
         "release_id": manifest.get("release_id"),
         "render_manifest_sha256": sha256_file(manifest_path),
-        "opening_mix_approval_sha256": sha256_file(approval_path),
+        "opening_mix_calibration_sha256": stored_mix_sha,
         "hbg_vendor_lock_sha256": sha256_file(repository_root() / "vendor/hbg-life-simulation/UPSTREAM_LOCK.json"),
         "workspace": manifest.get("workspace"),
         "chosen_renderer": manifest.get("renderer"),

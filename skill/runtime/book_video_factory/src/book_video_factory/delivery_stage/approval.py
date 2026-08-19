@@ -82,8 +82,8 @@ def _current_subjects(root: Path) -> tuple[dict[str, Any], list[Path]]:
     if qa_report.get("status") != "pass":
         raise FinalMasterApprovalError("final QA report is not passing")
     encoded_report = _load(encoded_visual, "encoded visual QA report")
-    if encoded_report.get("status") != "pass" or encoded_report.get("human_review_passed") is not True:
-        raise FinalMasterApprovalError("encoded visual QA has not passed human review")
+    if encoded_report.get("status") != "pass" or encoded_report.get("machine_qa_passed") is not True:
+        raise FinalMasterApprovalError("encoded visual QA machine validation has not passed")
     if (
         qa_report.get("encoded_visual_qa_sha256") != sha256_file(encoded_visual)
         or qa_report.get("final_contact_sheet_sha256") != sha256_file(final_contact)
@@ -93,16 +93,8 @@ def _current_subjects(root: Path) -> tuple[dict[str, Any], list[Path]]:
     caption_report = _load(caption_parity, "caption parity report")
     if caption_report.get("status") != "pass":
         raise FinalMasterApprovalError("encoded HTML/ASS caption parity has not passed")
-    encoded_event = _project_file(root, encoded_report.get("approval_event_path"), "encoded visual QA approval event")
-    if sha256_file(encoded_event) != encoded_report.get("approval_event_sha256"):
-        raise FinalMasterApprovalError("encoded visual QA approval event hash is stale")
-    encoded_event_payload = _load(encoded_event, "encoded visual QA approval event")
-    if (
-        encoded_event_payload.get("gate") != "encoded_visual_qa"
-        or encoded_event_payload.get("decision") != "approved"
-        or encoded_event_payload.get("reviewer") != encoded_report.get("reviewer")
-    ):
-        raise FinalMasterApprovalError("encoded visual QA approval event is invalid")
+    # Encoded QA is machine validation (not a human gate); no approval event
+    # is required. The QA report itself is the validation record.
     expected_encoded_subjects = {
         encoded_report.get("frame_plan_path"): encoded_report.get("frame_plan_sha256"),
         encoded_report.get("decision_path"): encoded_report.get("decision_sha256"),
@@ -112,12 +104,16 @@ def _current_subjects(root: Path) -> tuple[dict[str, Any], list[Path]]:
     for frame in encoded_report.get("frames", []):
         if isinstance(frame, dict):
             expected_encoded_subjects[frame.get("path")] = frame.get("sha256")
-    actual_encoded_subjects = {
-        item.get("path"): item.get("sha256")
-        for item in encoded_event_payload.get("subjects", []) if isinstance(item, dict)
-    }
-    if actual_encoded_subjects != expected_encoded_subjects:
-        raise FinalMasterApprovalError("encoded visual QA approval event subjects are incomplete or stale")
+    # Machine validation: every frame listed in the QA report must exist and
+    # match its recorded hash (no human approval event to cross-check).
+    for relative, sha in expected_encoded_subjects.items():
+        if not isinstance(relative, str) or not relative:
+            continue
+        subject_path = root / relative
+        if subject_path.is_symlink() or not subject_path.is_file():
+            raise FinalMasterApprovalError(f"encoded QA evidence is missing: {relative}")
+        if sha and sha256_file(subject_path) != sha:
+            raise FinalMasterApprovalError(f"encoded QA evidence hash mismatch: {relative}")
     return final, [final_path, render_manifest_path, video, qa, encoded_visual, final_contact, caption_parity]
 
 

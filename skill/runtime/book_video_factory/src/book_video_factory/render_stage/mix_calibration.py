@@ -254,7 +254,7 @@ def calibrate_opening_mix(
         "preview_integrated_lufs": preview_probe["integrated_lufs"],
         "encoded_true_peak_dbtp": peak,
         "true_peak_limit_dbtp": -3.0,
-        "next_stage_status": "awaiting_opening_mix_approval",
+        "next_stage_status": "ready_for_render_preflight",
     }
     identifier = hashlib.sha256(_canonical(core)).hexdigest()[:20]
     calibration = {**core, "calibration_id": identifier, "recorded_at": _now()}
@@ -271,7 +271,7 @@ def calibrate_opening_mix(
             output.write("\n")
     except OSError as error:
         raise MixCalibrationError(f"mix calibration could not be published: {error}") from error
-    return MixCalibrationResult("created", path, "awaiting_opening_mix_approval")
+    return MixCalibrationResult("created", path, "ready_for_render_preflight")
 
 
 def _verify_calibration(root: Path, input_path: Path, path: Path) -> dict[str, Any]:
@@ -294,7 +294,7 @@ def _verify_calibration(root: Path, input_path: Path, path: Path) -> dict[str, A
         "gain_linear": gain,
         "gain_db": round(20.0 * math.log10(gain), 6),
         "true_peak_limit_dbtp": -3.0,
-        "next_stage_status": "awaiting_opening_mix_approval",
+        "next_stage_status": "ready_for_render_preflight",
     }
     for key, value in expected.items():
         if calibration.get(key) != value:
@@ -451,7 +451,10 @@ def opening_mix_status(project: Path, input_path: Path) -> tuple[str, Path | Non
         for candidate in candidates:
             try:
                 _verify_calibration(root, resolved_input, candidate)
-                return "awaiting_opening_mix_approval", candidate
+                # Machine calibration passed (LUFS/peak/duration constraints
+                # verified) → auto-advance. Mix calibration is machine
+                # validation, NOT a human blocking gate.
+                return "ready_for_render_preflight", candidate
             except MixCalibrationError:
                 continue
     return "awaiting_opening_mix_calibration", None

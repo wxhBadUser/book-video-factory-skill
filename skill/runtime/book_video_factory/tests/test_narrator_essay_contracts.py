@@ -281,7 +281,7 @@ class NarratorEssayScriptTests(unittest.TestCase):
 
 class DiscoveryNarrativeGateTests(unittest.TestCase):
     def test_opening_leak_fails(self):
-        p = {"script_text": "今天我不打算审判她。我想清算那套账本。" * 50}
+        p = {"script_text": "今天我不打算审判她。这本书真正写的是制度。" * 50}
         with self.assertRaisesRegex(ContractError, "deep_thesis_leaked_in_opening"):
             validate_narrator_essay_opening(p)
 
@@ -290,20 +290,24 @@ class DiscoveryNarrativeGateTests(unittest.TestCase):
         validate_narrator_essay_opening(p)  # no raise
 
     def test_metaphor_reveal_too_early_fails(self):
-        p = {"script_text": ("账本" + "故事" * 50) * 2, "primary_metaphor": "账本",
+        p = {"script_text": ("镜子" + "故事" * 50) * 2, "primary_metaphor": "镜子",
              "metaphor_carries_reframing": True, "midpoint_position": 0.50}
         with self.assertRaisesRegex(ContractError, "metaphor_budget"):
             validate_metaphor_budget(p)
 
     def test_metaphor_reveal_late_passes(self):
-        body = "故事" * 130 + "账本" + "故事" * 20
-        p = {"script_text": body, "primary_metaphor": "账本",
+        body = "故事" * 130 + "镜子" + "故事" * 20
+        p = {"script_text": body, "primary_metaphor": "镜子",
              "metaphor_carries_reframing": True, "midpoint_position": 0.50}
         validate_metaphor_budget(p)  # reveal ~86% > 65%
 
     def test_metaphor_forbidden_first_half_fails(self):
-        body = "负债" + "故事" * 130 + "账本"
-        p = {"script_text": body, "primary_metaphor": "账本",
+        # Phase 1: FORBIDDEN_FIRST_HALF_TOKENS is empty in generic runtime;
+        # per-book forbidden tokens are injected by Creative Route. This test
+        # verifies the metaphor_budget gate still works when the primary
+        # metaphor itself appears too early (which is always forbidden).
+        body = "镜子" + "故事" * 130 + "结尾"
+        p = {"script_text": body, "primary_metaphor": "镜子",
              "metaphor_carries_reframing": True, "midpoint_position": 0.50}
         with self.assertRaisesRegex(ContractError, "metaphor_budget"):
             validate_metaphor_budget(p)

@@ -132,7 +132,7 @@ class PhaseFiveToSevenAdversarialTests(unittest.TestCase):
         )
         encoded = project / "09_qc/ENCODED_VISUAL_QA.json"
         write_json(encoded, {
-            "schema_version": "encoded-visual-qa.v1", "status": "pass", "human_review_passed": True,
+            "schema_version": "encoded-visual-qa.v1", "status": "pass", "machine_qa_passed": True,
             "reviewer": "Human", "video_path": video.relative_to(project).as_posix(), "video_sha256": sha256_file(video),
             "frame_plan_path": plan.relative_to(project).as_posix(), "frame_plan_sha256": sha256_file(plan),
             "decision_path": decision.relative_to(project).as_posix(), "decision_sha256": sha256_file(decision),

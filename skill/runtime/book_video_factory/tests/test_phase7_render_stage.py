@@ -883,7 +883,7 @@ class RenderStageTests(unittest.TestCase):
                     return {"duration_seconds": 120.0 if seconds is None else seconds, "integrated_lufs": -15.3, "true_peak_dbtp": -4.2}
 
                 calibration = calibrate_opening_mix(project, input_path, probe_runner=probe)
-                self.assertEqual(render_pipeline_status(project)["status"], "awaiting_opening_mix_approval")
+                self.assertEqual(render_pipeline_status(project)["status"], "awaiting_render_preflight")
                 approve_opening_mix(project, calibration.calibration_path, reviewer="Test Human", note="Exact gain and preview approved.")
                 self.assertEqual(prepare_render_stage(project, input_path).next_stage_status, "awaiting_render_preflight")
                 self.assertEqual(
@@ -981,12 +981,12 @@ class RenderStageTests(unittest.TestCase):
                     Image.new("RGB", (1200, 600), (40, 40, 40)).save(qa_dir / "contact-sheet.jpg")
 
                 result = execute_render_stage(project, input_path, render_runner=render_runner, qa_runner=qa_runner)
-                self.assertEqual(result.next_stage_status, "awaiting_encoded_visual_review")
+                self.assertEqual(result.next_stage_status, "awaiting_encoded_qa")
                 self.assertTrue(result.output_path.is_file())
                 final = json.loads((project / "08_render_合成/final/FINAL_RENDER_MANIFEST.json").read_text(encoding="utf-8"))
                 self.assertEqual(final["video_sha256"], sha256_file(result.output_path))
-                self.assertEqual(final["next_stage_status"], "awaiting_encoded_visual_review")
-                self.assertEqual(render_pipeline_status(project)["status"], "awaiting_encoded_visual_review")
+                self.assertEqual(final["next_stage_status"], "awaiting_encoded_qa")
+                self.assertEqual(render_pipeline_status(project)["status"], "awaiting_encoded_qa")
 
                 plan_path = project / "09_qc/ENCODED_FRAME_PLAN.json"
                 plan = json.loads(plan_path.read_text(encoding="utf-8"))

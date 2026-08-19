@@ -1,4 +1,10 @@
-"""Deterministic metrics for a three-version narrator essay script."""
+"""Deterministic metrics for a three-version narrator essay script.
+
+Phase 1 refactoring: BASELINE_CPM and estimated_minutes are DIAGNOSTIC ONLY.
+They never gate script lock or production entry. Real timing comes from the
+MiniMax provider word timestamps; the CPM estimate is only a rough planning
+aid for the Creative Route.
+"""
 from __future__ import annotations
 
 import re
@@ -7,6 +13,7 @@ from typing import Any
 
 from .narrator_essay_contracts import ContractError, validate_narrator_essay_script
 
+# Diagnostic baseline for rough planning only. NOT a production gate.
 BASELINE_CPM = 232
 _SPOKEN_CHAR = re.compile(r"[\u3400-\u9fffA-Za-z0-9]")
 

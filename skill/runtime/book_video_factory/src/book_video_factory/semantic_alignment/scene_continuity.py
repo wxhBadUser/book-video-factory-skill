@@ -22,13 +22,30 @@ from .caption_grouping import (
     CaptionGroupingError,
     load_current_caption_grouping_document,
 )
-from .visual_hold_planner import (
-    _DEPARTURE_MARKERS,
-    _is_counterfactual,
-    _is_mass_scale,
-    _is_observer_establishment,
-    _is_physical,
-)
+
+
+# --- Inlined helpers (formerly visual_hold_planner; kept local to avoid
+#     reviving the deleted hold-planning production layer) ---
+_DEPARTURE_MARKERS = ("进城", "去请", "回家", "离开", "上路", "走了")
+_REFLECTIVE_MARKERS = ("要是", "可能", "日子还能过", "好好活", "差点", "要不是", "当年")
+_PHYSICAL_MARKERS = ("摸摸", "摸了摸", "摸", "走", "看", "押", "喊", "枪", "回头")
+_MASS_SCALE_MARKERS = ("十来万", "大军", "国军", "围困", "方圆", "千军万马")
+
+
+def _is_counterfactual(text: str) -> bool:
+    return any(k in text for k in ("要是", "要不是", "可能", "当年", "差点"))
+
+
+def _is_mass_scale(text: str) -> bool:
+    return any(k in text for k in _MASS_SCALE_MARKERS)
+
+
+def _is_observer_establishment(text: str) -> bool:
+    return "去看" in text or "也去看" in text
+
+
+def _is_physical(text: str) -> bool:
+    return any(k in text for k in _PHYSICAL_MARKERS)
 
 
 SCENE_CONTINUITY_SCHEMA = "scene-continuity-span.v1"

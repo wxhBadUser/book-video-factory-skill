@@ -151,7 +151,7 @@ class EncodedVisualQaTests(unittest.TestCase):
             final = json.loads((project / "08_render_合成/final/FINAL_RENDER_MANIFEST.json").read_text(encoding="utf-8"))
             qa = json.loads((project / "09_qc/FINAL_QA_REPORT.json").read_text(encoding="utf-8"))
             self.assertEqual(final["next_stage_status"], "blocked_by_encoded_visual_qa")
-            self.assertEqual(qa["status"], "awaiting_encoded_visual_review")
+            self.assertEqual(qa["status"], "awaiting_encoded_qa")
 
 
 if __name__ == "__main__":

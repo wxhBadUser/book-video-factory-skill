@@ -157,12 +157,15 @@ class TestScriptLockGate(unittest.TestCase):
         self.assertFalse(rep["script_locked"])
         self.assertIn("research_complete", rep["failed_checks"])
 
-    def test_duration_out_of_range_blocks(self):
+    def test_duration_out_of_range_is_advisory_not_blocking(self):
+        """Phase 1: duration is advisory only; Creative Route sets target.
+        Outside the 11.5-22.5 min band triggers a warning but never blocks."""
         m = _good_metrics()
         m["estimated_minutes"] = 10.87
         rep = self._eval(metrics=m)
-        self.assertFalse(rep["script_locked"])
-        self.assertIn("duration_range", rep["failed_checks"])
+        self.assertTrue(rep["script_locked"], rep["failed_checks"])
+        self.assertIn("duration_advisory", rep["checks"])
+        self.assertFalse(rep["checks"]["duration_advisory"]["detail"]["within_band"])
 
     def test_midpoint_out_of_range_blocks(self):
         m = _good_metrics()
@@ -211,9 +214,9 @@ class TestScriptLockGate(unittest.TestCase):
                                  blind_review=merge_blind_reviews(_good_reviews()),
                                  blocking_issues=[])
 
-    def test_phase_7_stays_blocked_until_human_approval(self):
+    def test_gate_1_stays_blocked_until_human_approval(self):
         rep = self._eval()
-        self.assertEqual(rep["phase_7_status"], "blocked_by_script_approval")
+        self.assertEqual(rep["gate_1_status"], "blocked_by_script_approval")
         self.assertFalse(rep["human_approved"])
 
 

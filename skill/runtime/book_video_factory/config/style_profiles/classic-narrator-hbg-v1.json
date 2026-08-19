@@ -36,36 +36,17 @@
       "require_prompt_and_output_hashes": true
     }
   },
-  "asset_ready_approvals": [
-    "visual_anchor_lookdev",
-    "image_batch",
-    "bgm_rights"
-  ],
-  "timeline_approval_gate": "picture_lock",
+  "asset_ready_approvals": [],
+  "timeline_approval_gate": "none",
   "required_publish_approvals": [
-    "topic",
-    "source_audit",
-    "book_research",
-    "creative_decision",
-    "fate_anchors",
-    "event_cards",
     "script",
-    "visual_anchor_lookdev",
-    "scene_visual",
-    "image_batch",
-    "picture_lock",
-    "bgm_rights",
-    "audio_qc",
-    "content_quality",
-    "technical_qc",
-    "local_master_review",
-    "publish"
+    "visual_direction",
+    "local_master_review"
   ],
   "conditional_publish_approvals": {},
   "human_blocking_gates": [
     "script",
-    "visual_anchor_lookdev",
-    "scene_visual",
+    "visual_direction",
     "local_master_review"
   ],
   "prohibitions": [

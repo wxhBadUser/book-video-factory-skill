@@ -110,7 +110,12 @@ def bootstrap_workspace(workspace: Path) -> list[Path]:
     root = workspace.expanduser().resolve()
     created = _sync_managed_tree(BUNDLED_FACTORY, root / "book_video_factory")
     created.extend(_sync_managed_tree(BUNDLED_HBG, root / "vendor/hbg-life-simulation"))
-    created.extend(_sync_managed_tree(BUNDLED_SCANNERS, root / "scripts"))
+    # Architecture scanners live in the repo-root /scripts directory in a
+    # development checkout. In a fresh tracked-files clone (git archive) that
+    # directory may be absent; the runtime does not require the scanners to
+    # function, so skip them gracefully when not bundled.
+    if BUNDLED_SCANNERS.is_dir():
+        created.extend(_sync_managed_tree(BUNDLED_SCANNERS, root / "scripts"))
     created.extend(_sync_managed_tree(SKILL_ROOT, root / "skill"))
     for relative in ROOT_CONTRACT_FILES:
         source = REPO_ROOT / relative

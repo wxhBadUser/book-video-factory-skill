@@ -22,6 +22,8 @@ import re
 import unicodedata
 from typing import Any, Iterable, Mapping, Sequence
 
+from book_video_factory.narrative_functions import ABSTRACT_ALLOWED_FUNCTIONS
+
 from .models import EntityVisibility, VisualProposition
 
 
@@ -53,13 +55,7 @@ SYMBOLIC_TROPES: tuple[tuple[tuple[str, ...], str, str], ...] = (
 DEFAULT_LIGHTING = "DUSK_SOFT"
 DEFAULT_PALETTE = "EARTH_DUSK"
 
-ABSTRACT_ALLOWED_NARRATIVE_FUNCTIONS = {
-    "opening",
-    "theory",
-    "author_background",
-    "transition",
-    "closing",
-}
+ABSTRACT_ALLOWED_NARRATIVE_FUNCTIONS = ABSTRACT_ALLOWED_FUNCTIONS
 
 
 def _normalize(text: str) -> str:

@@ -42,14 +42,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-NARRATIVE_FUNCTIONS: tuple[str, ...] = (
-    "opening",
-    "plot",
-    "theory",
-    "author_background",
-    "transition",
-    "closing",
-)
+from book_video_factory.narrative_functions import NARRATIVE_FUNCTIONS
 
 SPLIT_REASONS: tuple[str, ...] = (
     "primary_subject_change",

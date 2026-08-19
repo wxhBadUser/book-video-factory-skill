@@ -14,7 +14,7 @@ from PIL import Image, ImageStat
 
 from book_video_factory.hbg_bridge.provenance import _verify_vendor
 from book_video_factory.hbg_bridge.runner import repository_root
-from book_video_factory.manifests import record_approval, safe_project_output, sha256_file
+from book_video_factory.manifests import safe_project_output, sha256_file
 from book_video_factory.render_stage.preflight import RenderPreflightError, verify_render_preflight
 from book_video_factory.semantic_alignment.vision_review import validate_review_decision
 
@@ -455,9 +455,9 @@ def review_encoded_master(project: Path, decision_path: Path) -> EncodedVisualRe
     final_path = root / "08_render_合成/final/FINAL_RENDER_MANIFEST.json"
     final = _load(final_path, "final render manifest")
     if final.get("schema_version") != "final-render-manifest.v1" or final.get("next_stage_status") not in {
-        "awaiting_encoded_visual_review", "blocked_by_encoded_visual_qa", "awaiting_final_master_approval"
+        "awaiting_encoded_qa", "blocked_by_encoded_visual_qa", "awaiting_final_master_approval"
     }:
-        raise EncodedVisualQaError("encoded master is not awaiting semantic visual review")
+        raise EncodedVisualQaError("encoded master is not awaiting machine encoded QA")
     video = _file(root, final.get("video_path"), "encoded master")
     if sha256_file(video) != final.get("video_sha256"):
         raise EncodedVisualQaError("encoded master hash is stale")
@@ -515,10 +515,9 @@ def review_encoded_master(project: Path, decision_path: Path) -> EncodedVisualRe
         if existing.get("status") == "pass" and qa.get("status") != "pass":
             raise EncodedVisualQaError("passing encoded visual QA is not bound by final QA")
         return EncodedVisualReviewResult("unchanged", report_path, contact_path, existing["next_stage_status"])
-    if final.get("next_stage_status") != "awaiting_encoded_visual_review" or qa.get("status") != "awaiting_encoded_visual_review":
-        raise EncodedVisualQaError("technical HBG QA is not awaiting encoded visual review")
+    if final.get("next_stage_status") != "awaiting_encoded_qa" or qa.get("status") != "awaiting_encoded_qa":
+        raise EncodedVisualQaError("technical HBG QA is not awaiting encoded machine QA")
 
-    event_path: Path | None = None
     old_final = final_path.read_bytes(); old_qa = qa_path.read_bytes()
     try:
         with tempfile.TemporaryDirectory(prefix="encoded-visual-review-", dir=root / "09_qc") as temp:
@@ -527,18 +526,10 @@ def review_encoded_master(project: Path, decision_path: Path) -> EncodedVisualRe
             shutil.copy2(hbg_contact, staged_contact)
             if sha256_file(staged_contact) != sha256_file(hbg_contact):
                 raise EncodedVisualQaError("final contact sheet copy changed bytes")
-            subjects = [plan_path, decision_resolved, video, hbg_contact]
-            subjects.extend(root / item["path"] for item in frames)
-            event_path = record_approval(
-                root,
-                release_id=final["release_id"],
-                gate="encoded_visual_qa",
-                decision="approved" if all_pass else "rejected",
-                reviewer=decision["reviewer"],
-                subjects=subjects,
-                evidence_refs=[_PLAN, "09_qc/final-video/contact-sheet.jpg"],
-                note="Encoded semantic, visual reality, and identity frame review.",
-            )
+            # Encoded QA is machine validation, NOT a human blocking gate.
+            # No approval event is recorded; the QA report itself is the
+            # validation record. The pipeline advances to GATE 3
+            # (FINAL_MASTER_APPROVAL) when machine QA passes.
             report = {
                 "schema_version": "encoded-visual-qa.v1",
                 "release_id": final["release_id"],
@@ -556,9 +547,7 @@ def review_encoded_master(project: Path, decision_path: Path) -> EncodedVisualRe
                 "final_contact_sheet_sha256": sha256_file(staged_contact),
                 "caption_parity_path": _CAPTION,
                 "caption_parity_sha256": hashlib.sha256(_pretty(caption_report)).hexdigest(),
-                "approval_event_path": event_path.relative_to(root).as_posix(),
-                "approval_event_sha256": sha256_file(event_path),
-                "human_review_passed": all_pass,
+                "machine_qa_passed": all_pass,
                 "status": "pass" if all_pass else "fail",
                 "next_stage_status": "awaiting_final_master_approval" if all_pass else "blocked_by_encoded_visual_qa",
             }
@@ -596,8 +585,6 @@ def review_encoded_master(project: Path, decision_path: Path) -> EncodedVisualRe
     except Exception as error:
         report_path.unlink(missing_ok=True); contact_path.unlink(missing_ok=True); caption_path.unlink(missing_ok=True)
         final_path.write_bytes(old_final); qa_path.write_bytes(old_qa)
-        if event_path is not None:
-            event_path.unlink(missing_ok=True)
         if isinstance(error, EncodedVisualQaError):
             raise
         raise EncodedVisualQaError(f"encoded visual review transaction failed: {error}") from error

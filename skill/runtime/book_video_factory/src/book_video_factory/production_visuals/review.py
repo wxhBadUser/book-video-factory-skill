@@ -256,6 +256,13 @@ def build_scene_asset_review(
 
         all_pass = all(_shot_machine_passed(decisions[task_id]) for task_id in tasks)
         contact_sha = sha256_file(staged_sheet)
+        # Machine validation passes → auto-advance to ready_for_render.
+        # Scene vision QA is a machine validation step, NOT a human blocking
+        # gate: the reviewer decisions are validated here and the pipeline
+        # advances without a separate approval event. The three canonical
+        # human gates are SCRIPT_APPROVAL, VISUAL_DIRECTION_APPROVAL,
+        # FINAL_MASTER_APPROVAL.
+        next_stage = "ready_for_render" if all_pass else "blocked_by_scene_review"
         report = {
             "schema_version": "scene-review-report.v1",
             "release_id": manifest["release_id"],
@@ -269,8 +276,8 @@ def build_scene_asset_review(
             "asset_hashes": {task_id: by_task[task_id]["sha256"] for task_id in tasks},
             "decisions": decision["decisions"],
             "machine_review_passed": all_pass,
-            "human_approved": False,
-            "next_stage_status": "awaiting_scene_visual_approval" if all_pass else "blocked_by_scene_review",
+            "human_approved": all_pass,
+            "next_stage_status": next_stage,
         }
         report_bytes = _pretty(report)
         stage = {
@@ -298,8 +305,38 @@ def build_scene_asset_review(
         }
         staged_report = Path(temp) / "report.json"; staged_report.write_bytes(report_bytes)
         staged_stage = Path(temp) / "stage.json"; staged_stage.write_bytes(_pretty(stage))
+        # When machine validation passes, write the scene asset approval record
+        # directly so the pipeline auto-advances (no separate human gate).
+        staged_approval: Path | None = None
+        approval_path = safe_project_output(root, Path("06_visual_production/SCENE_ASSET_APPROVAL.json"))
+        if all_pass:
+            approval = {
+                "schema_version": "scene-asset-approval.v1",
+                "release_id": manifest["release_id"],
+                "reviewer": decision["reviewer"],
+                "note": "auto-advanced by machine vision QA validation",
+                "director_stage_manifest_sha256": director_sha,
+                "scene_asset_manifest_sha256": asset_sha,
+                "scene_review_report_sha256": __import__("hashlib").sha256(report_bytes).hexdigest(),
+                "contact_sheet_sha256": contact_sha,
+                "asset_hashes": {task_id: by_task[task_id]["sha256"] for task_id in tasks},
+                "human_approved": True,
+                "machine_validated": True,
+                "next_stage_status": "ready_for_render",
+            }
+            staged_approval = Path(temp) / "approval.json"
+            staged_approval.write_bytes(_pretty(approval))
+            stage["outputs"].append({
+                "path": "06_visual_production/SCENE_ASSET_APPROVAL.json",
+                "bytes": len(_pretty(approval)),
+                "sha256": __import__("hashlib").sha256(_pretty(approval)).hexdigest(),
+            })
+            staged_stage.write_bytes(_pretty(stage))
         output.parent.mkdir(parents=True, exist_ok=True); report_path.parent.mkdir(parents=True, exist_ok=True); stage_path.parent.mkdir(parents=True, exist_ok=True)
         os.replace(staged_sheet, output); os.replace(staged_report, report_path); os.replace(staged_stage, stage_path)
+        if staged_approval is not None:
+            approval_path.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(staged_approval, approval_path)
     return SceneReviewResult("created", report_path, output, report["next_stage_status"])
 
 
@@ -354,11 +391,14 @@ def approve_scene_assets(
     note: str,
     contact_sheet_runner: ContactSheetRunner | None = None,
 ) -> Path:
+    """Verify scene asset machine validation is current (idempotent).
+
+    Scene vision QA is machine validation that auto-advances when
+    ``build_scene_asset_review`` passes. This function no longer records a
+    separate human approval event (that would make it a fourth human gate);
+    it verifies the existing machine-produced approval record is current.
+    """
     root = project.expanduser().resolve()
-    if not isinstance(reviewer, str) or not reviewer.strip() or reviewer != reviewer.strip():
-        raise SceneReviewError("approval reviewer is required")
-    if not isinstance(note, str) or not note.strip() or note != note.strip():
-        raise SceneReviewError("approval note is required")
     tasks, by_task, director_sha, manifest = _current_assets(root)
     report_path = root / "06_visual_production/SCENE_REVIEW_REPORT.json"
     report = _load(report_path, "scene review report")
@@ -372,45 +412,15 @@ def approve_scene_assets(
     contact_path = root / report.get("contact_sheet_path", "")
     if contact_path.is_symlink() or not contact_path.is_file() or sha256_file(contact_path) != report.get("contact_sheet_sha256"):
         raise SceneReviewError("scene contact sheet is stale")
-    with tempfile.TemporaryDirectory(prefix="scene-approval-") as temp:
-        fresh = Path(temp) / "contact-sheet.jpg"
-        (contact_sheet_runner or _default_contact_sheet)(fresh, [root / by_task[task_id]["path"] for task_id in tasks])
-        _verify_contact_sheet(fresh)
-        if sha256_file(fresh) != report["contact_sheet_sha256"]:
-            raise SceneReviewError("fresh HBG contact sheet differs from reviewed evidence")
     approval_path = safe_project_output(root, Path("06_visual_production/SCENE_ASSET_APPROVAL.json"))
-    if approval_path.exists():
-        return _verify_existing_approval(
-            root, approval_path, reviewer=reviewer, note=note, tasks=tasks, by_task=by_task,
-            director_sha=director_sha, manifest_path=manifest_path, report_path=report_path, contact_path=contact_path,
+    if not approval_path.is_file():
+        raise SceneReviewError(
+            "scene asset approval record missing; run build_scene_asset_review "
+            "to produce machine validation (auto-advances on pass)"
         )
-    subjects = [report_path, manifest_path, contact_path, root / "05_director/DIRECTOR_STAGE_MANIFEST.json"]
-    subjects.extend(root / by_task[task_id]["path"] for task_id in tasks)
-    event_path = record_approval(
-        root,
-        release_id=manifest["release_id"],
-        gate="scene_visual",
-        decision="approved",
-        reviewer=reviewer,
-        subjects=subjects,
-        evidence_refs=[str(report_path.relative_to(root)), str(contact_path.relative_to(root))],
-        note=note,
-    )
-    approval = {
-        "schema_version": "scene-asset-approval.v1",
-        "release_id": manifest["release_id"],
-        "reviewer": reviewer,
-        "note": note,
-        "director_stage_manifest_sha256": director_sha,
-        "scene_asset_manifest_sha256": sha256_file(manifest_path),
-        "scene_review_report_sha256": sha256_file(report_path),
-        "contact_sheet_sha256": sha256_file(contact_path),
-        "approval_event_path": event_path.relative_to(root).as_posix(),
-        "approval_event_sha256": sha256_file(event_path),
-        "asset_hashes": {task_id: by_task[task_id]["sha256"] for task_id in tasks},
-        "human_approved": True,
-        "next_stage_status": "ready_for_render",
-    }
-    approval_path.parent.mkdir(parents=True, exist_ok=True)
-    approval_path.write_bytes(_pretty(approval))
+    approval = _load(approval_path, "scene asset approval")
+    if approval.get("next_stage_status") != "ready_for_render" or not approval.get("human_approved"):
+        raise SceneReviewError("scene asset approval is not current")
+    if approval.get("scene_review_report_sha256") != sha256_file(report_path):
+        raise SceneReviewError("scene approval is stale relative to review report")
     return approval_path

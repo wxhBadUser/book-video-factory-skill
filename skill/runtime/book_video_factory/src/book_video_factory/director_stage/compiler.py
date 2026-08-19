@@ -30,9 +30,6 @@ from book_video_factory.semantic_alignment.validation import (
     SemanticContractError,
     validate_visual_proposition,
 )
-from book_video_factory.semantic_alignment.group_contract import (
-    aggregate_group_visual_contract,
-)
 from book_video_factory.semantic_alignment.scene_continuity import (
     SceneContinuityError,
     build_span_review_groups,
@@ -83,6 +80,60 @@ _HIGH_RISK = {
     "hands", "phone", "tool_use", "water_action", "animal_contact",
     "body_contact", "reflection", "death_climax", "hero_shot",
 }
+
+
+def _aggregate_group_visual_requirements(
+    *,
+    group: Mapping[str, Any],
+    contracts: Mapping[str, CaptionVisualContract],
+    captions: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Inlined aggregation of per-caption visual contracts into group fields.
+
+    This is a local helper for the director compiler; it collects must_show,
+    must_not_show, location, visual_event_state and primary_subject_ids from
+    per-caption contracts. No standalone group-level JSON artifact is produced.
+    """
+    caption_ids = [str(item) for item in group.get("caption_ids", [])]
+    must_show: list[dict[str, str]] = []
+    must_not_show: list[dict[str, str]] = []
+    primary_subject_ids: list[str] = []
+    location = str(group.get("location", "")).strip()
+    scene_contracts: list[CaptionVisualContract] = []
+
+    for cid in caption_ids:
+        contract = contracts.get(str(cid))
+        if contract is None:
+            continue
+        scene_contracts.append(contract)
+        for item in contract.must_show:
+            entry = {"entity_id": item.entity_id, "natural_language": item.natural_language}
+            if entry not in must_show:
+                must_show.append(entry)
+            if item.entity_id.startswith("C") and item.entity_id not in primary_subject_ids:
+                primary_subject_ids.append(item.entity_id)
+        for item in contract.must_not_show_as_primary:
+            entry = {"entity_id": item.entity_id, "natural_language": item.natural_language}
+            if entry not in must_not_show:
+                must_not_show.append(entry)
+        for vid in contract.scene_state.get("visible_character_ids", []):
+            if str(vid).startswith("C") and str(vid) not in primary_subject_ids:
+                primary_subject_ids.append(str(vid))
+        if not location and contract.scene_state.get("location_id"):
+            location = str(contract.scene_state["location_id"])
+
+    # Use the canonical merger so required_observable_evidence and culmination
+    # logic match what the former group_contract module produced.
+    visual_event_state = merge_visual_event_states(scene_contracts)
+
+    return {
+        "must_show": must_show,
+        "must_not_show": must_not_show,
+        "primary_subject_ids": primary_subject_ids,
+        "location": location,
+        "visual_event_state": visual_event_state,
+        "group_visual_focus": "",
+    }
 
 
 def _canonical(value: Any) -> bytes:
@@ -667,7 +718,7 @@ def _task_for_scene(
     group_contract: dict[str, Any] | None = None
     if caption_group is not None and caption_contracts is not None:
         try:
-            group_contract = aggregate_group_visual_contract(
+            group_contract = _aggregate_group_visual_requirements(
                 group=caption_group,
                 contracts=caption_contracts,
                 captions=captions,
@@ -1366,7 +1417,7 @@ def _expected(root: Path) -> tuple[dict[str, bytes], str, str]:
         if not group_id or group_id in used_group_ids:
             raise DirectorStageError(f"scene continuity span {group_id or '?'} does not map to exactly one image task")
         caption_text = " / ".join(str(captions[item]["text"]) for item in scene["captionIds"])
-        group_contract = aggregate_group_visual_contract(
+        group_contract = _aggregate_group_visual_requirements(
             group=scene_group,
             contracts=caption_contracts,
             captions=captions,

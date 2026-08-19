@@ -1,4 +1,4 @@
-﻿"""Narration Performance Director (M4A).
+"""Narration Performance Director (M4A).
 
 A "voice director" that sits in front of the TTS provider. It turns the
 approved narration into *performance segments* (1-3 sentences, roughly 6-18s
@@ -26,6 +26,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
+from book_video_factory.narrative_functions import NARRATIVE_FUNCTIONS as _CANONICAL_NARRATIVE_FUNCTIONS
+
 # Chinese narration estimate: characters per second at natural speed. Speech
 # durations are estimates until the provider returns real timestamps.
 _CHARS_PER_SECOND = 4.5
@@ -36,7 +38,7 @@ _MAX_SEGMENT_SECONDS = 18.0
 # still cut by the duration cap. The hard constraints are 6-18s of speech.
 _MAX_SENTENCES_PER_SEGMENT = 4
 
-NARRATIVE_FUNCTIONS = {"plot", "transition", "theory", "closing", "author_background"}
+NARRATIVE_FUNCTIONS = set(_CANONICAL_NARRATIVE_FUNCTIONS)
 DELIVERY_MODES = {"storytelling", "warmth", "tension", "grief", "impact", "reflection"}
 EMOTIONS = {"neutral", "calm", "sad", "warm", "tense", "impactful", "reflective"}
 ALLOWED_SOUND_TAGS = {"sighs", "breath", "inhale", "exhale", "crying"}

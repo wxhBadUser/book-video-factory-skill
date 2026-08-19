@@ -758,50 +758,15 @@ def _best_beat_for_caption(
     return matches[0]
 
 
-# Locked domain referents for this production: entity id -> spoken aliases that
-# may appear in a caption. The lexicon scans caption text for these so the
-# contract's must_show is derived from what the caption actually NAMES, not only
-# from the beat's required-entity ids (which a buggy storyboard can get wrong).
-_ENTITY_ALIASES: dict[str, tuple[str, ...]] = {
-    "C001": ("福贵",),
-    "C002": ("福贵", "老头", "老人"),
-    "C003": ("家珍",),
-    "C004": ("凤霞",),
-    "C005": ("有庆",),
-    "C006": ("龙二",),
-    "C007": ("春生",),
-    "C008": ("二喜",),
-    "C009": ("苦根",),
-    "C010": ("老牛", "牛"),
-    "OBJ_BEANS": ("豆子", "豆"),
-    "OBJ_BOOK": (),
-    "OBJ_BRIDAL": ("嫁衣", "花轿", "出嫁", "婚"),
-    "OBJ_NEEDLE": ("针", "注射器"),
-    "OBJ_DICE": ("骰子",),
-    "OBJ_GRAVE": ("坟", "墓"),
-    "SCENE_FIELD": ("田野", "田", "田埂"),
-    "SCENE_VILLAGE": ("村", "村口"),
-    "SCENE_STREET": ("街", "镇", "青石板", "城"),
-    "SCENE_GAMBLING": ("赌", "赌场"),
-    "SCENE_HOSPITAL": ("医院", "产房"),
-    "SCENE_EXECUTION": ("刑场", "枪毙"),
-    "SCENE_MOONLIGHT": ("月光", "月光照"),
-    "SCENE_DUSK": ("黄昏", "晒场"),
-    "SCENE_WHARF": ("码头",),
-    # Real-project entity vocabulary seen in shipped beats (Huozhe / 活着).
-    "OBJ_OX": ("牛", "耕牛"),
-    "OBJ_LAMP": ("煤油灯", "灯"),
-    "OBJ_TREE": ("树",),
-    "SCENE_NIGHT": ("夜", "夜晚"),
-    "SCENE_SCHOOL": ("私塾", "学校"),
-    "SCENE_WAR": ("战场", "战争"),
-    "SCENE_WEDDING": ("婚礼", "出嫁"),
-    # FIX 2 (pilot R2): concrete visual referents named by closing/theory
-    # captions must be recognized as drawable, not forced into Abstract.
-    "OBJ_SMOKE": ("炊烟",),
-    "OBJ_FARMHOUSE": ("农舍",),
-    "OBJ_ROOF": ("屋顶",),
-}
+# Entity alias lexicon.
+#
+# Phase 1 refactoring: this dict was previously hardcoded to 《活着》 (C001-C010
+# mapped to 福贵/家珍/凤霞/etc.). Per the principle "LLM interprets literature;
+# Python validates contracts", book-specific character aliases MUST be supplied
+# by the Agent-derived Character Registry / Visual Foundation, never baked into
+# the generic runtime. Only book-agnostic structural types remain here; the
+# caller injects per-book aliases via entity_name_maps.
+_ENTITY_ALIASES: dict[str, tuple[str, ...]] = {}
 
 
 _CAPTION_LOCAL_ROLES: dict[str, tuple[str, str, str]] = {
@@ -827,7 +792,8 @@ _CAPTION_LOCAL_ROLES: dict[str, tuple[str, str, str]] = {
     # without requiring a persistent Visual Bible identity.
     "年轻人": ("ROLE_YOUNG_MAN", "young_man", "male"),
     "青年": ("ROLE_YOUNG_MAN", "young_man", "male"),
-    "余华": ("ROLE_AUTHOR", "author", "male"),
+    # Author role is book-agnostic; the actual author name comes from the
+    # project's Book Research / Character Registry, not hardcoded here.
 }
 
 # FIX 3 (pilot R2): display aliases for caption-local anonymous roles so a
@@ -835,7 +801,7 @@ _CAPTION_LOCAL_ROLES: dict[str, tuple[str, str, str]] = {
 _ROLE_DISPLAY_ALIASES: dict[str, tuple[str, ...]] = {
     "ROLE_DOCTOR": ("郎中", "大夫", "医生"),
     "ROLE_YOUNG_MAN": ("年轻人", "青年"),
-    "ROLE_AUTHOR": ("余华",),
+    # ROLE_AUTHOR display name is injected from the project's book metadata.
 }
 
 

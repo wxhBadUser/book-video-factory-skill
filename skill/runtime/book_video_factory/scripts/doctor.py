@@ -76,7 +76,7 @@ def edge_tts_check(*, required: bool) -> dict[str, Any]:
         "name": "edge-tts",
         "status": _status(available, required),
         "path": command or ("python_module:edge_tts" if module else "missing"),
-        "note": "Required when generating continuous narration and the master VTT; network access to the Edge speech service is also required.",
+        "note": "Legacy provider only. New projects use minimax_required. Edge is optional and never a fallback from MiniMax.",
     }
 
 
@@ -341,7 +341,7 @@ def main() -> int:
             label="python_module:jsonschema",
             required=_required(profile, "production"),
         ),
-        edge_tts_check(required=_required(profile, "production")),
+        edge_tts_check(required=False),  # Phase 1: Edge is legacy/optional, MiniMax is default
         phase4_audio_cli_check(),
         phase5_7_runtime_check(),
     ]

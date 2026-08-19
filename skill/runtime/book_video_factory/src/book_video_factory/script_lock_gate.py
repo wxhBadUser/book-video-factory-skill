@@ -1,15 +1,17 @@
 """正式脚本锁定门禁（fail-closed）。
 
-汇总以下证据，任何一项不达标或缺失都不得锁定脚本：
-1. 来源等级：level=A / is_full_text / research_status=complete
-2. 篇幅与节奏：字数区间 / 时长区间 / 中点位置 / 理论占比 / 单一主概念
-3. 内容质量：总分 >= 66/75、任一项 >= 4、事实可靠性 = 5
-4. 原创性：无超阈值连续重合
-5. 独立盲审：两名互相独立的评审，且结论非 reject/revise
-6. 无 blocking_issues
+Phase 1 refactoring: quality thresholds are now the single authoritative
+configuration. Duration is no longer a hard gate — target_duration_minutes
+is decided by the Creative Route and only triggers a warning if outside
+the broad 11.5–22.5 min production band. CPM is diagnostic only.
 
-即使全部通过，phase_7 仍保持 blocked_by_script_approval，
-必须由人工确认脚本质量后才放行——机器不替人签字。
+Quality tiers (single source of truth):
+  0–65:  FAIL
+  66–71: REVIEWER_READY (machine passes, human may review)
+  72–75: GOLD_READY (required to enter video production)
+
+Production entry requires GOLD_READY + fact_reliability=5 + key items >=4
++ no fact blocking issues + 100% verifiable direct quotes.
 """
 from __future__ import annotations
 
@@ -17,26 +19,61 @@ import datetime as _dt
 from typing import Mapping, Sequence
 
 __all__ = [
-    "CHARS_RANGE",
-    "MINUTES_RANGE",
-    "MIDPOINT_RANGE",
-    "THEORY_MAX_RATIO",
-    "QUALITY_TOTAL_MIN",
+    "QUALITY_FAIL_MAX",
+    "QUALITY_REVIEWER_MIN",
+    "QUALITY_REVIEWER_MAX",
+    "QUALITY_GOLD_MIN",
+    "QUALITY_MAX",
     "QUALITY_ITEM_MIN",
+    "PRODUCTION_DURATION_BAND_MIN",
+    "PRODUCTION_DURATION_BAND_MAX",
+    "FACT_RELIABILITY_KEY",
     "ScriptLockError",
+    "quality_tier",
     "evaluate_script_lock",
 ]
 
-CHARS_RANGE = (3600, 5400)
-MINUTES_RANGE = (15.0, 23.0)
-PILOT_CHARS_RANGE = (232, 348)
-PILOT_MINUTES_RANGE = (1.0, 1.5)
-MIDPOINT_RANGE = (0.40, 0.55)
-THEORY_MAX_RATIO = 0.30
-QUALITY_TOTAL_MIN = 66
+# --- Single authoritative quality thresholds ---
+QUALITY_FAIL_MAX = 65
+QUALITY_REVIEWER_MIN = 66
+QUALITY_REVIEWER_MAX = 71
+QUALITY_GOLD_MIN = 72
 QUALITY_MAX = 75
 QUALITY_ITEM_MIN = 4
+
+# --- Duration: soft advisory band, not a hard gate ---
+# Creative Route decides target_duration_minutes. Outside this band is a
+# warning only; the script is never rejected for duration alone.
+PRODUCTION_DURATION_BAND_MIN = 11.5
+PRODUCTION_DURATION_BAND_MAX = 22.5
+
+MIDPOINT_RANGE = (0.40, 0.55)
+THEORY_MAX_RATIO = 0.30
 FACT_RELIABILITY_KEY = "fact_reliability"
+
+# Legacy pilot ranges retained for hbg-parity-pilot qualification scope only.
+PILOT_CHARS_RANGE = (232, 348)
+PILOT_MINUTES_RANGE = (1.0, 1.5)
+
+
+def quality_tier(total_score: float | int | None) -> str:
+    """Return the quality tier for a total score.
+
+    FAIL: score <= 65 or missing
+    REVIEWER_READY: 66 <= score <= 71
+    GOLD_READY: score >= 72
+    """
+    if total_score is None:
+        return "FAIL"
+    try:
+        score = float(total_score)
+    except (TypeError, ValueError):
+        return "FAIL"
+    if score >= QUALITY_GOLD_MIN:
+        return "GOLD_READY"
+    if score >= QUALITY_REVIEWER_MIN:
+        return "REVIEWER_READY"
+    return "FAIL"
 
 # source_ingestion 对 Level A 产出的状态词是 "ready"；改造计划书里写的是 "complete"。
 # 两者语义相同（研究来源已完备，可以进入写作），这里同时接受，避免因词汇不一致
@@ -88,19 +125,33 @@ def evaluate_script_lock(
         {"value": research_status, "accepted": list(RESEARCH_COMPLETE_STATES),
          "blocking": list(RESEARCH_BLOCKING_STATES)})
 
-    # 2. 篇幅与节奏
+    # 2. 篇幅与节奏 (Phase 1: duration is advisory, not a hard gate)
     if qualification_scope not in {"production", "hbg-parity-pilot"}:
         raise ScriptLockError(f"unsupported qualification_scope: {qualification_scope}")
-    chars_range = PILOT_CHARS_RANGE if qualification_scope == "hbg-parity-pilot" else CHARS_RANGE
-    minutes_range = PILOT_MINUTES_RANGE if qualification_scope == "hbg-parity-pilot" else MINUTES_RANGE
+
     chars = metrics.get("total_spoken_chars")
-    add("chars_range", chars is not None and chars_range[0] <= chars <= chars_range[1],
-        {"value": chars, "range": list(chars_range)})
+    # Character count is recorded for diagnostics; no hard range is enforced
+    # because the Creative Route decides target length.
+    add("chars_recorded", chars is not None, {"value": chars})
 
     minutes = metrics.get("estimated_minutes")
-    add("duration_range",
-        minutes is not None and minutes_range[0] <= minutes <= minutes_range[1],
-        {"value": minutes, "range": list(minutes_range)})
+    if qualification_scope == "hbg-parity-pilot":
+        # Pilot scope keeps its short-duration contract.
+        in_band = minutes is not None and PILOT_MINUTES_RANGE[0] <= minutes <= PILOT_MINUTES_RANGE[1]
+        add("duration_range", in_band,
+            {"value": minutes, "range": list(PILOT_MINUTES_RANGE), "scope": "pilot"})
+    else:
+        # Production: duration outside 11.5–22.5 min is a WARNING only.
+        # The script is never rejected for duration alone.
+        in_band = (
+            minutes is not None
+            and PRODUCTION_DURATION_BAND_MIN <= minutes <= PRODUCTION_DURATION_BAND_MAX
+        )
+        add("duration_advisory", True,
+            {"value": minutes,
+             "advisory_band": [PRODUCTION_DURATION_BAND_MIN, PRODUCTION_DURATION_BAND_MAX],
+             "within_band": in_band,
+             "note": "duration is advisory; Creative Route sets the target"})
 
     mid = metrics.get("midpoint_ratio")
     add("midpoint_range",
@@ -114,11 +165,13 @@ def evaluate_script_lock(
     add("single_main_concept", metrics.get("main_concept_count") == 1,
         metrics.get("main_concept_count"))
 
-    # 3. 内容质量
+    # 3. 内容质量 — single authoritative thresholds
     items: Mapping[str, int] = quality.get("items") or {}
     total = quality.get("total")
-    add("quality_total_min_66", total is not None and total >= QUALITY_TOTAL_MIN,
-        {"value": total, "min": QUALITY_TOTAL_MIN, "max": quality.get("max_total", QUALITY_MAX)})
+    tier = quality_tier(total)
+    add("quality_gold_ready", tier == "GOLD_READY",
+        {"value": total, "tier": tier,
+         "gold_min": QUALITY_GOLD_MIN, "max": QUALITY_MAX})
 
     below = {k: v for k, v in items.items() if v < QUALITY_ITEM_MIN}
     add("quality_each_item_min_4", bool(items) and not below,
@@ -151,13 +204,14 @@ def evaluate_script_lock(
         "schema_version": "script-lock-gate.v1",
         "qualification_scope": qualification_scope,
         "script_locked": locked,
+        "quality_tier": quality_tier(quality.get("total")),
         "checks": checks,
         "failed_checks": failed,
         "passed_checks": [n for n in checks if n not in failed],
         "blocking_issues": all_blocking,
         "human_approved": bool(human_approved),
-        # 机器通过 ≠ 人工验收；Phase 7 始终等待人工确认
-        "phase_7_status": ("ready_for_human_approval" if locked and human_approved
-                           else "blocked_by_script_approval"),
+        # 机器通过 ≠ 人工验收；Gate 1 始终等待人工确认脚本
+        "gate_1_status": ("ready_for_human_approval" if locked and human_approved
+                          else "blocked_by_script_approval"),
         "evaluated_at": _dt.datetime.now().isoformat(timespec="seconds"),
     }

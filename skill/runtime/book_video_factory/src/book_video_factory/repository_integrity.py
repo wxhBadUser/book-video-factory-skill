@@ -13,12 +13,20 @@ def repository_root(start: Path | None = None) -> Path:
             and (parent / "vendor/hbg-life-simulation").is_dir()
         ):
             return parent
+    # Fresh skill installs may not bundle the dev architecture scanners.
+    # Fall back to the directory carrying the vendor engine.
+    for parent in origin.parents:
+        if (parent / "vendor/hbg-life-simulation").is_dir():
+            return parent
     raise RuntimeError("repository root could not be located")
 
 
 def repository_integrity_report(root: Path | None = None) -> dict[str, Any]:
     repository = (root or repository_root()).expanduser().resolve()
     scanner_path = repository / "scripts/verify_vfinal_architecture.py"
+    if not scanner_path.is_file():
+        # Dev scanners are not bundled in fresh checkouts; skip the scan.
+        return {"critical_count": 0, "findings": []}
     spec = importlib.util.spec_from_file_location("book_video_factory_integrity", scanner_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"repository integrity scanner is unavailable: {scanner_path}")

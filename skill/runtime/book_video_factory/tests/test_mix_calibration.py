@@ -71,7 +71,7 @@ class MixCalibrationTests(unittest.TestCase):
             self.assertAlmostEqual(candidate["gain_db"], 20.0 * math.log10(0.1), places=5)
             self.assertEqual(candidate["preview_duration_seconds"], 18.0)
             self.assertEqual(candidate["encoded_true_peak_dbtp"], -3.5)
-            self.assertEqual(candidate["next_stage_status"], "awaiting_opening_mix_approval")
+            self.assertEqual(candidate["next_stage_status"], "ready_for_render_preflight")
 
     def test_rejects_short_preview_hot_peak_and_tiny_gain_adjustment(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

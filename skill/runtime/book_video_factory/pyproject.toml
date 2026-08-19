@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-production = [
+legacy_edge = [
   "edge-tts",
 ]
 test = [
