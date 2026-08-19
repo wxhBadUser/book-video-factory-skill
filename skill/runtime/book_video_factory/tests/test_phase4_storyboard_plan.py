@@ -53,13 +53,13 @@ def _project(base: Path) -> tuple[Path, dict, dict, list[dict]]:
     beats = [
         {"id": "s001", "beatId": "B001", "chapter": 1, "cue": "第一段", "description": "老人离港",
          "requiredEntities": ["老人", "港口"], "forbiddenEntities": ["现代游艇"], "riskFlags": [],
-         "generationMode": "2x2", "anchorRefs": ["C001"], "participants": {"count": 1, "allowed": ["C001"]}, "motion": "zoom-in"},
+         "generationMode": "2x2", "anchorRefs": ["C001"], "participants": {"count": 1, "allowed": ["C001"]}, "motion": "hold"},
         {"id": "s002", "beatId": "B002", "chapter": 1, "cue": "第二段", "description": "老人拉紧钓线",
          "requiredEntities": ["老人", "钓线"], "forbiddenEntities": ["港口"], "riskFlags": ["hands", "tool_use"],
-         "generationMode": "single", "anchorRefs": ["C001"], "participants": {"count": 1, "allowed": ["C001"]}, "motion": "pan-left"},
+         "generationMode": "single", "anchorRefs": ["C001"], "participants": {"count": 1, "allowed": ["C001"]}, "motion": "hold"},
         {"id": "s003", "beatId": "B003", "chapter": 2, "cue": "第三段", "description": "海面空镜",
          "requiredEntities": ["海面"], "forbiddenEntities": ["港口"], "riskFlags": [],
-         "generationMode": "2x2", "anchorRefs": [], "participants": {"count": 0, "allowed": []}, "motion": "static"},
+         "generationMode": "2x2", "anchorRefs": [], "participants": {"count": 0, "allowed": []}, "motion": "hold"},
     ]
     return project, preliminary, audio_meta, beats
 
@@ -93,7 +93,7 @@ def _shot(shot_id: str, beats: list[str], captions: list[str], chapter: int, cue
         "generation_mode": mode,
         "anchor_refs": anchors or [],
         "participants": {"count": len(participants), "allowed": participants},
-        "motion": "zoom-in",
+        "motion": "hold",
         "visual_load": duration_kind,
         "intentional_hold": False,
         "hold_reason": "",
@@ -235,7 +235,7 @@ class Phase4StoryboardPlanTests(unittest.TestCase):
             ]
             with self.assertRaisesRegex(StoryboardPlanError,"12|hold"):
                 validate_storyboard_audio_plan(project,long,preliminary,audio_meta=meta_long,phase2_beats=beats)
-            long["shots"][0]["intentional_hold"]=True; long["shots"][0]["hold_reason"]="只用更强的zoom-in来拖住画面"
+            long["shots"][0]["intentional_hold"]=True; long["shots"][0]["hold_reason"]="只靠一个静态画面硬撑二十秒而不换场景"
             with self.assertRaisesRegex(StoryboardPlanError,"zoom|pan|coverage"):
                 validate_storyboard_audio_plan(project,long,preliminary,audio_meta=meta_long,phase2_beats=beats)
 

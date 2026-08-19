@@ -160,7 +160,7 @@ class BootstrapTests(unittest.TestCase):
             project_spec = json.loads((project / "PROJECT_SPEC.json").read_text(encoding="utf-8"))
             self.assertEqual(project_spec["projectType"], "classic-book-narration")
             self.assertEqual(project_spec["book"]["title"], "老人与海")
-            self.assertEqual(project_spec["narration"]["provider"], "edge-tts")
+            self.assertEqual(project_spec["narration"]["provider"], "minimax")
             self.assertEqual(project_spec["workflow"]["scriptContract"], "script.narrator-essay.v1")
             self.assertEqual(
                 project_spec["book"]["sourceManifest"],

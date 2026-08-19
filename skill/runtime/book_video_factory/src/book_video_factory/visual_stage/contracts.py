@@ -60,6 +60,7 @@ TOP_FIELDS = {
     "character_anchors",
     "scene_anchors",
     "object_anchors",
+    "symbolic_mappings",
     "lookdev_tasks",
 }
 BOOK_LOOK_FIELDS = {
@@ -310,6 +311,19 @@ def validate_visual_stage_input(
     if unknown_refs:
         raise VisualStageContractError(f"unknown style reference: {', '.join(unknown_refs)}")
     _validate_book_look(value["book_look"])
+    raw_mappings = value.get("symbolic_mappings", [])
+    if not isinstance(raw_mappings, list):
+        raise VisualStageContractError("visual stage input symbolic_mappings must be an array")
+    for index, raw in enumerate(raw_mappings):
+        label = f"symbolic_mappings[{index}]"
+        if not isinstance(raw, dict):
+            raise VisualStageContractError(f"{label} must be an object")
+        _unknown(raw, {"mapping_id", "status", "source_concept", "surrogate_object", "rationale"}, label)
+        _strict_id(str(raw.get("mapping_id", "")), f"{label}.mapping_id")
+        if raw.get("status") != "approved":
+            raise VisualStageContractError(f"{label}.status must be 'approved'")
+        _strict_text(str(raw.get("source_concept", "")), f"{label}.source_concept")
+        _strict_text(str(raw.get("surrogate_object", "")), f"{label}.surrogate_object")
 
     palettes = value["palette_profiles"]
     if not isinstance(palettes, list) or not palettes:

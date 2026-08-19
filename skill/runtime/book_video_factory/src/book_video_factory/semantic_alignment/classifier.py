@@ -245,6 +245,19 @@ def classify_proposition(
             raise PropositionClassifierError(
                 f"shot {shot_id} concrete narrative_function {narrative_function!r} cannot fall back to Abstract"
             )
+        # FIX 2 (pilot R2): theory / author_background captions without a
+        # literal referent must carry an approved concept-specific symbolic
+        # proposition. A generic atmosphere frame ("老人走田野") is exactly the
+        # failure the pilot rejected, so it fails closed instead of silently
+        # shipping a mood shot.
+        if narrative_function in {"theory", "author_background"}:
+            raise PropositionClassifierError(
+                f"shot {shot_id} theory/author_background caption has no concrete "
+                "referent and no approved concept-specific symbolic mapping; "
+                "refusing a generic Abstract atmosphere shot. Register an approved "
+                "symbolic mapping for the concept (e.g. old family photographs / "
+                "empty chairs for 'names still remembered') and retry."
+            )
         return VisualProposition(
             mode="Abstract",
             subject="纯气氛，无叙事指称",

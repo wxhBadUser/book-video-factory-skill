@@ -21,6 +21,7 @@ from book_video_factory.audio_stage.compiler import generate_audio_stage, finali
 from book_video_factory.manifests import sha256_file
 from book_video_factory.semantic_alignment.caption_contract import build_caption_visual_contract_from_project
 from book_video_factory.semantic_alignment.caption_grouping import build_caption_grouping_from_project
+from book_video_factory.semantic_alignment.scene_continuity import build_scene_continuity_from_project
 from book_video_factory.director_stage.compiler import (
     DirectorStageError,
     DirectorStageConflict,
@@ -107,6 +108,7 @@ class DirectorStageTests(unittest.TestCase):
         finalize_audio_stage(project, plan_path, runner=fake_hbg_audio_runner)
         build_caption_visual_contract_from_project(project, release_id="r1")
         build_caption_grouping_from_project(project)
+        build_scene_continuity_from_project(project)
         return project
 
     def test_compiles_audio_bound_director_timeline_and_image_tasks(self) -> None:
@@ -137,8 +139,15 @@ class DirectorStageTests(unittest.TestCase):
             self.assertTrue(all(contract["narrative_function"] == "theory" for contract in s09_contracts))
             self.assertTrue(all(contract["visual_mode"] == "symbolic_or_abstract" for contract in s09_contracts))
             groups = grouping["groups"]
+            continuity = json.loads(
+                (project / "04_audio/SCENE_CONTINUITY_SPANS.json").read_text(encoding="utf-8")
+            )
+            spans = continuity["spans"]
             self.assertEqual(storyboard[0]["captionIds"], [f"caption-{index:04d}" for index in range(1, 7)])
-            self.assertEqual(groups[0]["caption_ids"], [f"caption-{index:04d}" for index in range(1, 23)])
+            # Semantic Shot Group: the first 26 consecutive captions share one
+            # image (cast growth / same scene), which is coarser than the audio
+            # storyboard's 6-caption first shot.
+            self.assertEqual(groups[0]["caption_ids"], [f"caption-{index:04d}" for index in range(1, 27)])
             self.assertNotEqual(len(storyboard), len(groups))
             media_hashes_before = {
                 path.relative_to(project).as_posix(): sha256_file(path)
@@ -151,29 +160,29 @@ class DirectorStageTests(unittest.TestCase):
             self.assertEqual(result.status, "created")
             self.assertEqual(result.next_stage_status, "awaiting_scene_assets")
             timeline = json.loads((project / "05_director/DIRECTOR_TIMELINE.json").read_text(encoding="utf-8"))
-            self.assertEqual(len(timeline["scenes"]), len(groups))
+            self.assertEqual(len(timeline["scenes"]), len(spans))
             self.assertEqual(timeline["audio_stage_manifest_sha256"], result.audio_stage_manifest_sha256)
             self.assertTrue(all(scene["caption_ids"] for scene in timeline["scenes"]))
             self.assertTrue(all(scene["duration"] > 0 for scene in timeline["scenes"]))
             tasks = [json.loads(line) for line in (project / "05_director/IMAGE_TASKS.jsonl").read_text(encoding="utf-8").splitlines()]
-            self.assertEqual(len(tasks), len(groups))
+            self.assertEqual(len(tasks), len(spans))
             self.assertTrue(all(task["prompt_sha256"] for task in tasks))
             self.assertTrue(all(task["output_target"].startswith("assets/generated/scenes/") for task in tasks))
-            for group, scene, task in zip(groups, timeline["scenes"], tasks):
-                self.assertEqual(scene["caption_ids"], group["caption_ids"])
-                self.assertEqual(scene["start"], group["start"])
-                self.assertEqual(scene["end"], group["end"])
-                self.assertEqual(task["caption_ids"], group["caption_ids"])
-                self.assertEqual(task["prompt_binding"]["group_id"], group["group_id"])
-                self.assertEqual(task["prompt_binding"]["caption_ids"], group["caption_ids"])
-                self.assertEqual(task["scene_id"], f"caption-group-{group['group_id'].lower()}")
+            for span, scene, task in zip(spans, timeline["scenes"], tasks):
+                self.assertEqual(scene["caption_ids"], span["caption_ids"])
+                self.assertEqual(scene["start"], span["start"])
+                self.assertEqual(scene["end"], span["end"])
+                self.assertEqual(task["caption_ids"], span["caption_ids"])
+                self.assertEqual(task["prompt_binding"]["group_id"], span["span_id"])
+                self.assertEqual(task["prompt_binding"]["caption_ids"], span["caption_ids"])
+                self.assertEqual(task["scene_id"], f"scene-continuity-{span['span_id'].lower()}")
                 self.assertEqual(task["prompt_binding"]["scene_id"], task["scene_id"])
-                self.assertEqual(task["prompt_binding"]["shot_id"], f"SHOT_CAPTION_GROUP_{group['group_id']}")
+                self.assertEqual(task["prompt_binding"]["shot_id"], f"SHOT_SCENE_CONTINUITY_{span['span_id']}")
                 self.assertTrue(task["source_beat_ids"])
                 self.assertIsInstance(task["visual_proposition"], dict)
                 self.assertTrue(task["prompt"])
             flattened = [caption_id for task in tasks for caption_id in task["caption_ids"]]
-            expected_caption_ids = [caption_id for group in groups for caption_id in group["caption_ids"]]
+            expected_caption_ids = [caption_id for span in spans for caption_id in span["caption_ids"]]
             self.assertEqual(flattened, expected_caption_ids)
             self.assertEqual(len(flattened), len(set(flattened)))
             media_hashes_after = {
@@ -193,6 +202,7 @@ class DirectorStageTests(unittest.TestCase):
         """A remediation release cannot enter Pilot through the legacy Director path."""
         with tempfile.TemporaryDirectory() as temp:
             project = Path(temp)
+            write_json(project / "project.json", {"schema_version": "1.0", "workflow": {"visual_foundation_policy": "legacy"}})
             audio_dir = project / "04_audio"
             audio_dir.mkdir()
             write_json(audio_dir / "AUDIO_STAGE_MANIFEST.json", {"release_id": "r1"})

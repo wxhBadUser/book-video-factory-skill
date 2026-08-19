@@ -120,6 +120,20 @@ class Phase4ContractTests(unittest.TestCase):
             with self.assertRaises(AudioStageContractError):
                 verify_phase4_prerequisites(self.project, "r1")
 
+    def test_required_visual_foundation_blocks_audio_prerequisites(self) -> None:
+        """A required visual foundation may not be bypassed through the audio CLI."""
+
+        project_contract = self.project / "project.json"
+        original = project_contract.read_bytes()
+        try:
+            payload = json.loads(original.decode("utf-8"))
+            payload["workflow"]["visual_foundation_policy"] = "required"
+            project_contract.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(AudioStageContractError, "visual foundation"):
+                verify_phase4_prerequisites(self.project, "r1")
+        finally:
+            project_contract.write_bytes(original)
+
 
 if __name__ == "__main__":
     unittest.main()

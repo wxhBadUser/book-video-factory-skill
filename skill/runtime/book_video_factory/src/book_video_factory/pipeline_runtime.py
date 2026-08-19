@@ -8,6 +8,7 @@ from book_video_factory.audio_stage.status import audio_stage_status
 from book_video_factory.manifests import sha256_file
 from book_video_factory.delivery_stage import FinalMasterApprovalError, verify_final_master_approval
 from book_video_factory.gates import current_approvals
+from book_video_factory.style_profiles import project_workflow
 from book_video_factory.repository_integrity import repository_integrity_block
 from book_video_factory.source_ingestion import source_rights_state
 from book_video_factory.visual_stage.approval import visual_stage_next_status
@@ -98,7 +99,7 @@ def _raw_pipeline_status(project: Path) -> dict[str, Any]:
     if scene_approval and scene_approval.get("human_approved") and scene_approval.get("next_stage_status")=="ready_for_render":
         render_input_path=root/"07_render/RENDER_INPUT.json"
         render_input=_json(render_input_path)
-        if render_input and render_input.get("renderer")=="streaming_ffmpeg":
+        if render_input and render_input.get("renderer") in {"streaming_ffmpeg", "static_streaming_ffmpeg"}:
             opening=render_input.get("opening") if isinstance(render_input.get("opening"),dict) else {}
             preview=opening.get("preview_video")
             preview_path=root/str(preview) if isinstance(preview,str) and preview else None
@@ -136,19 +137,80 @@ def _raw_pipeline_status(project: Path) -> dict[str, Any]:
     if director:
         return {"release_id":release_id,"stage":"director","status":"awaiting_scene_assets","next_action":"run Host ImageGen from 05_director/IMAGE_TASKS.jsonl and register each real PNG","command":None}
     try:
+        visual=visual_stage_next_status(root,release_id)
+    except Exception:
+        visual="blocked_by_visual_stage"
+    try:
+        workflow = project_workflow(root)
+        vf_policy = workflow["visual_foundation_policy"]
+    except Exception:
+        workflow = {}
+        vf_policy = None
+    narration_policy = workflow.get("narration_provider_policy", "legacy_edge")
+    if visual in {"ready_for_edge_tts", "ready_for_narration"}:
+        if vf_policy == "required":
+            from book_video_factory.visual_foundation.approval import visual_foundation_status
+            vf_status = visual_foundation_status(root, release_id)
+            if vf_status != "visual_foundation_approved":
+                return {
+                    "release_id": release_id,
+                    "stage": "visual_foundation",
+                    "status": vf_status,
+                    "next_action": "build and human-approve the visual foundation before formal narration or scene generation",
+                    "command": (
+                        "python book_video_factory/scripts/build_visual_foundation.py "
+                        f"--project '{root}' --foundation-input '{root}/03_images_生成图片/VISUAL_FOUNDATION_INPUT.json'"
+                    ),
+                }
+        if narration_policy == "minimax_required":
+            voice_foundation = root / "04_audio/VOICE_FOUNDATION.json"
+            if not voice_foundation.is_file():
+                return {
+                    "release_id": release_id,
+                    "stage": "minimax_voice_foundation",
+                    "status": "awaiting_minimax_voice_foundation",
+                    "next_action": "select and verify a professional MiniMax narration voice before creating any expressive audio",
+                    "command": (
+                        "python book_video_factory/scripts/build_voice_foundation.py "
+                        f"--release-id '{release_id}' --strategy system_voice "
+                        "--voice-id '<MINIMAX_SYSTEM_VOICE_ID>' --verify "
+                        f"--out '{voice_foundation}'"
+                    ),
+                }
+    try:
         audio=audio_stage_status(root,release_id)
     except Exception:
         audio=None
     if audio=="ready_for_image_task_planning":
+        from book_video_factory.semantic_alignment.scene_continuity import (
+            SceneContinuityError,
+            load_current_scene_continuity_document,
+        )
+        try:
+            load_current_scene_continuity_document(root)
+        except SceneContinuityError:
+            return {
+                "release_id": release_id,
+                "stage": "scene_continuity",
+                "status": "awaiting_scene_continuity_spans",
+                "next_action": "build the current semantic scene spans before compiling the director timeline",
+                "command": (
+                    "python book_video_factory/scripts/build_scene_continuity_spans.py "
+                    f"--project '{root}'"
+                ),
+            }
         return {"release_id":release_id,"stage":"director","status":"ready_for_director","next_action":"compile real-audio director timeline and production image tasks","command":f"python book_video_factory/scripts/build_director_stage.py --project '{root}'"}
-    if audio and audio not in {"blocked_by_visual_approval","ready_for_edge_tts"}:
-        return {"release_id":release_id,"stage":"audio","status":audio,"next_action":"complete or repair Phase 4 Edge TTS/VTT evidence","command":f"python book_video_factory/scripts/run_audio_stage.py status --project '{root}' --release-id '{release_id}'"}
-    try:
-        visual=visual_stage_next_status(root,release_id)
-    except Exception:
-        visual="blocked_by_visual_stage"
-    if visual=="ready_for_edge_tts":
-        return {"release_id":release_id,"stage":"audio","status":"ready_for_edge_tts","next_action":"generate continuous Edge TTS and VTT","command":f"python book_video_factory/scripts/run_audio_stage.py generate --project '{root}' --input '{root}/04_audio/AUDIO_STAGE_INPUT.json' --lexicon '{root}/04_audio/PRONUNCIATION_LEXICON.json'"}
+    if audio and audio not in {"blocked_by_visual_approval","ready_for_edge_tts","ready_for_narration"}:
+        return {"release_id":release_id,"stage":"audio","status":audio,"next_action":"complete or repair Phase 4 provider audio/VTT evidence","command":f"python book_video_factory/scripts/run_audio_stage.py status --project '{root}' --release-id '{release_id}'"}
+    if visual in {"ready_for_edge_tts", "ready_for_narration"}:
+        provider = "minimax" if narration_policy == "minimax_required" else "edge-tts"
+        status = "ready_for_narration" if provider == "minimax" else "ready_for_edge_tts"
+        next_action = (
+            "generate MiniMax narration with provider timestamps and auditable evidence"
+            if provider == "minimax"
+            else "generate continuous legacy Edge TTS and VTT"
+        )
+        return {"release_id":release_id,"stage":"audio","status":status,"next_action":next_action,"command":f"python book_video_factory/scripts/run_audio_stage.py generate --project '{root}' --input '{root}/04_audio/AUDIO_STAGE_INPUT.json' --lexicon '{root}/04_audio/PRONUNCIATION_LEXICON.json' --provider {provider}"}
     if (root/"03_images_生成图片/VISUAL_STAGE_MANIFEST.json").is_file():
         return {"release_id":release_id,"stage":"visual_anchor_lookdev","status":visual,"next_action":"complete real anchors, LookDev, contact sheet and human visual approval","command":None}
     if (root/"02_story_script_故事脚本/HBG_BRIDGE_MANIFEST.json").is_file():

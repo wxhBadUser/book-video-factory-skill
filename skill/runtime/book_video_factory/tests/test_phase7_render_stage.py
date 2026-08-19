@@ -21,6 +21,8 @@ from book_video_factory.manifests import sha256_file
 from book_video_factory.hbg_bridge.runner import repository_root
 from book_video_factory.semantic_alignment.caption_contract import build_caption_visual_contract_from_project
 from book_video_factory.semantic_alignment.caption_grouping import build_caption_grouping_from_project
+from book_video_factory.semantic_alignment.scene_continuity import build_scene_continuity_from_project
+from book_video_factory.semantic_alignment.scene_continuity import build_span_review_groups
 from book_video_factory.semantic_alignment.contract_bindings import aggregate_contract_bindings_sha256
 from book_video_factory.semantic_alignment.models import VisualProposition
 from book_video_factory.semantic_alignment.prompting import compute_prompt_binding
@@ -38,6 +40,7 @@ from book_video_factory.production_visuals.review import (
     build_scene_asset_review,
 )
 from book_video_factory.render_stage.compiler import (
+    _default_render_runner,
     _default_qa_runner,
     _hbg_bash_command,
     execute_render_stage,
@@ -258,7 +261,10 @@ class RenderStageTests(unittest.TestCase):
             grouping = json.loads(
                 (project / "04_audio/CAPTION_GROUPING_AUDIT.json").read_text(encoding="utf-8")
             )
-            groups = {group["group_id"]: group for group in grouping["groups"]}
+            continuity = json.loads(
+                (project / "04_audio/SCENE_CONTINUITY_SPANS.json").read_text(encoding="utf-8")
+            )
+            groups = build_span_review_groups(continuity=continuity, grouping=grouping)
             captions = json.loads(
                 (project / "04_audio/CAPTION_BINDINGS.json").read_text(encoding="utf-8")
             )["captions"]
@@ -562,6 +568,39 @@ class RenderStageTests(unittest.TestCase):
             self.assertEqual(command[1], "-c")
             self.assertIn("builtin pwd -W", command[2])
 
+    def test_static_render_uses_static_adapter_without_motion_style_commands(self) -> None:
+        """A static render must not invoke HBG commands that require camera motion."""
+
+        with tempfile.TemporaryDirectory() as temp, mock.patch(
+            "book_video_factory.render_stage.compiler._verify_vendor"
+        ), mock.patch(
+            "book_video_factory.render_stage.compiler.validate_static_workspace"
+        ), mock.patch(
+            "book_video_factory.render_stage.compiler.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, "", ""),
+        ) as runner:
+            _default_render_runner(
+                Path(temp),
+                Path(temp) / "output.mp4",
+                {"renderer": "static_streaming_ffmpeg", "quality": "high", "minimum_free_gib": 1},
+            )
+
+        commands = [call.args[0] for call in runner.call_args_list]
+        command_text = "\n".join(" ".join(command) for command in commands)
+        self.assertNotIn("build_composition.mjs", command_text)
+        self.assertNotIn("validate_style_system.mjs", command_text)
+        adapter_calls = [call for call in runner.call_args_list if "run_hbg_static_streaming_adapter.mjs" in " ".join(call.args[0])]
+        self.assertEqual(len(adapter_calls), 2)
+        # Both passes must skip the vendored animated style validator (the
+        # static_policy validator already gated this workspace; the animated
+        # validator is not present in the adapter's disposable runtime dir).
+        for call in adapter_calls:
+            self.assertEqual(call.kwargs["env"]["HBG_SKIP_STYLE_VALIDATION"], "1")
+        # Exactly one pass is validate-only.
+        self.assertEqual(
+            sum(call.kwargs["env"].get("HBG_VALIDATE_ONLY") == "1" for call in adapter_calls), 1,
+        )
+
     def test_render_input_schema_is_valid_closed_json(self) -> None:
         package_root = Path(__file__).resolve().parents[1]
         schema = json.loads((package_root / "schemas/render_stage_input.v1.schema.json").read_text(encoding="utf-8"))
@@ -596,8 +635,8 @@ class RenderStageTests(unittest.TestCase):
             "audio": {"bgmVolume": 0.22},
         })
         write_json(project / "STORYBOARD.json", [
-            {"id": "s1", "chapter": 1, "start": 2.0, "end": 5.0, "duration": 3.0, "motion": "zoom-in", "asset": "old.png"},
-            {"id": "s2", "chapter": 1, "start": 5.0, "end": 8.0, "duration": 3.0, "motion": "pan-left", "asset": "old2.png"},
+            {"id": "s1", "chapter": 1, "start": 2.0, "end": 5.0, "duration": 3.0, "motion": "hold", "asset": "old.png"},
+            {"id": "s2", "chapter": 1, "start": 5.0, "end": 8.0, "duration": 3.0, "motion": "hold", "asset": "old2.png"},
         ])
         write_json(project / "audio_meta.json", {
             "totalDuration": 8.0, "narrationDuration": 6.0,
@@ -655,6 +694,7 @@ class RenderStageTests(unittest.TestCase):
         })
         build_caption_visual_contract_from_project(project, release_id="r1")
         build_caption_grouping_from_project(project)
+        build_scene_continuity_from_project(project)
         grouping = json.loads(
             (project / "04_audio/CAPTION_GROUPING_AUDIT.json").read_text(encoding="utf-8")
         )
@@ -753,7 +793,7 @@ class RenderStageTests(unittest.TestCase):
                     "risk_flags": ["hero_shot"] if index == 1 else ["death_climax"],
                     "required_entities": [], "forbidden_entities": [], "anchor_refs": [],
                     "participants": {"count": 0, "allowed": [], "forbidden": []},
-                    "motion": "zoom-in" if index == 1 else "pan-left", "generation_mode": "single",
+                    "motion": "hold", "generation_mode": "single",
                 }
                 for index, (task, group) in enumerate(zip(tasks.values(), grouping["groups"]), start=1)
             ],

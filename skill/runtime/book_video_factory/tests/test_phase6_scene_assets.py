@@ -17,6 +17,9 @@ from phase4_fixture_factory import (
 )
 from book_video_factory.audio_stage.compiler import finalize_audio_stage, generate_audio_stage
 from book_video_factory.director_stage.compiler import compile_director_stage
+from book_video_factory.semantic_alignment.caption_contract import build_caption_visual_contract_from_project
+from book_video_factory.semantic_alignment.caption_grouping import build_caption_grouping_from_project
+from book_video_factory.semantic_alignment.scene_continuity import build_scene_continuity_from_project
 from book_video_factory.production_visuals.registry import SceneAssetError, register_scene_asset
 from book_video_factory.production_visuals.review import _default_contact_sheet, build_scene_asset_review
 
@@ -88,6 +91,9 @@ class SceneAssetTests(unittest.TestCase):
         plan_path = project / "04_audio/STORYBOARD_AUDIO_PLAN.json"
         write_json(plan_path, build_storyboard_audio_plan(project))
         finalize_audio_stage(project, plan_path, runner=fake_hbg_audio_runner)
+        build_caption_visual_contract_from_project(project, release_id="r1")
+        build_caption_grouping_from_project(project)
+        build_scene_continuity_from_project(project)
         compile_director_stage(project)
         task = json.loads((project / "05_director/IMAGE_TASKS.jsonl").read_text(encoding="utf-8").splitlines()[0])
         return project, task

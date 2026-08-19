@@ -479,7 +479,7 @@ def test_pronoun_it_resolves_a_unique_explicit_object() -> None:
 
 def test_pronoun_rejects_trusted_entity_type_mismatch() -> None:
     """Trusted metadata may reject 他 when its only antecedent is not a person."""
-    with pytest.raises(CaptionContractError, match="type mismatch"):
+    with pytest.raises(CaptionContractError, match="no same-section upstream evidence"):
         enrich_captions_to_contracts(
             script_sections=[_section(narrative_function="plot", text="福贵走到门口。他低头不语。")],
             beats=[

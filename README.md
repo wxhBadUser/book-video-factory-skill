@@ -125,8 +125,11 @@ python workspace/book_video_factory/scripts/run_audio_stage.py status \
 Phase 4 返回 `ready_for_image_task_planning` 后：
 
 ```bash
+python workspace/book_video_factory/scripts/build_scene_continuity_spans.py --project <PROJECT>
 python workspace/book_video_factory/scripts/build_director_stage.py --project <PROJECT>
 ```
+
+`SCENE_CONTINUITY_SPANS.json` separates caption semantics from image count: keep one representative image while people, location, relationship and scene-defining state remain stable; do not cut merely because the narrated action changes.
 
 Codex 按 `05_director/IMAGE_TASKS.jsonl` 和 `SHEET_MAP.json` 使用 Host ImageGen 真实出图；2×2 宫格使用 `split_scene_sheet.py` 调用 HBG 原生拆图脚本。所有场景图登记、联系表审查和人工批准完成后，填写 `07_render/RENDER_INPUT.json`，使用 HBG 原生 HyperFrames 或流式 FFmpeg 渲染：
 

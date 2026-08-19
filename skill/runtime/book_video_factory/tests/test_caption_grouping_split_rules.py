@@ -54,15 +54,18 @@ class TestSplitTriggers:
         b = unit("c2", "他把草帽压得很低", 3.0, 6.0, characters=("福贵",), location="田埂", time_of_day="午后")
         assert required_split_reasons(a, b) == ()
 
-    def test_character_change_forces_a_split(self) -> None:
-        a = unit("c1", "凤霞穿上了红衣裳", 0.0, 3.0, characters=("凤霞",), location="堂屋")
-        b = unit("c2", "有庆在跑", 3.0, 6.0, characters=("有庆",), location="堂屋")
-        assert "character_change" in required_split_reasons(a, b)
+    def test_same_place_cast_growth_does_not_split(self) -> None:
+        """Semantic Shot Group: family members arriving one by one stay in one image."""
+        a = unit("c1", "家珍在门口等着他", 0.0, 3.0, characters=("家珍",), location="堂屋")
+        b = unit("c2", "凤霞也跑了出来", 3.0, 6.0, characters=("凤霞",), location="堂屋")
+        assert required_split_reasons(a, b) == ()
 
-    def test_a_new_character_entering_also_forces_a_split(self) -> None:
-        a = unit("c1", "福贵一个人坐着", 0.0, 3.0, characters=("福贵",), location="堂屋")
-        b = unit("c2", "家珍端着碗走过来", 3.0, 6.0, characters=("福贵", "家珍"), location="堂屋")
-        assert "character_change" in required_split_reasons(a, b)
+    def test_disjoint_cast_across_place_and_time_splits(self) -> None:
+        a = unit("c1", "福贵在田埂上", 0.0, 3.0, characters=("福贵",), location="田埂", time_of_day="白天")
+        b = unit("c2", "龙二在赌场里", 3.0, 6.0, characters=("龙二",), location="赌场", time_of_day="夜里")
+        reasons = required_split_reasons(a, b)
+        assert "primary_subject_change" in reasons
+        assert "location_change" in reasons
 
     def test_location_change_forces_a_split(self) -> None:
         a = unit("c1", "福贵在赌场里", 0.0, 3.0, characters=("福贵",), location="赌场")
@@ -123,7 +126,6 @@ class TestSplitTriggers:
         reasons = required_split_reasons(a, b)
         assert set(reasons) <= set(SPLIT_REASONS)
         assert set(reasons) >= {
-            "character_change",
             "location_change",
             "time_change",
             "narrative_function_change",
@@ -173,8 +175,8 @@ class TestGrouping:
 
     def test_group_ids_are_stable_and_ordered(self) -> None:
         units = [
-            unit("c1", "甲", 0.0, 3.0, characters=("福贵",)),
-            unit("c2", "乙", 3.0, 6.0, characters=("凤霞",)),
+            unit("c1", "甲", 0.0, 3.0, characters=("福贵",), location="田埂"),
+            unit("c2", "乙", 3.0, 6.0, characters=("凤霞",), location="堂屋"),
         ]
         groups = group_captions(units)
         assert [g.group_id for g in groups] == ["G001", "G002"]
@@ -233,7 +235,7 @@ class TestValidation:
             validate_caption_groups(forged, units)
         message = str(excinfo.value)
         assert "c2" in message
-        assert "character_change" in message or "location_change" in message
+        assert "location_change" in message
 
     def test_validate_rejects_missing_captions(self) -> None:
         units = [
@@ -263,7 +265,7 @@ class TestAuditExistingStoryboards:
         findings = audit_shot_caption_groups(storyboard, units)
         assert len(findings) == 1
         assert findings[0]["shot_id"] == "SHOT-001"
-        assert "character_change" in findings[0]["reasons"]
+        assert "location_change" in findings[0]["reasons"]
         assert findings[0]["boundary_caption_id"] == "c2"
 
     def test_audit_is_silent_on_a_clean_storyboard(self) -> None:

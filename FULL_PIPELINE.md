@@ -45,7 +45,8 @@ python book_video_factory/scripts/approve_visual_stage.py \
 python book_video_factory/scripts/run_audio_stage.py generate \
   --project <PROJECT> \
   --input <PROJECT>/04_audio/AUDIO_STAGE_INPUT.json \
-  --lexicon <PROJECT>/04_audio/PRONUNCIATION_LEXICON.json
+  --lexicon <PROJECT>/04_audio/PRONUNCIATION_LEXICON.json \
+  --provider minimax
 ```
 
 Author `04_audio/STORYBOARD_AUDIO_PLAN.json` from the real display captions and timing, then:
@@ -53,14 +54,23 @@ Author `04_audio/STORYBOARD_AUDIO_PLAN.json` from the real display captions and 
 ```bash
 python book_video_factory/scripts/run_audio_stage.py finalize \
   --project <PROJECT> \
-  --plan <PROJECT>/04_audio/STORYBOARD_AUDIO_PLAN.json
+  --plan <PROJECT>/04_audio/STORYBOARD_AUDIO_PLAN.json \
+  --provider minimax
 ```
+
+New releases use `minimax_required`: `VOICE_FOUNDATION.json`, real provider audio,
+provider timestamps, and hash-bound generation evidence are mandatory. Projects
+explicitly marked `legacy_edge` use `--provider edge-tts`; MiniMax failure never
+falls back to Edge.
 
 ## 5. Compile the director timeline and production image tasks
 
 ```bash
+python book_video_factory/scripts/build_scene_continuity_spans.py --project <PROJECT>
 python book_video_factory/scripts/build_director_stage.py --project <PROJECT>
 ```
+
+`04_audio/SCENE_CONTINUITY_SPANS.json` is the final static-image allocation contract. Caption Groups remain fine-grained semantic evidence; one Scene Continuity Span produces exactly one image task. Action or duration changes alone never require a new image.
 
 Outputs:
 
@@ -119,7 +129,10 @@ python book_video_factory/scripts/approve_scene_assets.py \
 
 ## 7. Prepare and execute the HBG render
 
-Fill `07_render/RENDER_INPUT.json` from its example. The streaming renderer requires an approved opening preview video. HyperFrames requires an exact pinned version and adequate disk.
+Fill `07_render/RENDER_INPUT.json` from its example and keep the default renderer
+as `static_streaming_ffmpeg`. `streaming_ffmpeg` remains a legacy compatibility
+route. The static streaming renderer requires an approved opening preview video.
+HyperFrames requires an exact pinned version and adequate disk.
 
 For the default streaming route, first generate the opening preview from the HBG composition and the pinned HyperFrames version:
 

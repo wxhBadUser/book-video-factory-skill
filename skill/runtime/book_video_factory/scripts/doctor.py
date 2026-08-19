@@ -336,6 +336,11 @@ def main() -> int:
             label="python_module:PIL",
             required=_required(profile, "local-render"),
         ),
+        python_module_check(
+            "jsonschema",
+            label="python_module:jsonschema",
+            required=_required(profile, "production"),
+        ),
         edge_tts_check(required=_required(profile, "production")),
         phase4_audio_cli_check(),
         phase5_7_runtime_check(),

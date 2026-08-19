@@ -49,6 +49,10 @@ def _task(number: int, *, lane: str, mode: str = "single") -> dict:
 
 def _make_project(base: Path, *, lane: str) -> Path:
     project = base / "warehouse/projects/pilot"
+    _write_json(project / "project.json", {
+        "schema_version": "1.0",
+        "workflow": {"visual_foundation_policy": "legacy"},
+    })
     director = project / "05_director"
     director.mkdir(parents=True)
     tasks = [_task(index, lane=lane, mode="2x2") for index in range(1, 5)] + [

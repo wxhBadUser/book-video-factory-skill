@@ -87,7 +87,7 @@ def _project(base: Path) -> tuple[Path, dict, dict, list[dict]]:
             "description": "凤霞出嫁那天队伍走过村口",
             "requiredEntities": ["凤霞", "婚礼队伍"], "forbiddenEntities": ["现代游艇"],
             "riskFlags": [], "generationMode": "2x2", "anchorRefs": ["C001"],
-            "participants": {"count": 1, "allowed": ["C001"]}, "motion": "zoom-in",
+            "participants": {"count": 1, "allowed": ["C001"]}, "motion": "hold",
         },
         {
             "id": "s002", "beatId": "B002", "chapter": 1, "cue": "第二段",
@@ -95,14 +95,14 @@ def _project(base: Path) -> tuple[Path, dict, dict, list[dict]]:
             "requiredEntities": ["福贵", "豆子"], "forbiddenEntities": ["婚礼队伍"],
             "riskFlags": ["hands", "tool_use"], "generationMode": "single",
             "anchorRefs": ["C001"], "participants": {"count": 1, "allowed": ["C001"]},
-            "motion": "pan-left",
+            "motion": "hold",
         },
         {
             "id": "s003", "beatId": "B003", "chapter": 2, "cue": "第三段",
             "description": "老牛在暮色里低头吃草",
             "requiredEntities": ["老牛"], "forbiddenEntities": ["婚礼队伍"],
             "riskFlags": [], "generationMode": "2x2", "anchorRefs": [],
-            "participants": {"count": 0, "allowed": []}, "motion": "static",
+            "participants": {"count": 0, "allowed": []}, "motion": "hold",
         },
     ]
     return project, preliminary, audio_meta, beats
@@ -136,7 +136,7 @@ def _shot(
         "generation_mode": mode,
         "anchor_refs": anchors or [],
         "participants": {"count": len(participants), "allowed": participants},
-        "motion": "zoom-in",
+        "motion": "hold",
         "visual_load": "ordinary",
         "intentional_hold": False,
         "hold_reason": "",

@@ -6,7 +6,7 @@
   "properties": {
     "schema_version": {"const": "render-stage-input.v1"},
     "release_id": {"type": "string", "minLength": 1},
-    "renderer": {"enum": ["streaming_ffmpeg", "hyperframes"]},
+    "renderer": {"enum": ["streaming_ffmpeg", "static_streaming_ffmpeg", "hyperframes"]},
     "output_name": {"type": "string", "pattern": "^[^/\\\\]+\\.mp4$"},
     "bgm_source": {"type": "string", "minLength": 1},
     "opening": {

@@ -123,7 +123,12 @@ def probe_media(path: Path) -> dict[str, Any]:
     return json.loads(completed.stdout)
 
 
-def build_initial_project_spec(book_title: str, author: str) -> dict[str, Any]:
+def build_initial_project_spec(
+    book_title: str,
+    author: str,
+    *,
+    narration_provider: str = "edge-tts",
+) -> dict[str, Any]:
     """Return the exact untouched Phase 2 project-spec placeholder."""
     return {
         "version": 2,
@@ -139,7 +144,7 @@ def build_initial_project_spec(book_title: str, author: str) -> dict[str, Any]:
         },
         "source": {"corrections": [], "chapters": []},
         "narration": {
-            "provider": "edge-tts",
+            "provider": narration_provider,
             "voice": "",
             "bodyRate": "+0%",
             "leadRate": "+0%",
@@ -188,11 +193,14 @@ def initialize_project(
     generation_lane: str | None = None,
     orientation: str = "landscape",
     qualification_scope: str = "production",
+    visual_foundation_policy: str = "required",
 ) -> Path:
     if mode != "single-book":
         raise ValueError("the active pipeline supports only single-book projects")
     if qualification_scope not in {"production", "hbg-parity-pilot"}:
         raise ValueError("qualification_scope must be production or hbg-parity-pilot")
+    if visual_foundation_policy not in {"legacy", "required"}:
+        raise ValueError("visual_foundation_policy must be legacy or required")
     style_profile = load_style_profile(style_profile_id)
     if mode not in style_profile.supported_workflow_modes:
         raise ValueError(
@@ -285,11 +293,27 @@ def initialize_project(
             "state_source": "derived_gate_evaluator",
             "status_field_role": "compatibility_cache_only",
             "qualification_scope": qualification_scope,
+            "visual_foundation_policy": visual_foundation_policy,
+            "narration_provider_policy": (
+                "minimax_required" if visual_foundation_policy == "required" else "legacy_edge"
+            ),
         },
     }
     write_json(contract_path, manifest, overwrite=False)
 
-    project_spec = build_initial_project_spec(book_title, author)
+    narration_provider = (
+        "minimax" if visual_foundation_policy == "required" else "edge-tts"
+    )
+    narration_provider_policy = (
+        "minimax_required"
+        if narration_provider == "minimax"
+        else "legacy_edge"
+    )
+    project_spec = build_initial_project_spec(
+        book_title,
+        author,
+        narration_provider=narration_provider,
+    )
     write_json(project / "PROJECT_SPEC.json", project_spec, overwrite=False)
     write_text(
         project / "SCRIPT_SOURCE.md",
@@ -323,8 +347,12 @@ def initialize_project(
                 "reveal_text": f"《{book_title}》，{author}。",
             },
             "narration": {
-                "provider": "edge-tts",
-                "voice": "zh-CN-YunjianNeural",
+                "provider": narration_provider,
+                "voice": (
+                    "Chinese (Mandarin)_Male_Announcer"
+                    if narration_provider == "minimax"
+                    else "zh-CN-YunjianNeural"
+                ),
                 "body_rate": "+0%",
                 "lead_rate": "+0%",
                 "reveal_rate": "+0%",
@@ -347,8 +375,13 @@ def initialize_project(
         {
             "schema_version": "audio-stage-input.v1",
             "release_id": "r1",
-            "provider": "edge-tts",
-            "voice": "zh-CN-YunjianNeural",
+            "provider": narration_provider,
+            "provider_policy": narration_provider_policy,
+            "voice": (
+                "Chinese (Mandarin)_Male_Announcer"
+                if narration_provider == "minimax"
+                else "zh-CN-YunjianNeural"
+            ),
             "body_rate": "+0%",
             "lead_rate": "+0%",
             "reveal_rate": "+0%",
@@ -403,7 +436,7 @@ def initialize_project(
                     "generation_mode": "2x2",
                     "anchor_refs": ["C001"],
                     "participants": {"count": 1, "allowed": ["C001"]},
-                    "motion": "zoom-in",
+                    "motion": "hold",
                     "visual_load": "ordinary",
                     "intentional_hold": False,
                     "hold_reason": "",
@@ -441,7 +474,7 @@ def initialize_project(
         {
             "schema_version": "render-stage-input.v1",
             "release_id": "r1",
-            "renderer": "streaming_ffmpeg",
+            "renderer": "static_streaming_ffmpeg",
             "output_name": f"{slug}-v1.mp4",
             "bgm_source": "assets/audio/bgm/source.mp3",
             "opening": {

@@ -13,9 +13,10 @@ Contract
 Two consecutive captions may share a shot only when **none** of the hard split
 triggers fire:
 
-``character_change``
-    The set of on-screen characters changed at all (including someone merely
-    entering or leaving). A different cast means a different picture.
+``primary_subject_change``
+    The Caption Contract's persistent characters are completely disjoint
+    between two captions AND the captions are not part of the same place/event
+    (a family gathering where members arrive one by one is compatible).
 ``location_change``
     The narration moved to a different place.
 ``time_change``
@@ -26,7 +27,7 @@ triggers fire:
 
 One duration trigger caps runaway groups:
 
-``duration_limit``  the group would exceed 16 seconds. There is no caption-count cap.
+``duration_limit``  the group would exceed 30 seconds. There is no caption-count cap.
 
 Everything in this module is pure and deterministic: same input, same output,
 no clock, no network, no model.
@@ -37,6 +38,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import json
+import unicodedata
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -50,14 +52,97 @@ NARRATIVE_FUNCTIONS: tuple[str, ...] = (
 )
 
 SPLIT_REASONS: tuple[str, ...] = (
-    "character_change",
+    "primary_subject_change",
     "location_change",
     "time_change",
     "narrative_function_change",
     "duration_limit",
+    "hard_split_event",
+    "event_instance_change",
+    "visual_mode_change",
+    "must_show_prohibition_conflict",
+    "declared_incompatible_action_key",
+    "continuity_change",
+    "event_predicate_change",
 )
 
-MAX_IMAGE_GROUP_DURATION = 16.0
+# FIX 3 (pilot R2): a caption that ends in an unfinished dependent-clause
+# connector must not independently define an image ("写《活着》之前，" is not a
+# picture). The group must merge with the following compatible caption until
+# the joined semantic proposition is complete; if that cannot be resolved the
+# grouping fails closed.
+_INCOMPLETE_CLAUSE_TAILS: tuple[str, ...] = (
+    "之前",
+    "之后",
+    "以前",
+    "以后",
+    "那天",
+    "因为",
+    "由于",
+    "但是",
+    "可是",
+    "然而",
+    "所以",
+    "因此",
+    "而且",
+    "如果",
+    "只要",
+    "既然",
+    "虽然",
+    "即使",
+    "一边",
+    "而",
+    "当",
+)
+
+
+def is_incomplete_clause(text: str) -> bool:
+    """True when the caption (or joined group) is a semantically unfinished clause."""
+
+    norm = unicodedata.normalize("NFKC", str(text or "")).strip()
+    if not norm:
+        return False
+    if norm.endswith(("，", ",")):
+        tail = norm[:-1].strip()
+        if any(tail.endswith(marker) for marker in _INCOMPLETE_CLAUSE_TAILS):
+            return True
+        if tail.endswith("《"):
+            return True
+    # An opened book-title bracket that never closes is also unfinished.
+    if norm.count("《") > norm.count("》"):
+        return True
+    return False
+
+
+def is_discourse_incomplete(text: str) -> bool:
+    """Discourse/utterance integrity gate: never cut inside an open speech unit.
+
+    A caption may not end a group while it is:
+    - an unclosed speech opener (…喊：/ …说，);
+    - a 越…越… or connector continuation;
+    - any semantically unfinished dependent clause (is_incomplete_clause).
+    """
+
+    norm = unicodedata.normalize("NFKC", str(text or "")).strip()
+    if not norm:
+        return False
+    if norm.endswith(("：", ":")):
+        return True
+    if norm.endswith(("说，", "说,", "喊，", "喊,", "问，", "问,", "回答，", "回答,", "说道，", "说道,", "喊道，", "喊道,", "问道，", "问道,")):
+        return True
+    stripped_tail = norm.rstrip("，,。.；;：:！!？?")
+    if any(stripped_tail.endswith(tail) for tail in ("越快", "越多", "越大", "越强", "越深", "越远", "越贵", "越")):
+        return True
+    if norm.endswith(("，", ",")) and "不是" in stripped_tail and "而是" not in stripped_tail:
+        # 不是…而是… parallel construction: the 而是 clause is required.
+        return True
+    return is_incomplete_clause(norm)
+
+
+def _joined_caption_text(members: Sequence[tuple[Mapping[str, Any], Any]]) -> str:
+    return " / ".join(str(item.get("text") or item.get("caption_text") or "") for item, _contract in members)
+
+MAX_IMAGE_GROUP_DURATION = 30.0
 DEFAULT_MAX_GROUP_DURATION = MAX_IMAGE_GROUP_DURATION
 
 _EPSILON = 1e-6
@@ -313,35 +398,53 @@ def _contract_split_reasons(previous: Any, following: Any) -> tuple[str, ...]:
     previous_state = getattr(previous, "scene_state", {})
     following_state = getattr(following, "scene_state", {})
     reasons: list[str] = []
-    if {
-        str(item) for item in previous_state.get("visible_character_ids", [])
-    } != {
-        str(item) for item in following_state.get("visible_character_ids", [])
-    }:
-        reasons.append("character_change")
-    if str(previous_state.get("location_id", "")).strip() != str(following_state.get("location_id", "")).strip():
-        reasons.append("location_change")
-    if str(previous_state.get("time_context", "")).strip() != str(following_state.get("time_context", "")).strip():
-        reasons.append("time_change")
     previous_key, previous_incompatible, previous_event, previous_event_instance = _action_semantics(previous_state)
     following_key, following_incompatible, following_event, following_event_instance = _action_semantics(following_state)
     if _visual_continuity_state(previous_state) != _visual_continuity_state(following_state):
         reasons.append("continuity_change")
+    # Event phase = (event class, script section). Consecutive captions in the
+    # same section that share the event class are the SAME event phase (one
+    # wedding, one death aftermath, one medical visit); different sections with
+    # the same class (有庆死 vs 凤霞死) are different phases and split.
+    same_event_phase = (
+        previous_event == following_event
+        and str(getattr(previous, "section_id", "")) == str(getattr(following, "section_id", ""))
+    )
+    # A single non-none event instance (e.g. one wedding, one death, one
+    # medical visit) may reference the same scene through slightly different
+    # names (婚礼/村口), so location/time drift inside it is tolerated.
+    tolerate_drift = previous_event != "none" and same_event_phase
+    if (
+        str(previous_state.get("location_id", "")).strip()
+        != str(following_state.get("location_id", "")).strip()
+        and not tolerate_drift
+    ):
+        reasons.append("location_change")
+    if (
+        str(previous_state.get("time_context", "")).strip()
+        != str(following_state.get("time_context", "")).strip()
+        and not tolerate_drift
+    ):
+        reasons.append("time_change")
     if previous_event != following_event:
         reasons.append("hard_split_event")
-    elif previous_event != "none" and previous_event_instance != following_event_instance:
+    elif not same_event_phase:
         reasons.append("event_instance_change")
     if following_key in previous_incompatible or previous_key in following_incompatible:
         reasons.append("declared_incompatible_action_key")
-    same_source_context = (
-        tuple(getattr(previous, "source_beat_ids", ())) == tuple(getattr(following, "source_beat_ids", ()))
-        and str(getattr(previous, "section_id", "")) == str(getattr(following, "section_id", ""))
-    )
-    if not same_source_context and previous_key != following_key:
-        reasons.append("source_beat_change")
     if str(getattr(previous, "narrative_function", "")) != str(getattr(following, "narrative_function", "")):
         reasons.append("narrative_function_change")
-    if str(getattr(previous, "visual_mode", "")) != str(getattr(following, "visual_mode", "")):
+    # Inside one concrete event phase (same section + same event class) captions
+    # may phrase the same drawable event with and without named referents
+    # (锣鼓敲得震天响 vs 凤霞出嫁), so visual-mode drift is tolerated there;
+    # outside a concrete event it remains a hard boundary.
+    if (
+        str(getattr(previous, "visual_mode", "")) != str(getattr(following, "visual_mode", ""))
+        and not (
+            tolerate_drift
+            and str(getattr(previous, "narrative_function", "")) in {"plot", "opening"}
+        )
+    ):
         reasons.append("visual_mode_change")
     previous_must_show = {str(item.entity_id) for item in getattr(previous, "must_show", ())}
     previous_prohibited = {str(item.entity_id) for item in getattr(previous, "must_not_show_as_primary", ())}
@@ -349,6 +452,44 @@ def _contract_split_reasons(previous: Any, following: Any) -> tuple[str, ...]:
     following_prohibited = {str(item.entity_id) for item in getattr(following, "must_not_show_as_primary", ())}
     if previous_must_show & following_prohibited or following_must_show & previous_prohibited:
         reasons.append("must_show_prohibition_conflict")
+    # Primary-subject rule: the Caption Contract's persistent characters are
+    # the narrative cast. A completely disjoint nonempty cast is a material
+    # subject change -- UNLESS both captions share the same place and event,
+    # where cast growth (family members arriving one by one) is compatible.
+    previous_cast = {
+        str(item.entity_id) for item in getattr(previous, "must_show", ())
+        if str(item.entity_id).startswith("C")
+    }
+    following_cast = {
+        str(item.entity_id) for item in getattr(following, "must_show", ())
+        if str(item.entity_id).startswith("C")
+    }
+    same_place_and_event = (
+        str(previous_state.get("location_id", "")).strip()
+        == str(following_state.get("location_id", "")).strip()
+        or tolerate_drift
+    ) and same_event_phase
+    if (
+        previous_cast
+        and following_cast
+        and not (previous_cast & following_cast)
+        and not (
+            same_place_and_event
+            and str(getattr(previous, "narrative_function", "")) in {"plot", "opening"}
+        )
+    ):
+        # In reflective registers, a quote continuation that starts with a
+        # first-person/connector marker belongs to the previous speaker
+        # ("二喜说，/ 我只有这点想想凤霞的福份") and must not split on the
+        # named object's cast.
+        following_text = str(getattr(following, "caption_text", "")).strip()
+        is_quote_continuation = (
+            str(getattr(previous, "visual_state", "")) == "alive_active"
+            and following_text
+            and following_text.startswith(_QUOTE_CONTINUATION_PREFIXES)
+        )
+        if not is_quote_continuation:
+            reasons.append("primary_subject_change")
     return tuple(reasons)
 
 
@@ -379,6 +520,64 @@ def _image_group(
         ),
         split_from_previous={"required": bool(split_reasons), "reasons": list(split_reasons)},
     )
+
+
+_INCOMPLETE_MERGE_BLOCKING_REASONS: frozenset[str] = frozenset({
+    "narrative_function_change",
+    "must_show_prohibition_conflict",
+    "duration_limit",
+})
+
+# Single-frame coverability: one image may cover a caption run only while the
+# visual state stays compatible. Allowed progression edges are the only
+# non-identical transitions a single static frame can carry without spoiling or
+# contradicting a caption; everything else must split.
+_VISUAL_STATE_EDGES: frozenset[tuple[str, str]] = frozenset({
+    ("departure_absence", "alive_active"),
+    ("departure_absence", "return_home"),
+    ("return_home", "collapse"),
+    ("return_home", "death_aftermath"),
+    ("collapse", "death_aftermath"),
+    ("pregnancy_birth", "alive_active"),
+    ("blood_loss", "death_aftermath"),
+    ("death_aftermath", "death_mention"),
+})
+
+_THEORY_HOLD_REGISTERS: frozenset[str] = frozenset({"theory", "author_background", "closing", "transition"})
+_QUOTE_CONTINUATION_PREFIXES: tuple[str, ...] = ("我", "这", "就", "那", "还", "也", "他", "她")
+
+
+def _joined_caption_text(members: Sequence[tuple[Mapping[str, Any], Any]]) -> str:
+    return " / ".join(str(item.get("text") or item.get("caption_text") or "") for item, _contract in members)
+
+
+def _established_visual_state(members: Sequence[tuple[Mapping[str, Any], Any]]) -> str:
+    """The last non-generic visual state the group has committed to."""
+
+    effective = "generic_scene"
+    previous_effective = "generic_scene"
+    previous_caption = ""
+    for _item, contract in members:
+        state = str(getattr(contract, "visual_state", "generic_scene"))
+        text = str(getattr(contract, "caption_text", "")).strip()
+        if (
+            previous_caption.endswith(("：", ":", "说，", "喊，", "问，"))
+            and state != previous_effective
+        ):
+            state = previous_effective
+        if state != "generic_scene":
+            effective = state
+        previous_effective = state
+        previous_caption = text
+    return effective
+
+
+def _visual_states_compatible(previous_state: str, following_state: str) -> bool:
+    if previous_state == following_state:
+        return True
+    if previous_state == "generic_scene" or following_state == "generic_scene":
+        return True
+    return (previous_state, following_state) in _VISUAL_STATE_EDGES
 
 
 def derive_caption_image_groups(
@@ -413,14 +612,83 @@ def derive_caption_image_groups(
     reasons_for_current: tuple[str, ...] = ()
     for following in resolved[1:]:
         reasons = _contract_split_reasons(current[-1][1], following[1])
+        if not reasons:
+            previous_state = _established_visual_state(current)
+            following_state = str(getattr(following[1], "visual_state", "generic_scene"))
+            previous_caption_text = str(getattr(current[-1][1], "caption_text", "")).strip()
+            if (
+                previous_caption_text.endswith(("：", ":", "说，", "喊，", "问，"))
+                and following_state != str(getattr(current[-1][1], "visual_state", ""))
+            ):
+                # A colon-opener's quoted line belongs to the opener's phase:
+                # "跑到门口喊：要抽我的血啦！" stays a donation_match, not blood_loss.
+                following_state = str(getattr(current[-1][1], "visual_state", "generic_scene"))
+            if following_state == previous_state == "theory_hold":
+                previous_is_quote_continuation = str(
+                    getattr(current[-1][1], "caption_text", "")
+                ).strip().startswith(_QUOTE_CONTINUATION_PREFIXES)
+                if previous_is_quote_continuation:
+                    # "我力气也就越大啦。" ends the Kugen memory; a fresh
+                    # "一个人只要还叫得出这些名字" starts the concept group.
+                    reasons = ("event_predicate_change",)
+            if (
+                not reasons
+                and following_state != "generic_scene"
+                and previous_state != "generic_scene"
+                and not _visual_states_compatible(previous_state, following_state)
+            ):
+                # After a death aftermath, a LIVING character's reflection may
+                # continue the same frame; only the deceased must not speak again
+                # (that would spoil "still alive" captions).
+                if previous_state == "death_aftermath" and following_state == "alive_active":
+                    death_ids = {
+                        str(item.entity_id)
+                        for _item, contract in current
+                        if str(getattr(contract, "visual_state", "")) == "death_aftermath"
+                        for item in getattr(contract, "must_show", ())
+                        if str(item.entity_id).startswith("C")
+                    }
+                    following_ids = {
+                        str(item.entity_id)
+                        for item in getattr(following[1], "must_show", ())
+                        if str(item.entity_id).startswith("C")
+                    }
+                    if following_ids and not (following_ids & death_ids):
+                        pass  # reflection by a living character: allowed
+                    else:
+                        reasons = ("event_predicate_change",)
+                else:
+                    reasons = ("event_predicate_change",)
         if not reasons and float(following[0]["end"]) - float(current[0][0]["start"]) > MAX_IMAGE_GROUP_DURATION + _EPSILON:
             reasons = ("duration_limit",)
+        current_incomplete = is_discourse_incomplete(_joined_caption_text(current))
+        if current_incomplete:
+            # FIX 3 (pilot R2): an unfinished dependent clause must keep
+            # merging until the semantic proposition completes. Only a true
+            # register/visual-mode boundary, a must-show prohibition conflict,
+            # or the duration cap blocks completion (fail closed). Cast/scene
+            # drift inside the fragment (e.g. "写《活着》之前，" -> "余华说…")
+            # is exactly what the continuation legitimately introduces.
+            if set(reasons).isdisjoint(_INCOMPLETE_MERGE_BLOCKING_REASONS):
+                current.append(following)
+                continue
+            raise CaptionGroupingError(
+                "incomplete caption group cannot be resolved: group ends with an "
+                f"unfinished clause ({_joined_caption_text(current)!r}) but the next "
+                f"caption crosses a hard boundary ({sorted(reasons)}); "
+                "fail closed instead of generating a fragment image"
+            )
         if reasons:
             groups.append(_image_group(f"G{len(groups) + 1:03d}", current, reasons_for_current))
             current = [following]
             reasons_for_current = reasons
         else:
             current.append(following)
+    if is_discourse_incomplete(_joined_caption_text(current)):
+        raise CaptionGroupingError(
+            "final caption group is an unfinished dependent clause and cannot be "
+            f"completed: {_joined_caption_text(current)!r}"
+        )
     groups.append(_image_group(f"G{len(groups) + 1:03d}", current, reasons_for_current))
     return tuple(groups)
 
@@ -457,15 +725,26 @@ def build_caption_grouping_audit_document(
     for boundary in boundaries:
         for reason in boundary["reasons"]:
             reason_distribution[reason] = reason_distribution.get(reason, 0) + 1
+    durations = [group.end - group.start for group in groups]
     return {
-        "schema_version": "caption-grouping-audit.v2",
+        "schema_version": "caption-grouping-audit.v3",
         "release_id": str(release_id),
         "caption_count": len(captions),
+        "group_count": len(groups),
         "boundary_count": len(boundaries),
         "merge_count": sum(1 for item in boundaries if item["decision"] == "merge"),
         "split_count": sum(1 for item in boundaries if item["decision"] == "split"),
         "required_split_count": sum(1 for item in boundaries if item["required"]),
         "reason_distribution": dict(sorted(reason_distribution.items())),
+        "stats": {
+            "caption_count": len(captions),
+            "group_count": len(groups),
+            "average_captions_per_group": round(len(captions) / len(groups), 3) if groups else 0.0,
+            "average_group_duration": round(sum(durations) / len(durations), 3) if durations else 0.0,
+            "longest_group_duration": round(max(durations), 3) if durations else 0.0,
+            "single_caption_group_count": sum(1 for group in groups if len(group.caption_ids) == 1),
+            "split_reason_distribution": dict(sorted(reason_distribution.items())),
+        },
         "groups": [group.to_dict() for group in groups],
         "boundaries": boundaries,
     }
@@ -541,7 +820,7 @@ def build_caption_grouping_from_project(
 
 
 def load_current_caption_grouping_document(root: str | Path) -> dict[str, Any]:
-    """Load the persisted, current v2 Caption Grouping audit for production.
+    """Load the persisted, current v3 Caption Grouping audit for production.
 
     Validate-only derivation is intentionally not a production fallback: the
     Director and Render gates need a persisted artifact whose complete ordered
@@ -566,8 +845,8 @@ def load_current_caption_grouping_document(root: str | Path) -> dict[str, Any]:
         persisted = json.loads(grouping_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise CaptionGroupingError(f"caption grouping audit is unreadable: {error}") from error
-    if not isinstance(persisted, Mapping) or persisted.get("schema_version") != "caption-grouping-audit.v2":
-        raise CaptionGroupingError("caption grouping audit must use current v2 schema")
+    if not isinstance(persisted, Mapping) or persisted.get("schema_version") != "caption-grouping-audit.v3":
+        raise CaptionGroupingError("caption grouping audit must use current v3 schema")
     release_id = str(bindings.get("release_id") or "unknown")
     if persisted.get("release_id") != release_id:
         raise CaptionGroupingError("caption grouping audit release does not match caption bindings")
@@ -619,14 +898,25 @@ def required_split_reasons(previous: CaptionUnit, following: CaptionUnit) -> tup
     """Return every *hard* reason the two captions may not share one image."""
 
     reasons: list[str] = []
-    if set(previous.characters) != set(following.characters):
-        reasons.append("character_change")
     if previous.location.strip() != following.location.strip():
         reasons.append("location_change")
     if previous.time_of_day.strip() != following.time_of_day.strip():
         reasons.append("time_change")
     if previous.narrative_function != following.narrative_function:
         reasons.append("narrative_function_change")
+    previous_cast = set(previous.characters)
+    following_cast = set(following.characters)
+    same_place_and_time = (
+        previous.location.strip() == following.location.strip()
+        and previous.time_of_day.strip() == following.time_of_day.strip()
+    )
+    if (
+        previous_cast
+        and following_cast
+        and not (previous_cast & following_cast)
+        and not same_place_and_time
+    ):
+        reasons.append("primary_subject_change")
     return tuple(reasons)
 
 
@@ -675,12 +965,26 @@ def group_captions(
             projected = following.end - min(item.start for item in current)
             if projected > max_group_duration + _EPSILON:
                 reasons.append("duration_limit")
+        current_incomplete = is_discourse_incomplete(" / ".join(item.text for item in current))
+        if current_incomplete:
+            if "narrative_function_change" not in reasons:
+                current.append(following)
+                continue
+            raise CaptionGroupingError(
+                f"incomplete caption group cannot be resolved: "
+                f"{[item.caption_id for item in current]!r} ends in an unfinished "
+                f"clause and the next caption crosses a hard boundary ({reasons})"
+            )
         if reasons:
             flush(current_reasons)
             current = [following]
             current_reasons = tuple(reasons)
         else:
             current.append(following)
+    if is_discourse_incomplete(" / ".join(item.text for item in current)):
+        raise CaptionGroupingError(
+            "final caption group is an unfinished dependent clause and cannot be completed"
+        )
     flush(current_reasons)
     return tuple(groups)
 
@@ -709,6 +1013,11 @@ def validate_caption_groups(
                     f"group {group.group_id} references unknown caption {caption_id}"
                 )
         members = [table[caption_id] for caption_id in group.caption_ids]
+        if is_discourse_incomplete(" / ".join(item.text for item in members)):
+            raise CaptionGroupingError(
+                f"group {group.group_id} ends in an unfinished dependent clause; "
+                "an incomplete caption cannot independently define an image"
+            )
         for previous, following in zip(members, members[1:]):
             reasons = required_split_reasons(previous, following)
             if reasons:
@@ -771,7 +1080,9 @@ __all__ = [
     "build_caption_grouping_audit_document",
     "build_caption_grouping_from_project",
     "derive_caption_image_groups",
+    "is_discourse_incomplete",
     "group_captions",
+    "is_incomplete_clause",
     "load_current_caption_grouping_document",
     "normalize_script_register",
     "required_split_reasons",

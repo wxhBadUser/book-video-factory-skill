@@ -112,6 +112,7 @@ def build_phase2_project(
         "老人与海",
         "欧内斯特·海明威",
         orientation=orientation,
+        visual_foundation_policy="legacy",
     )
     materialize_phase1_source(project)
     inputs = build_phase1_inputs()

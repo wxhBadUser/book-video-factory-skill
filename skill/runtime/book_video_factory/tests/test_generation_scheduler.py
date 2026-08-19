@@ -38,6 +38,7 @@ def _task(number: int, *, identity: list[str] | None = None, mode: str = "single
 
 def build_project(base: Path, *, registered: list[str] | None = None) -> Path:
     project = base / "warehouse/projects/pilot"
+    _write_json(project / "project.json", {"schema_version": "1.0", "workflow": {"visual_foundation_policy": "legacy"}})
     director = project / "05_director"
     director.mkdir(parents=True)
     tasks = [*[_task(index, mode="2x2") for index in range(1, 5)], _task(5, identity=["ANCHOR_MAIN"]), _task(6, identity=["ANCHOR_MAIN"]), _task(7)]

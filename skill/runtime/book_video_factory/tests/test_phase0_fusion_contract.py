@@ -61,23 +61,23 @@ class PhaseZeroFusionContractTests(unittest.TestCase):
         style = load_style_profile(DEFAULT_STYLE_PROFILE_ID)
         self.assertEqual(style.release_profile_id, "book-classic-narrator-hbg-16x9-v1")
 
-    def test_release_profile_uses_edge_vtt_and_hbg_renderers(self) -> None:
+    def test_release_profile_uses_minimax_provider_and_static_renderer(self) -> None:
         path = FACTORY / "config/release_profiles/book-classic-narrator-hbg-16x9-v1.json"
         profile = ReleaseProfile.load(path)
         self.assertEqual(profile.payload["script"]["contract"], "script.narrator-essay.v1")
-        self.assertEqual(profile.payload["audio"]["provider"], "edge-tts")
-        self.assertEqual(profile.payload["audio"]["timing_source"], "edge-vtt")
-        self.assertEqual(profile.payload["renderer"], "hbg-streaming-ffmpeg")
+        self.assertEqual(profile.payload["audio"]["provider"], "minimax")
+        self.assertEqual(profile.payload["audio"]["timing_source"], "provider")
+        self.assertEqual(profile.payload["renderer"], "static_streaming_ffmpeg")
         self.assertEqual(profile.payload["video"]["preview_renderer"], "hbg-hyperframes")
-        self.assertEqual(profile.payload["video"]["master_renderer"], "hbg-streaming-ffmpeg")
+        self.assertEqual(profile.payload["video"]["master_renderer"], "static_streaming_ffmpeg")
 
     def test_pipeline_contract_declares_single_state_authority(self) -> None:
         path = FACTORY / "config/pipelines/classic-narrator-hbg-v1.json"
         payload = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(payload["pipeline_id"], "classic-narrator-hbg-v1")
         self.assertEqual(payload["state_authority"], "workflow-gates-manifests")
-        self.assertEqual(payload["audio_provider"], "edge-tts")
-        self.assertEqual(payload["timing_source"], "edge-vtt")
+        self.assertEqual(payload["audio_provider"], "minimax")
+        self.assertEqual(payload["timing_source"], "provider")
         self.assertEqual(payload["production_engine"], "vendor/hbg-life-simulation")
 
     def test_rejected_product_files_are_physically_absent(self) -> None:

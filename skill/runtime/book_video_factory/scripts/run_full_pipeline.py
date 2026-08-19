@@ -13,7 +13,12 @@ def main()->int:
     verify=sub.add_parser("verify-repository"); verify.add_argument("--root",type=Path,default=Path.cwd())
     a=p.parse_args()
     if a.command in {"status","next"}:
-        try: payload=pipeline_status(a.project)
+        project = a.project.expanduser().resolve()
+        if not project.exists():
+            print(json.dumps({"status":"failed","error":f"project path does not exist: {project}"},ensure_ascii=False)); return 2
+        if not project.is_dir():
+            print(json.dumps({"status":"failed","error":f"project path is not a directory: {project}"},ensure_ascii=False)); return 2
+        try: payload=pipeline_status(project)
         except Exception as error:
             print(json.dumps({"status":"failed","error":str(error)},ensure_ascii=False)); return 2
         print(json.dumps(payload,ensure_ascii=False,indent=2)); return 0

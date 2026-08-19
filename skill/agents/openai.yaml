@@ -1,4 +1,4 @@
 interface:
   display_name: "名著单主播口播视频工厂"
-  short_description: "原著研究、金标准口播稿、Edge TTS/VTT 与 HBG 长视频生产"
-  default_prompt: "Use $book-video-factory to turn one approved classic book into a source-grounded Chinese single-narrator script, lock the script, build book-specific visual anchors, generate continuous Edge TTS and VTT, compile narration-bound dense storyboards and ImageGen tasks, then use the vendored HBG engine for the opening, captions, motion, fixed BGM, streaming FFmpeg render, and final encoded-MP4 review."
+  short_description: "原著研究、金标准口播稿、MiniMax/VTT 与 HBG 静态长视频生产"
+  default_prompt: "Use $book-video-factory to turn one approved classic book into a source-grounded Chinese single-narrator script, lock it, build book-specific visual anchors, generate MiniMax narration with provider timestamps and evidence (legacy Edge only for explicitly legacy projects), preserve fine caption semantics, then merge them into Scene Continuity Spans so each stable person-location-relationship scene receives one representative static image instead of action-by-action cuts. Compile one ImageGen task per span, then use the vendored HBG engine for captions, simple transitions, fixed BGM, static_streaming_ffmpeg render, and final encoded-MP4 review."

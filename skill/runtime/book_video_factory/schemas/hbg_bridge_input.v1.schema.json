@@ -84,7 +84,7 @@
       ],
       "properties": {
         "provider": {
-          "const": "edge-tts"
+          "const": "minimax"
         },
         "voice": {
           "type": "string",

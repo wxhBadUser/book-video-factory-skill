@@ -122,6 +122,69 @@ class DirectorTaskSemanticBindingTests(unittest.TestCase):
             prompt.index("literary cinematic realism"),
         )
 
+    def test_scene_continuity_actions_are_explicitly_narration_only(self) -> None:
+        contract = CaptionVisualContract.from_mapping({
+            "caption_id": "c1",
+            "caption_text": CAPTIONS["c1"]["text"],
+            "caption_text_sha256": hashlib.sha256(CAPTIONS["c1"]["text"].encode("utf-8")).hexdigest(),
+            "section_id": "S01",
+            "source_beat_ids": ["B-001"],
+            "narrative_function": "plot",
+            "subjects": ["福贵"],
+            "actions": ["行走"],
+            "location": "田埂",
+            "time_context": "白天",
+            "story_objects": ["老牛"],
+            "scene_state": {
+                "visible_character_ids": ["C001"],
+                "location_id": "田埂",
+                "time_context": "白天",
+                "action_state": "行走",
+                "continuity_state": {},
+                "action_semantics": {
+                    "action_key": "walk",
+                    "incompatible_action_keys": [],
+                    "hard_split_event": "none",
+                    "event_instance_id": "sequence:S01",
+                    "source_evidence": {"beat": {"beat_id": "B-001"}, "caption": {"caption_id": "c1"}},
+                },
+            },
+            "must_show": [{
+                "entity_id": "C001",
+                "natural_language": "福贵",
+                "reason": "caption_named_entity",
+                "evidence": {"text_evidence": "福贵"}
+            }],
+            "may_show": [],
+            "must_not_show_as_primary": [],
+            "visual_focus": "福贵与老牛",
+            "visual_mode": "literal",
+            "visual_state": "generic_scene",
+            "presence_mode": "current",
+            "semantic_signature": "x",
+            "visual_event_state": None,
+            "expected_visible_character_ids": ["C001"],
+            "expected_narrative_character_count": 1,
+            "allow_unlisted_narrative_characters": False,
+        })
+        task = _task_for_scene(
+            scene(),
+            PROFILE,
+            VISUAL_ASSETS,
+            CAPTIONS,
+            CANVAS,
+            caption_group={
+                **current_group(contract),
+                "representative_visual_core": "福贵在田埂上与老牛同行",
+                "narration_only_actions": ["摸脸", "回头"],
+            },
+            caption_contracts={"c1": contract},
+        )
+
+        self.assertIn("福贵在田埂上与老牛同行", task["prompt"])
+        self.assertIn("do not need literal simultaneous depiction", task["prompt"])
+        self.assertIn("Do not create an impossible multi-moment composite", task["prompt"])
+
     def test_task_carries_a_visual_proposition(self) -> None:
         task = self.build()
         proposition = task["visual_proposition"]
@@ -226,7 +289,13 @@ class DirectorTaskSemanticBindingTests(unittest.TestCase):
         self.assertIn("author_background", task["prompt"])
 
     def test_theory_contract_drops_beat_person_from_task_subject_inputs(self) -> None:
-        """A Beat-only person cannot bypass an abstract Caption Visual Contract."""
+        """A Beat-only person cannot bypass a symbolic Caption Visual Contract.
+
+        Pilot R2 (FIX 2): a theory caption with no concrete referent must carry
+        an approved concept-specific symbolic mapping; a generic Abstract
+        atmosphere shot is rejected. With the approved mapping the proposition
+        becomes Symbolic and the Beat-only person stays out of the frame.
+        """
         text = "这本书真正可怕的地方，是命运对好人反复的碾压。"
         contract = CaptionVisualContract(
             caption_id="c3",
@@ -244,6 +313,17 @@ class DirectorTaskSemanticBindingTests(unittest.TestCase):
             },
             visual_mode="symbolic_or_abstract",
         )
+        profile = {
+            **PROFILE,
+            "symbolic_mappings": [
+                {
+                    "mapping_id": "SYM_FATE_TEST",
+                    "status": "approved",
+                    "source_concept": "命运对好人反复的碾压",
+                    "surrogate_object": "旧照片与空椅",
+                }
+            ],
+        }
         task = _task_for_scene(
             scene(
                 captionIds=["c3"],
@@ -251,16 +331,50 @@ class DirectorTaskSemanticBindingTests(unittest.TestCase):
                 requiredEntities=["福贵"],
                 narrativeFunction="theory",
             ),
-            PROFILE,
+            profile,
             VISUAL_ASSETS,
             {"c3": {"text": text}},
             CANVAS,
             caption_contracts={"c3": contract},
             caption_group=current_group(contract),
+            known_symbol_registry=("旧照片与空椅",),
         )
         self.assertEqual(task["required_entities"], [])
-        self.assertEqual(task["visual_proposition"]["mode"], "Abstract")
+        self.assertEqual(task["visual_proposition"]["mode"], "Symbolic")
         self.assertNotIn("福贵", task["prompt"])
+
+    def test_theory_contract_without_mapping_fails_closed(self) -> None:
+        """Pilot R2 (FIX 2): no approved mapping -> fail closed, never a mood shot."""
+        text = "这本书真正可怕的地方，是命运对好人反复的碾压。"
+        contract = CaptionVisualContract(
+            caption_id="c3",
+            caption_text=text,
+            caption_text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            section_id="S1",
+            source_beat_ids=("B-001",),
+            narrative_function="theory",
+            scene_state={
+                "visible_character_ids": [],
+                "location_id": "",
+                "time_context": "",
+                "action_state": text,
+                "continuity_state": {"pronoun_resolutions": []},
+            },
+            visual_mode="symbolic_or_abstract",
+        )
+        with self.assertRaisesRegex(DirectorStageError, "symbolic mapping"):
+            _task_for_scene(
+                scene(
+                    captionIds=["c3"],
+                    narrativeFunction="theory",
+                ),
+                PROFILE,
+                VISUAL_ASSETS,
+                {"c3": {"text": text}},
+                CANVAS,
+                caption_contracts={"c3": contract},
+                caption_group=current_group(contract),
+            )
 
     def test_local_role_contract_removes_unrelated_beat_identity_anchor(self) -> None:
         """A local wife role cannot pull C003 into a literal frame's identity prompt."""
@@ -422,6 +536,7 @@ _TYPE_MAP: dict[str, tuple[type, ...]] = {
     "boolean": (bool,),
     "number": (int, float),
     "integer": (int,),
+    "null": (type(None),),
 }
 
 
@@ -437,9 +552,14 @@ def validate_against_schema(value: Any, schema: dict, path: str = "$") -> list[s
     errors: list[str] = []
     expected_type = schema.get("type")
     if expected_type is not None:
-        allowed = _TYPE_MAP[expected_type]
+        allowed = (
+            _TYPE_MAP[expected_type]
+            if isinstance(expected_type, str)
+            else tuple(sum((_TYPE_MAP[item] for item in expected_type), ()))
+        )
         ok = isinstance(value, allowed)
-        if expected_type in {"number", "integer"} and isinstance(value, bool):
+        expected_types = {expected_type} if isinstance(expected_type, str) else set(expected_type)
+        if expected_types & {"number", "integer"} and isinstance(value, bool):
             ok = False
         if not ok:
             errors.append(f"{path}: expected {expected_type}, got {type(value).__name__}")

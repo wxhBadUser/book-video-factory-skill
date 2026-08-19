@@ -6,7 +6,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
+def _repository_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "scripts/verify_vfinal_architecture.py").is_file():
+            return parent
+    raise AssertionError("repository root was not found")
+
+
+REPO = _repository_root()
 SCANNER = REPO / "scripts/verify_phase4_audio_stage.py"
 
 

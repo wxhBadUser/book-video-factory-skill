@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Audio Generation Evidence v1",
+  "description": "M4A MiniMax narration evidence: per-chunk audio SHA + provider sentence timestamps, the 48k mono master, and the provider VTT. timing_source must be provider for expressive production.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_id",
+    "variant",
+    "voice_id",
+    "model",
+    "timing_source",
+    "chunks",
+    "master",
+    "provider_vtt"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "audio-generation-evidence.v1"
+    },
+    "release_id": {
+      "type": "string"
+    },
+    "variant": {
+      "type": "string"
+    },
+    "voice_id": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "timing_source": {
+      "type": "string",
+      "enum": [
+        "provider",
+        "edge_vtt"
+      ]
+    },
+    "chunks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "chunk_id",
+          "provider",
+          "model",
+          "voice_id",
+          "audio_path",
+          "audio_sha256",
+          "duration",
+          "trace_id",
+          "request_digest",
+          "subtitle_timestamps",
+          "subtitle_granularity"
+        ],
+        "properties": {
+          "chunk_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "voice_id": {
+            "type": "string"
+          },
+          "audio_path": {
+            "type": "string"
+          },
+          "audio_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "duration": {
+            "type": "number",
+            "minimum": 0.0
+          },
+          "trace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "subtitle_timestamps": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "index",
+                "start",
+                "end",
+                "text"
+              ],
+              "properties": {
+                "index": {
+                  "type": "integer"
+                },
+                "start": {
+                  "type": "number",
+                  "minimum": 0.0
+                },
+                "end": {
+                  "type": "number",
+                  "minimum": 0.0
+                },
+                "text": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "subtitle_granularity": {
+            "type": "string",
+            "enum": [
+              "word",
+              "sentence"
+            ]
+          }
+        }
+      }
+    },
+    "master": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "duration",
+        "sample_rate",
+        "channels",
+        "sample_width"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "duration": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "sample_rate": {
+          "type": "integer"
+        },
+        "channels": {
+          "type": "integer"
+        },
+        "sample_width": {
+          "type": "integer"
+        }
+      }
+    },
+    "provider_vtt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

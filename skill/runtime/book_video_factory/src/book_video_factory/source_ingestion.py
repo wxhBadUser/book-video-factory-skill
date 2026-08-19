@@ -21,7 +21,7 @@ SUMMARY_MAX_CHARS = 800  # 简介阈值：少于 800 字符且无章节结构 �
 RIGHTS_INDICATORS = (
     ("txt80.cc", re.compile(r"txt80\.cc", re.IGNORECASE)),
     ("txt80", re.compile(r"txt80", re.IGNORECASE)),
-    ("source_disclaimer", re.compile(r"来源声明|转载|免责|仅供个人学习|网络收集", re.IGNORECASE)),
+    ("source_disclaimer", re.compile(r"来源声明|转载|免责声明|免责条款|免责：|免责:|仅供个人学习|网络收集", re.IGNORECASE)),
 )
 
 

@@ -76,7 +76,7 @@ def _beats() -> list[dict]:
         "id": "s001", "beatId": "B001", "chapter": 1, "cue": "第一段",
         "description": "老人离港", "requiredEntities": ["老人"],
         "forbiddenEntities": [], "riskFlags": [], "generationMode": "2x2",
-        "anchorRefs": [], "participants": {"count": 0, "allowed": []}, "motion": "static",
+        "anchorRefs": [], "participants": {"count": 0, "allowed": []}, "motion": "hold",
     }]
 
 
@@ -86,7 +86,7 @@ def _shot(shot_id: str, caption_ids: list[str], cue: str) -> dict:
         "caption_ids": caption_ids, "description": f"{shot_id}画面",
         "required_entities": ["老人"], "forbidden_entities": [], "risk_flags": [],
         "generation_mode": "2x2", "anchor_refs": [],
-        "participants": {"count": 0, "allowed": []}, "motion": "zoom-in",
+        "participants": {"count": 0, "allowed": []}, "motion": "hold",
         "visual_load": "ordinary", "intentional_hold": False, "hold_reason": "",
         "semantic_rationale": "字幕与画面共享当前场景", "nonverbal_window": None,
     }

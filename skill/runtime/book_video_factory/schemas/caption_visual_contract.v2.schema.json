@@ -42,7 +42,34 @@
         "must_show": {"type": "array", "items": {"$ref": "#/$defs/entity"}},
         "may_show": {"type": "array", "items": {"$ref": "#/$defs/entity"}},
         "must_not_show_as_primary": {"type": "array", "items": {"$ref": "#/$defs/entity"}},
-        "semantic_signature": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        "semantic_signature": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "visual_event_state": {
+          "type": ["object", "null"],
+          "properties": {
+            "action_predicate": {"type": "string"},
+            "cause_type": {"type": "string"},
+            "is_reference_death": {"type": "boolean"},
+            "actors": {"type": "array", "items": {"type": "string"}},
+            "participant_roles": {"type": "array", "items": {"type": "string"}},
+            "objects": {"type": "array", "items": {"type": "string"}},
+            "subject_state": {"type": "string"},
+            "required_observable_evidence": {"type": "array", "items": {"type": "string"}},
+            "forbidden_contradictory_state": {"type": "array", "items": {"type": "string"}}
+          },
+          "required": ["action_predicate", "cause_type", "is_reference_death", "actors", "participant_roles", "objects", "subject_state", "required_observable_evidence", "forbidden_contradictory_state"],
+          "additionalProperties": false
+        },
+        "expected_visible_character_ids": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "expected_narrative_character_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "allow_unlisted_narrative_characters": {
+          "type": "boolean"
+        }
       }
     }
   }

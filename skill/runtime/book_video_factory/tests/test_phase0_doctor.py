@@ -10,7 +10,19 @@ import unittest
 from pathlib import Path
 
 FACTORY = Path(__file__).resolve().parents[1]
-REPO = FACTORY.parent
+
+
+def _repository_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "scripts/verify_vfinal_architecture.py").is_file():
+            return parent
+    raise AssertionError("repository root was not found")
+
+
+# ``FACTORY`` is the canonical runtime at
+# ``skill/runtime/book_video_factory``; the immutable HBG vendor lives at the
+# repository root, not beside the runtime mirror.
+REPO = _repository_root()
 DOCTOR_PATH = FACTORY / "scripts/doctor.py"
 
 
@@ -67,8 +79,12 @@ class PhaseZeroDoctorTests(unittest.TestCase):
         )
         payload = json.loads(completed.stdout)
         checks = {check["name"]: check for check in payload["checks"]}
-        for name in ("node", "npx", "ffmpeg", "ffprobe", "edge-tts", "hbg_vendor_lock", "phase4_audio_cli"):
+        for name in (
+            "node", "npx", "ffmpeg", "ffprobe", "edge-tts",
+            "python_module:jsonschema", "hbg_vendor_lock", "phase4_audio_cli",
+        ):
             self.assertIn(name, checks)
+        self.assertEqual(checks["python_module:jsonschema"]["status"], "ready")
         edge = checks["edge-tts"]
         self.assertIn(edge["status"], {"ready", "blocked"})
         self.assertIn("continuous narration", edge["note"].lower())

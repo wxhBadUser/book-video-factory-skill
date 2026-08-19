@@ -71,7 +71,7 @@ def _beats() -> list[dict]:
         "id": "s001", "beatId": "B001", "chapter": 1, "cue": "第一段",
         "description": "老人离港", "requiredEntities": ["老人"],
         "forbiddenEntities": [], "riskFlags": [], "generationMode": "2x2",
-        "anchorRefs": [], "participants": {"count": 0, "allowed": []}, "motion": "static",
+        "anchorRefs": [], "participants": {"count": 0, "allowed": []}, "motion": "hold",
     }]
 
 
@@ -89,7 +89,7 @@ def _shot(shot_id: str, caption_ids: list[str], cue: str) -> dict:
         "generation_mode": "2x2",
         "anchor_refs": [],
         "participants": {"count": 0, "allowed": []},
-        "motion": "zoom-in",
+        "motion": "hold",
         "visual_load": "ordinary",
         "intentional_hold": False,
         "hold_reason": "",

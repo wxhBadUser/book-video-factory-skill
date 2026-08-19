@@ -24,5 +24,21 @@
     "body_gap",
     "body_mode",
     "bindings"
-  ]
+  ],
+  "properties": {
+    "provider": {
+      "type": "string",
+      "enum": [
+        "edge-tts",
+        "minimax"
+      ]
+    },
+    "provider_policy": {
+      "type": "string",
+      "enum": [
+        "legacy_edge",
+        "minimax_required"
+      ]
+    }
+  }
 }

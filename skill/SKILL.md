@@ -1,6 +1,6 @@
-﻿---
+---
 name: book-video-factory
-description: Use when turning one classic book into an auditable Chinese single-narrator long video with source-grounded research, a locked script.narrator-essay.v1 manuscript, ImageGen literary frames, continuous Edge TTS and VTT, narration-bound dense storyboards, HBG opening and motion, fixed BGM, streaming FFmpeg rendering, and final encoded-MP4 review.
+description: Use when turning one classic book into an auditable Chinese single-narrator long video with source-grounded research, a locked script.narrator-essay.v1 manuscript, MiniMax provider-timed narration (legacy Edge compatibility only), scene-continuity-first static image planning, ImageGen literary frames, HBG static finishing, and final encoded-MP4 review.
 ---
 
 # 名著单主播口播视频工厂
@@ -19,11 +19,13 @@ description: Use when turning one classic book into an auditable Chinese single-
 
 - Pipeline：`classic-narrator-hbg-v1`
 - Script：`script.narrator-essay.v1`
-- Audio：连续 Edge TTS + VTT
+- Audio：默认 MiniMax + provider VTT；`legacy_edge` 仅兼容旧项目
 - Image：宿主 ImageGen，普通任务可用 2×2，高风险任务必须单图
 - Preview：HBG HyperFrames
-- Master：HBG 流式 FFmpeg
+- Master：HBG `static_streaming_ffmpeg`（旧 `streaming_ffmpeg` 仅兼容）
 - State：现有 `workflow.py + gates.py + manifests.py`
+
+任何视觉生产还必须遵守 `references/scene-consistency-contract.md`：时代、地域、地点锚点、人物身份/人生阶段、关系、关键道具和事件容器必须从同一 Scene Signature 连续传递到任务、参考图、像素审查和静态渲染。不得以“风格相近”替代事实一致。
 
 ## 第一次使用
 
@@ -78,7 +80,7 @@ python3 <SKILL_ROOT>/scripts/bootstrap_workspace.py \
 
 过程资产（新增，供追溯与复跑）：拆解文档、三路线文档、三稿过程稿、对抗审查报告、引语核验结果、人工审核清单（存 `docs/methodology/` 与 `docs/reference_cases/`）。《活着》完整样例见 `docs/methodology/` 与 `docs/reference_cases/全文到口播拆解/07_活着_全文到口播拆解.md`。
 
-`SCRIPT_RELEASE.md` 必须零工程标签，可直接进入 Edge TTS。不得复制参考创作者的固定话术、比喻、口头禅或声音身份。
+`SCRIPT_RELEASE.md` 必须零工程标签，可直接进入正式旁白 provider。不得复制参考创作者的固定话术、比喻、口头禅或声音身份。
 ### 3. 正式内容包验证与编译
 
 先阅读 `references/content-brain.md`。Agent 生成研究、路线、锚点、事件卡和三版稿后，不得直接进入配音。先运行：
@@ -93,7 +95,7 @@ python3 <WORKSPACE>/book_video_factory/scripts/build_content_package.py \
 
 验证通过后去掉 `--validate-only` 正式编译。正式包必须包含 `SCRIPT_RELEASE.md`、`SCRIPT_AUDIT.md`、`SCRIPT_LOCK.json` 和 `CONTENT_PACKAGE_MANIFEST.json`。Level C、未解析来源、虚构 source ID、`derived candidate`、`待定`、TODO 或其他 placeholder 内容必须阻断。
 
-Phase 1 只生成正式内容包，**不得生成音频、图片或视频**。Phase 2 只负责把已批准内容包编译为 HBG 原生项目制品；Edge TTS、VTT 和后续媒体生产必须等到主角锚点生成并批准后的后续阶段。
+Phase 1 只生成正式内容包，**不得生成音频、图片或视频**。Phase 2 只负责把已批准内容包编译为 HBG 原生项目制品；旁白 provider、VTT 和后续媒体生产必须等到主角锚点生成并批准后的后续阶段。
 
 ### 4. 脚本批准与冻结
 
@@ -128,7 +130,7 @@ Phase 2 输出 HBG 原生根制品：
 
 Bridge 必须逐项验证 Phase 1 内容包、阶段 Manifest、脚本锁、发布稿、人工批准和 HBG Vendor Hash。`SCRIPT_SOURCE.md` 必须与冻结发布稿逐字节一致；`SCRIPT.md` 只能增加章节标题；语义分镜必须由内容 Agent 提供，Bridge 不补写画面。相同输入可幂等重跑，输入变化或用户修改过的输出必须拒绝覆盖。
 
-**Phase 2 不生成音频、图片或视频。** 不得在本阶段调用 Edge TTS、ImageGen、HyperFrames 或 FFmpeg。
+**Phase 2 不生成音频、图片或视频。** 不得在本阶段调用旁白 provider、ImageGen、HyperFrames 或 FFmpeg。
 
 ### 6. 名著视觉圣经、锚点与 12 张 LookDev
 
@@ -183,9 +185,9 @@ python3 <WORKSPACE>/book_video_factory/scripts/approve_visual_stage.py \
   --decision-file <VISUAL_REVIEW_DECISION.json>
 ```
 
-不得伪造 tool call ID、输出 Hash、图片文件或人工批准。参考图不得复制为生产资产。机器诊断不能替代语义、现实和审美批准。只有当前 `visual_anchor_lookdev` 批准有效时，才允许进入 Edge TTS。
+不得伪造 tool call ID、输出 Hash、图片文件或人工批准。参考图不得复制为生产资产。机器诊断不能替代语义、现实和审美批准。只有当前 `visual_anchor_lookdev` 批准有效时，才允许进入正式旁白。
 
-### 7. 连续 Edge TTS、VTT 与真实语音分镜
+### 7. MiniMax/Legacy Edge、Provider VTT 与真实语音分镜
 
 先阅读 `references/audio-stage.md`。Phase 4 使用两次正式调用：
 
@@ -193,10 +195,11 @@ python3 <WORKSPACE>/book_video_factory/scripts/approve_visual_stage.py \
 python3 <WORKSPACE>/book_video_factory/scripts/run_audio_stage.py generate \
   --project <PROJECT_DIR> \
   --input <PROJECT_DIR>/04_audio/AUDIO_STAGE_INPUT.json \
-  --lexicon <PROJECT_DIR>/04_audio/PRONUNCIATION_LEXICON.json
+  --lexicon <PROJECT_DIR>/04_audio/PRONUNCIATION_LEXICON.json \
+  --provider minimax
 ```
 
-Pass A 直接复用 HBG `build_narration.mjs`，生成一条连续正文 Edge TTS、原始 VTT、显示安全字幕和初步真实时间线。成功状态必须是 `awaiting_audio_storyboard_plan`。VTT 是唯一时间真源；不得使用估算时间轴。
+新项目 Pass A 使用 MiniMax、`VOICE_FOUNDATION.json`、真实 provider 时间戳与证据；明确 `legacy_edge` 的旧项目才复用 HBG `build_narration.mjs`。成功状态必须是 `awaiting_audio_storyboard_plan`。provider VTT 是时间真源；不得使用估算时间轴，MiniMax 失败不得回退 Edge。
 
 Codex 必须根据冻结稿、Phase 2 Beat、真实字幕时间和视觉锚点编写：
 
@@ -209,20 +212,31 @@ Codex 必须根据冻结稿、Phase 2 Beat、真实字幕时间和视觉锚点�
 ```bash
 python3 <WORKSPACE>/book_video_factory/scripts/run_audio_stage.py finalize \
   --project <PROJECT_DIR> \
-  --plan <PROJECT_DIR>/04_audio/STORYBOARD_AUDIO_PLAN.json
+  --plan <PROJECT_DIR>/04_audio/STORYBOARD_AUDIO_PLAN.json \
+  --provider minimax
 
 python3 <WORKSPACE>/book_video_factory/scripts/run_audio_stage.py status \
   --project <PROJECT_DIR> \
   --release-id <RELEASE_ID>
 ```
 
-Pass B 必须复用 Pass A 音频缓存，音频 Hash 不得改变。普通镜头目标 3.2–5.5 秒；超过 12 秒必须解释；超过 16 秒直接失败；zoom/pan 不能替代缺失画面。成功状态为 `ready_for_image_task_planning`。
+Pass B 必须复用 Pass A 音频缓存，音频 Hash 不得改变。字幕时间仍按真实语音细分，但图片跨度不得按秒数机械拆分；全书正式片中，同一连续场景即使超过 12 或 16 秒也允许保持一张静态代表图。小于 2 秒或超过 16 秒的图片跨度只进入人工关注，不单独判错。zoom/pan 不能替代缺失场景。45–90 秒视觉样片不适用“单场景单图即可”的解释：60 秒量级的内容全程同一画面会让观众出戏，必须按 `references/scene-consistency-contract.md` 的样片视觉密度契约规划多张同签名子镜；张数按叙事与不出戏需要来定（通常 4–6 张是参考范围，不是机械指标），且构建与批准两端硬校验至少 4 张场景图（75 秒 ≥5、90 秒 ≥6），单图视觉样片必须直接 BLOCK。成功状态为 `ready_for_image_task_planning`。
 
-不得伪造音频、不得伪造 VTT、不得在没有 Edge TTS 时返回成功、不得把发音辅助文本显示为字幕。**Phase 4 不生成图片、HyperFrames、FFmpeg 成片或最终 MP4。**
+不得伪造音频或 VTT；MiniMax 缺凭据/失败必须阻断；`legacy_edge` 不得在缺 Edge TTS 时成功；不得把发音辅助文本显示为字幕。**Phase 4 不生成图片、HyperFrames、FFmpeg 成片或最终 MP4。**
 
-### 8. 高密度语义分镜
+### 8. 场景连续性优先的语义分镜
+
+先阅读 `references/scene-consistency-contract.md`。每个 SCS 必须输出可审计的 Scene Signature：时代/历史材质、地域与地点锚点、连续时间、核心人物及角色、人生阶段、服装/帽子状态、事件容器、场景锚点道具、required/forbidden entities 和有序参考图任务。缺少适用字段或当前参考 Hash 时不得生成任务。
 
 最终 `STORYBOARD.json`、`CAPTION_BINDINGS.json` 和 `AUDIO_TIMELINE_AUDIT.json` 必须共同证明：同一个 Beat 同时绑定旁白、字幕、画面语义、required entities、forbidden entities、风险标记和真实镜头时间。
+
+Caption Group 只负责保存细粒度字幕语义和证据，不直接决定图片数量。Phase 4 结束后必须构建 `04_audio/SCENE_CONTINUITY_SPANS.json`；全书正式片静态图片单位是 Scene Continuity Span（SCS），一个 SCS 只能生成一个 `IMAGE_TASK`。45–90 秒样片包例外：在一个 SCS 内规划多张同签名子镜，保证明显视觉变化、避免 60 秒量级全程同一画面让观众出戏（见 `references/scene-consistency-contract.md` 样片边界）；张数参考 4–6 张，以叙事节奏和不出戏为准，不机械套数量。子镜仍属 sample-only，不构成全书 `scene_visual` 批准。
+
+先判断“当前代表画面是否仍能诚实覆盖这个连续场景”，再决定是否换图。地点、显著时间跳跃、人生阶段、叙事模式、独立场景身份或决定性状态矛盾才是硬切条件。动作谓词、姿势、哭喊、枪响、倒下、摸脸、精确次数、字幕换行和图片持续时间不得单独触发新图。同一事件的相邻阶段由旁白承载；画面只稳定交代人物、地点、关系和场景决定性道具。
+
+SCS 必须向前聚合整个跨度的人物。后一句才出现但属于同一现场的关系人物，应从该跨度的代表图开始就进入人物约束。每次增加图片前都必须回答：新图是否提供了新的场景信息？如果只是把同一场景里的另一个动作字面画出来，不得增加图片。
+
+正式 `IMAGE_TASK`、宿主 ImageGen 输入、资产登记、像素审查和最终静态时间线必须使用同一 Signature。任何跨时代/地域、错误人生阶段、错误人物角色、缺失场景锚点或未绑定的参考图都必须拒绝，不能用转场、旁白或“相似氛围”掩盖。
 
 ### 9. ImageGen、宫格和现实检查
 
@@ -241,15 +255,18 @@ bash vendor/hbg-life-simulation/scripts/split_2x2.sh ...
 bash vendor/hbg-life-simulation/scripts/make_contact_sheet.sh ...
 ```
 
-每项图片必须检查身份、时代、必需实体、禁止实体、手部、道具方向、支撑关系、文字、水印和当前字幕语义。机器色彩指标不能替代现实与审美审查。
+每项图片必须检查身份、时代、必需实体、禁止实体、手部、道具方向、支撑关系、文字、水印、伪文字、UI、四边黑边和当前字幕语义。原始图必须先保留在 `staging`；需要归一化时创建新文件，不得覆盖原件。机器色彩指标、视觉 MCP/模型描述和 Agent 目检都不能替代现实、语义与审美审查；候选失败时只重做失败任务，并保留拒绝原因。
 
 ### 10. “读名著”快闪开头
 
 复用 `vendor/hbg-life-simulation/references/opening-system.md` 的时间和运动机制，但使用原创书籍系列文案。标题和作者由 HTML 绘制，不让 ImageGen 生成文字。
 
-顺序固定：价值引导 → 命题快闪与齿轮音效 → 选中本期书名 → 完整揭晓 → 正文首图。
+顺序固定：价值引导 → 命题快闪与齿轮音效 → 选中本期书名 → 完整揭晓 → 正文首图。样片渲染必须启用该开场序列，正文首图不得从 0 秒直接开始；开场卡由 HTML 绘制，标题和作者不让 ImageGen 生成文字。
 
 ### 11. 组合、混音与渲染
+
+新项目 `07_render/RENDER_INPUT.json` 默认使用 `static_streaming_ffmpeg`；
+`streaming_ffmpeg` 只保留给明确的旧项目兼容。底层仍复用锁定的 HBG 流式脚本。
 
 预览：
 
@@ -288,17 +305,18 @@ bash vendor/hbg-life-simulation/scripts/verify_final_video.sh <OUTPUT.mp4> <QA_D
 
 ## 当前阶段边界
 
-Phase 1 完成正式内容包，Phase 2 完成 Book→HBG Bridge，Phase 3 完成视觉圣经、真实锚点与 LookDev 批准。Phase 4 完成连续 Edge TTS、VTT、显示字幕和真实语音驱动分镜；Phase 5 编译导演时间线和正式图片任务；Phase 6 完成正式场景资产与人工批准；Phase 7 复用 HBG 渲染并在编码 QA 后等待最终母版批准。
+Phase 1 完成正式内容包，Phase 2 完成 Book→HBG Bridge，Phase 3 完成视觉圣经、真实锚点与 LookDev 批准。Phase 4 完成 provider 旁白、VTT、显示字幕和真实语音驱动分镜；Phase 5 编译导演时间线和正式图片任务；Phase 6 完成正式场景资产与人工批准；Phase 7 默认复用 HBG 静态流式渲染并在编码 QA 后等待最终母版批准。
 
 ### 13. Phase 5：真实音频导演时间线
 
 Phase 4 返回 `ready_for_image_task_planning` 后运行：
 
 ```bash
+python3 <WORKSPACE>/book_video_factory/scripts/build_scene_continuity_spans.py --project <PROJECT_DIR>
 python3 <WORKSPACE>/book_video_factory/scripts/build_director_stage.py --project <PROJECT_DIR>
 ```
 
-必须生成 `DIRECTOR_TIMELINE.json`、`MOTION_MANIFEST.json`、`IMAGE_TASKS.jsonl`、`PROMPTS.md` 和 `SHEET_MAP.json`。时间只来自真实 Edge VTT；导演编译器不得生成音频、图片或视频。
+必须先生成当前、完整、上游 SHA-256 绑定的 `SCENE_CONTINUITY_SPANS.json`，再生成 `DIRECTOR_TIMELINE.json`、`MOTION_MANIFEST.json`、`IMAGE_TASKS.jsonl`、`PROMPTS.md` 和 `SHEET_MAP.json`。导演编译器必须验证 `image_task_count == span_count`，不得回退到“一 Caption Group 一图”。时间只来自当前 provider VTT（MiniMax 或明确 legacy Edge）；导演编译器不得生成音频、图片或视频。
 
 ### 14. Phase 6：正式场景图片
 

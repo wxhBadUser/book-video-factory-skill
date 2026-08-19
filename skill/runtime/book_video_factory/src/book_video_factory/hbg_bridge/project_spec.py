@@ -40,8 +40,8 @@ def build_project_spec(
     if author not in reveal:
         raise HbgProjectSpecError("book author is inconsistent with the approved reveal text")
     narration = bridge_input.get("narration")
-    if not isinstance(narration, Mapping) or narration.get("provider") != "edge-tts":
-        raise HbgProjectSpecError("the active bridge requires edge-tts narration")
+    if not isinstance(narration, Mapping) or narration.get("provider") not in {"edge-tts", "minimax"}:
+        raise HbgProjectSpecError("bridge narration provider must be edge-tts or minimax")
     brand = bridge_input.get("brand")
     if not isinstance(brand, Mapping):
         raise HbgProjectSpecError("brand configuration is required")
@@ -75,7 +75,7 @@ def build_project_spec(
             "chapters": chapters,
         },
         "narration": {
-            "provider": "edge-tts",
+            "provider": narration["provider"],
             "voice": narration["voice"],
             "bodyRate": narration["body_rate"],
             "leadRate": narration["lead_rate"],

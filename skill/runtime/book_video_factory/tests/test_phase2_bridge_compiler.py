@@ -57,7 +57,36 @@ class Phase2BridgeCompilerTests(unittest.TestCase):
             self.assertEqual(style["orientation"], "landscape")
             storyboard = json.loads((project / "STORYBOARD_BASE.json").read_text(encoding="utf-8"))
             self.assertEqual(storyboard[0]["chapterTitle"], "失败与再次出海")
-            self.assertIn("motion", storyboard[0])
+            self.assertEqual(storyboard[0]["motion"], "hold")
+            self.assertTrue(all(beat["motion"] == "hold" for beat in storyboard))
+
+    def test_bridge_rejects_vendor_injected_camera_motion(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            project, _, _, payload = build_phase2_project(base, approve=True)
+            path = self._input(base, payload)
+            original = (project / "STORYBOARD_BASE.json").read_bytes()
+
+            def inject_motion(project_dir: Path) -> None:
+                target = Path(project_dir) / "STORYBOARD_BASE.json"
+                beats = json.loads(target.read_text(encoding="utf-8"))
+                for beat in beats:
+                    beat["motion"] = "zoom-in"
+                target.write_text(
+                    json.dumps(beats, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+
+            with mock.patch(
+                "book_video_factory.hbg_bridge.compiler.validate_storyboard",
+                side_effect=inject_motion,
+            ):
+                with self.assertRaisesRegex(HbgBridgeCompileError, "motion must be 'hold'"):
+                    compile_hbg_bridge(project, path)
+            self.assertEqual((project / "STORYBOARD_BASE.json").read_bytes(), original)
+            self.assertFalse(
+                (project / "02_story_script_故事脚本/HBG_BRIDGE_MANIFEST.json").exists()
+            )
 
     def test_canonical_project_input_path_can_be_used_as_compiler_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

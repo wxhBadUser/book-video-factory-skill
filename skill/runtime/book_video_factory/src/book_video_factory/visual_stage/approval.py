@@ -10,6 +10,7 @@ from typing import Any
 
 from book_video_factory.gates import approval_is_current
 from book_video_factory.manifests import record_approval, sha256_file, utc_now
+from book_video_factory.style_profiles import StyleProfileError, project_workflow
 
 from .review import VisualReviewError, build_visual_review
 
@@ -166,6 +167,23 @@ def _pretty_bytes(value: dict[str, Any]) -> bytes:
     return (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)+"\n").encode("utf-8")
 
 
+def _narration_next_status(root: Path) -> str:
+    """Return the audio-stage status released by an approved visual stage."""
+
+    try:
+        workflow = project_workflow(root)
+    except (StyleProfileError, OSError, ValueError) as error:
+        raise VisualApprovalError(
+            f"project workflow is required to choose the narration provider: {error}"
+        ) from error
+    policy = workflow.get("narration_provider_policy", "legacy_edge")
+    if policy == "minimax_required":
+        return "ready_for_narration"
+    if policy == "legacy_edge":
+        return "ready_for_edge_tts"
+    raise VisualApprovalError(f"unsupported narration_provider_policy: {policy!r}")
+
+
 def approve_visual_stage(
     project: Path,
     *,
@@ -182,6 +200,7 @@ def approve_visual_stage(
     approval_path=root/_APPROVAL_RELATIVE
     if approval_path.exists():
         raise VisualApprovalError("refusing to overwrite a pre-existing visual approval")
+    narration_status = _narration_next_status(root)
     try:
         review_result=build_visual_review(root, verify_contact_render=True)
     except VisualReviewError as error:
@@ -211,7 +230,7 @@ def approve_visual_stage(
             reviewed_at=reviewed_at,
         )
         event=_load_json(event_path,"visual approval event")
-        next_status=("ready_for_edge_tts" if normalized["decision"]=="approved" else "blocked_by_visual_rejection")
+        next_status=(narration_status if normalized["decision"]=="approved" else "blocked_by_visual_rejection")
         payload={
             "schema_version":"visual-anchor-approval.v1",
             "release_id":release_id,
@@ -315,7 +334,7 @@ def verify_visual_approval(project: Path, release_id: str) -> VerifiedVisualAppr
     approved=decision=="approved"
     if approved and not approval_is_current(root,event):
         raise VisualApprovalError("visual approval event is not current")
-    expected_status="ready_for_edge_tts" if approved else "blocked_by_visual_rejection"
+    expected_status=_narration_next_status(root) if approved else "blocked_by_visual_rejection"
     if approval.get("next_stage_status")!=expected_status:
         raise VisualApprovalError("visual approval next stage status is invalid")
     return VerifiedVisualApproval(approved,decision,expected_status,approval_path,event_path,str(approval.get("reviewer","")))

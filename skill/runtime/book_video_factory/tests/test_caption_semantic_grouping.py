@@ -33,6 +33,7 @@ def _contract(
     caption_id: str,
     text: str,
     *,
+    section_id: str = "S001",
     action_state: str = "福贵低头坐在田埂上",
     visible_character_ids: tuple[str, ...] = ("C001",),
     location_id: str = "SCENE_FIELD",
@@ -52,7 +53,7 @@ def _contract(
         caption_id=caption_id,
         caption_text=text,
         caption_text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        section_id="S001",
+        section_id=section_id,
         source_beat_ids=source_beat_ids,
         narrative_function=narrative_function,
         scene_state={
@@ -117,11 +118,14 @@ def test_same_scene_captions_with_different_durations_share_one_image() -> None:
 @pytest.mark.parametrize(
     ("changed", "reason"),
     [
-        ({"visible_character_ids": ("C002",)}, "character_change"),
         ({"location_id": "SCENE_HOME"}, "location_change"),
         ({"time_context": "1960s winter night"}, "time_change"),
         ({"narrative_function": "theory"}, "narrative_function_change"),
         ({"visual_mode": "symbolic_or_abstract"}, "visual_mode_change"),
+        (
+            {"hard_split_event": "death", "event_instance_id": "beat:B002"},
+            "hard_split_event",
+        ),
     ],
 )
 def test_scene_semantic_change_requires_a_new_image(
@@ -137,6 +141,44 @@ def test_scene_semantic_change_requires_a_new_image(
 
     assert [group.caption_ids for group in groups] == [("caption-0001",), ("caption-0002",)]
     assert groups[1].split_from_previous == {"required": True, "reasons": [reason]}
+
+
+def test_same_place_event_cast_growth_is_compatible() -> None:
+    """Semantic Shot Group: family members arriving one by one share one image."""
+    first = _contract("caption-0001", "家珍在门口等着他。", must_show=(_entity("C003"),))
+    second = _contract("caption-0002", "凤霞也跑了出来。", must_show=(_entity("C004"),))
+    third = _contract("caption-0003", "有庆站在娘身边。", must_show=(_entity("C005"),))
+
+    groups = derive_caption_image_groups(
+        [
+            _caption("caption-0001", 0.0, 3.0),
+            _caption("caption-0002", 3.0, 6.0),
+            _caption("caption-0003", 6.0, 9.0),
+        ],
+        {first.caption_id: first, second.caption_id: second, third.caption_id: third},
+    )
+
+    assert len(groups) == 1
+    assert groups[0].caption_ids == ("caption-0001", "caption-0002", "caption-0003")
+
+
+def test_disjoint_cast_across_place_and_time_is_a_material_subject_change() -> None:
+    first = _contract("caption-0001", "福贵在田埂上。", must_show=(_entity("C001"),))
+    second = _contract(
+        "caption-0002",
+        "龙二在赌场里。",
+        location_id="SCENE_GAMBLING",
+        time_context="1950s winter night",
+        must_show=(_entity("C006"),),
+    )
+
+    groups = derive_caption_image_groups(
+        [_caption("caption-0001", 0.0, 3.0), _caption("caption-0002", 3.0, 6.0)],
+        {first.caption_id: first, second.caption_id: second},
+    )
+
+    assert [group.caption_ids for group in groups] == [("caption-0001",), ("caption-0002",)]
+    assert "primary_subject_change" in groups[1].split_from_previous["reasons"]
 
 
 def test_must_show_and_primary_prohibition_conflict_requires_a_new_image() -> None:
@@ -263,12 +305,13 @@ def test_multiple_captions_for_the_same_hard_event_instance_may_merge() -> None:
     assert [group.caption_ids for group in groups] == [("caption-0001", "caption-0002")]
 
 
-def test_different_hard_event_instances_require_a_split() -> None:
+def test_different_event_phases_require_a_split() -> None:
     first = _contract(
         "caption-0001", "Same event class.", action_key="death_event", hard_split_event="death", event_instance_id="death:father"
     )
     second = _contract(
-        "caption-0002", "Same event class.", action_key="death_event", hard_split_event="death", event_instance_id="death:mother"
+        "caption-0002", "Same event class.", section_id="S002",
+        action_key="death_event", hard_split_event="death", event_instance_id="death:mother"
     )
 
     groups = derive_caption_image_groups(
@@ -316,9 +359,9 @@ def test_duration_limit_splits_same_scene_without_honoring_a_merge_hint() -> Non
 
     groups = derive_caption_image_groups(
         [
-            _caption("caption-0001", 0.0, 7.0),
-            _caption("caption-0002", 7.0, 14.0),
-            {**_caption("caption-0003", 14.0, 21.0), "grouping_hint": "merge"},
+            _caption("caption-0001", 0.0, 11.0),
+            _caption("caption-0002", 11.0, 22.0),
+            {**_caption("caption-0003", 22.0, 33.0), "grouping_hint": "merge"},
         ],
         contracts,
     )
@@ -327,8 +370,8 @@ def test_duration_limit_splits_same_scene_without_honoring_a_merge_hint() -> Non
         ("caption-0001", "caption-0002"),
         ("caption-0003",),
     ]
-    assert groups[0].duration == 14.0
-    assert groups[1].duration == 7.0
+    assert groups[0].duration == 22.0
+    assert groups[1].duration == 11.0
     assert groups[1].scene_state_signature == groups[0].scene_state_signature
     assert groups[1].split_from_previous == {"required": True, "reasons": ["duration_limit"]}
     assert [caption_id for group in groups for caption_id in group.caption_ids] == [
@@ -353,13 +396,15 @@ def test_boundary_audit_records_every_merge_or_required_split_from_contracts() -
         contracts={first.caption_id: first, second.caption_id: second, third.caption_id: third},
     )
 
-    assert document["schema_version"] == "caption-grouping-audit.v2"
+    assert document["schema_version"] == "caption-grouping-audit.v3"
     assert document["caption_count"] == 3
+    assert document["group_count"] == 2
     assert document["boundary_count"] == 2
     assert document["merge_count"] == 1
     assert document["split_count"] == 1
     assert document["required_split_count"] == 1
     assert document["reason_distribution"] == {"location_change": 1}
+    assert document["stats"]["average_captions_per_group"] == 1.5
     assert document["boundaries"] == [
         {
             "previous_caption_id": "caption-0001",

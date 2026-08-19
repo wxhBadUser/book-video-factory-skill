@@ -39,7 +39,7 @@ class ReleaseProfileTests(unittest.TestCase):
         profile = ReleaseProfile.load(PROFILE_PATH)
         style = load_style_profile(STYLE_ID)
         self.assertEqual(profile.profile_id, PROFILE_ID)
-        self.assertEqual(profile.renderer, "hbg-streaming-ffmpeg")
+        self.assertEqual(profile.renderer, "static_streaming_ffmpeg")
         self.assertEqual(style.release_profile_id, PROFILE_ID)
         self.assertEqual(style.resolve_generation_lane(None), "host-imagegen")
 
@@ -146,6 +146,7 @@ class GateTests(unittest.TestCase):
             self.assertEqual(workflow["style_profile_id"], STYLE_ID)
             self.assertEqual(workflow["release_profile_id"], PROFILE_ID)
             self.assertEqual(workflow["generation_lane"], "host-imagegen")
+            self.assertEqual(workflow["narration_provider_policy"], "minimax_required")
             result = evaluate_workflow_state(project, ReleaseProfile.load(PROFILE_PATH))
             self.assertEqual(result["derived_state"], "draft")
             self.assertTrue(result["release_profile_aligned"])

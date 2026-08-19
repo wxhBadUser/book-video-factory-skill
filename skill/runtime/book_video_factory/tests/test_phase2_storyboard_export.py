@@ -44,7 +44,7 @@ class Phase2StoryboardExportTests(unittest.TestCase):
         self.assertEqual(first["chapter"], 1)
         self.assertEqual(first["generationMode"], "2x2")
         self.assertEqual(first["participants"], {"count": 1, "allowed": ["C001"]})
-        self.assertNotIn("motion", first)
+        self.assertEqual(first["motion"], "hold")
 
     def test_high_risk_flag_requires_single_even_if_contract_bypassed(self) -> None:
         bridge = deepcopy(self.bridge)
@@ -76,6 +76,7 @@ class Phase2StoryboardExportTests(unittest.TestCase):
             normalized = json.loads((project / "STORYBOARD_BASE.json").read_text(encoding="utf-8"))
             self.assertEqual(normalized[0]["beatId"], "B001")
             self.assertEqual(normalized[0]["chapterTitle"], "失败与再次出海")
+            self.assertTrue(all(beat["motion"] == "hold" for beat in normalized))
 
 
 if __name__ == "__main__":

@@ -121,6 +121,15 @@ def build_phase3_input(*, bridge_digest: str = "b" * 64, release_text_sha256: st
             "prompt_subject": "磨损严重、结构可信的古巴小木渔船与粗麻绳",
             "invariants": ["旧木结构", "尺寸适合单人捕鱼", "无发动机豪华装置"],
         }],
+        "symbolic_mappings": [
+            {
+                "mapping_id": "FIX_THEORY_V1",
+                "status": "approved",
+                "source_concept": "而是",
+                "surrogate_object": "空船与马林鱼骨架",
+                "rationale": "fixture theory concept shared by both theory sections.",
+            },
+        ],
         "lookdev_tasks": tasks,
     }
 

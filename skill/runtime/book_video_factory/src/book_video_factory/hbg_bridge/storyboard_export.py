@@ -95,6 +95,7 @@ def export_storyboard_base(
             "anchorRefs": list(anchors),
             "participants": {"count": participants.get("count"), "allowed": list(participants.get("allowed", []))},
             "highRisk": bool(_HIGH_RISK.intersection(risks)),
+            "motion": "hold",
             "asset": f"assets/generated/scenes/s{index:03d}.png",
         })
     return result

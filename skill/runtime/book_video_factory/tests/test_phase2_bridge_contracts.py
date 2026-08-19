@@ -47,11 +47,21 @@ class Phase2BridgeContractTests(unittest.TestCase):
         with self.assertRaisesRegex(HbgBridgeContractError, "release text"):
             self.validate(payload)
 
-    def test_non_edge_provider_fails(self) -> None:
+    def test_unknown_narration_provider_fails(self) -> None:
         payload = build_bridge_input(package_digest=self.package_digest)
         payload["narration"]["provider"] = "other-tts"
-        with self.assertRaisesRegex(HbgBridgeContractError, "edge-tts"):
+        with self.assertRaisesRegex(HbgBridgeContractError, "edge-tts or minimax"):
             self.validate(payload)
+
+    def test_minimax_provider_passes_without_relabeling_it_as_edge(self) -> None:
+        payload = build_bridge_input(package_digest=self.package_digest)
+        payload["narration"]["provider"] = "minimax"
+        payload["narration"]["voice"] = "Chinese (Mandarin)_Male_Announcer"
+
+        result = self.validate(payload)
+
+        self.assertEqual(result["narration"]["provider"], "minimax")
+        self.assertEqual(result["narration"]["voice"], "Chinese (Mandarin)_Male_Announcer")
 
     def test_duplicate_chapter_id_fails(self) -> None:
         payload = build_bridge_input(package_digest=self.package_digest)

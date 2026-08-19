@@ -2,7 +2,14 @@ from __future__ import annotations
 import importlib.util,tempfile,unittest
 from pathlib import Path
 
-ROOT=Path(__file__).resolve().parents[2]
+def _repository_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "scripts/verify_vfinal_architecture.py").is_file():
+            return parent
+    raise AssertionError("repository root was not found")
+
+
+ROOT=_repository_root()
 spec=importlib.util.spec_from_file_location("scanner",ROOT/"scripts/verify_vfinal_architecture.py"); scanner=importlib.util.module_from_spec(spec); assert spec and spec.loader; spec.loader.exec_module(scanner)
 
 class VFinalArchitectureScannerTests(unittest.TestCase):

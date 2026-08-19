@@ -25,7 +25,14 @@ except ImportError:
     audio_stage_status = None  # type: ignore
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+def _repository_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "scripts/verify_vfinal_architecture.py").is_file():
+            return parent
+    raise AssertionError("repository root was not found")
+
+
+REPO_ROOT = _repository_root()
 CLI = REPO_ROOT / "book_video_factory/scripts/run_audio_stage.py"
 RUNTIME_CLI = REPO_ROOT / "skill/runtime/book_video_factory/scripts/run_audio_stage.py"
 
@@ -36,6 +43,14 @@ class Phase4CliTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         for command in ("generate", "finalize", "status"):
             self.assertIn(command, completed.stdout)
+
+        for command in ("generate", "finalize"):
+            command_help = subprocess.run(
+                [sys.executable, str(CLI), command, "--help"],
+                cwd=REPO_ROOT, capture_output=True, text=True,
+            )
+            self.assertEqual(command_help.returncode, 0, command_help.stderr)
+            self.assertIn("--provider", command_help.stdout)
 
 
     def test_source_and_bundled_runtime_cli_have_matching_help(self) -> None:
@@ -70,8 +85,9 @@ class Phase4CliTests(unittest.TestCase):
         self.assertIsNotNone(audio_stage_status)
         with tempfile.TemporaryDirectory() as temp:
             project = build_approved_phase3_project(Path(temp))
-            self.assertEqual(audio_stage_status(project, "r1"), "ready_for_edge_tts")
+            self.assertEqual(audio_stage_status(project, "r1"), "blocked_by_missing_audio_stage_input")
             input_path, lexicon_path = write_phase4_inputs(project)
+            self.assertEqual(audio_stage_status(project, "r1"), "ready_for_edge_tts")
             generate_audio_stage(project, input_path, lexicon_path, runner=fake_hbg_audio_runner)
             self.assertEqual(audio_stage_status(project, "r1"), "awaiting_audio_storyboard_plan")
             plan_path = project / "04_audio/STORYBOARD_AUDIO_PLAN.json"
@@ -121,7 +137,8 @@ class Phase4CliTests(unittest.TestCase):
             env["BOOK_VIDEO_FACTORY_FORCE_MISSING_EDGE_TTS"] = "1"
             completed = subprocess.run(
                 [sys.executable, str(CLI), "generate", "--project", str(project),
-                 "--input", str(input_path), "--lexicon", str(lexicon_path)],
+                 "--input", str(input_path), "--lexicon", str(lexicon_path),
+                 "--provider", "edge-tts"],
                 cwd=REPO_ROOT, env=env, capture_output=True, text=True,
             )
             self.assertEqual(completed.returncode, 2, completed.stderr)
@@ -132,6 +149,26 @@ class Phase4CliTests(unittest.TestCase):
             self.assertIn("edge", payload["error"].lower())
             self.assertFalse((project / "audio_meta.json").exists())
 
+    def test_generate_cli_rejects_provider_disagreement_before_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp) / "project"
+            audio_dir = project / "04_audio"
+            audio_dir.mkdir(parents=True)
+            input_path = audio_dir / "AUDIO_STAGE_INPUT.json"
+            input_path.write_text(json.dumps({"provider": "edge-tts"}), encoding="utf-8")
+            lexicon_path = audio_dir / "PRONUNCIATION_LEXICON.json"
+            lexicon_path.write_text("{}", encoding="utf-8")
+            completed = subprocess.run(
+                [sys.executable, str(CLI), "generate", "--project", str(project),
+                 "--input", str(input_path), "--lexicon", str(lexicon_path),
+                 "--provider", "minimax"],
+                cwd=REPO_ROOT, capture_output=True, text=True,
+            )
+            self.assertEqual(completed.returncode, 2, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "failed")
+            self.assertIn("disagrees", payload["error"])
+
     def test_status_cli_prints_one_json_object(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             project = build_approved_phase3_project(Path(temp))
@@ -141,7 +178,7 @@ class Phase4CliTests(unittest.TestCase):
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             payload = json.loads(completed.stdout)
-            self.assertEqual(payload, {"status": "ready_for_edge_tts", "release_id": "r1"})
+            self.assertEqual(payload, {"status": "blocked_by_missing_audio_stage_input", "release_id": "r1"})
 
     def test_codex_audio_reference_names_only_real_phase4_artifacts(self) -> None:
         reference = (REPO_ROOT / "skill/references/audio-stage.md").read_text(encoding="utf-8")

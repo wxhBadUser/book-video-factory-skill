@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
@@ -15,6 +15,12 @@ from book_video_factory.production_task_validation import (
     validate_production_image_task,
 )
 from book_video_factory.reference_visuals.catalog import load_reference_catalog
+from book_video_factory.visual_foundation.contracts import VisualFoundationError
+from book_video_factory.visual_foundation.evidence import (
+    SCENE_REFERENCE_EVIDENCE_REL,
+    load_scene_reference_evidence,
+    write_scene_reference_evidence,
+)
 from book_video_factory.visual_stage.asset_registry import _machine_diagnostic, _validate_source
 
 
@@ -233,6 +239,68 @@ def _validate_asset_provider(provider: str, generation_lane: str | None) -> None
         )
 
 
+def _expand_reference_inputs(root: Path, raw_inputs: list[str], reference_pack: dict[str, Any] | None) -> list[dict[str, str]]:
+    result: list[dict[str, str]] = []
+    for raw in raw_inputs:
+        if not isinstance(raw, str) or ":" not in raw:
+            raise SceneAssetError("reference input must use role:path")
+        role, path = raw.split(":", 1)
+        role = role.strip()
+        path = path.strip()
+        if not role or not path:
+            raise SceneAssetError("reference input role and path are required")
+        target = safe_project_output(root, Path(path))
+        if target.is_symlink() or not target.is_file():
+            raise SceneAssetError(f"reference input file is missing or symlinked: {path}")
+        digest = sha256_file(target)
+        reference_id = ""
+        if reference_pack is not None:
+            match = next(
+                (entry for entry in reference_pack.get("references", [])
+                 if entry.get("role") == role and entry.get("image_path") == path),
+                None,
+            )
+            if match is None:
+                raise SceneAssetError(f"reference input {raw!r} is not part of the task reference contract")
+            reference_id = str(match.get("reference_id", ""))
+            if match.get("image_sha256") != digest:
+                raise SceneAssetError(f"reference input hash mismatch: {path}")
+        else:
+            reference_id = Path(path).stem
+        entry = {"role": role, "reference_id": reference_id, "image_path": path, "image_sha256": digest}
+        if reference_pack is not None and match is not None:
+            meta = match.get("meta")
+            if isinstance(meta, dict):
+                entry["meta"] = dict(meta)
+        result.append(entry)
+    return result
+
+def _rollback_reference_evidence(root: Path, task_id: str) -> None:
+    evidence = load_scene_reference_evidence(root)
+    if task_id not in evidence:
+        return
+    del evidence[task_id]
+    import json as _json
+    path = safe_project_output(root, Path(SCENE_REFERENCE_EVIDENCE_REL))
+    path.write_text(_json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+def _task_reference_pack(root: Path, task_id: str) -> dict[str, Any] | None:
+    """Find the resolved reference pack for a task in the current generation jobs."""
+    path = root / "06_visual_production/GENERATION_JOBS.jsonl"
+    if path.is_symlink() or not path.is_file():
+        return None
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            job = json.loads(line)
+            packs = job.get("reference_packs")
+            if isinstance(packs, dict) and task_id in packs and isinstance(packs[task_id], dict):
+                return packs[task_id]
+    except (OSError, json.JSONDecodeError):
+        return None
+    return None
+
 def register_scene_asset(
     project: Path,
     *,
@@ -242,6 +310,10 @@ def register_scene_asset(
     provider: str = "host-imagegen",
     style_reference_ids: list[str],
     identity_reference_task_ids: list[str],
+    reference_inputs: list[str] | None = None,
+    generation_attempt_id: str | None = None,
+    generation_mode: str | None = None,
+    provider_receipt: str | None = None,
 ) -> SceneAssetResult:
     root = project.expanduser().resolve()
     try:
@@ -256,6 +328,7 @@ def register_scene_asset(
     _validate_asset_provider(provider, task.get("generation_lane"))
     _exact_ids(style_reference_ids, list(task["style_reference_ids"]), "style_reference_ids")
     _exact_ids(identity_reference_task_ids, list(task["identity_reference_task_ids"]), "identity_reference_task_ids")
+    reference_pack = _task_reference_pack(root, task_id)
     phase3 = _phase3_assets(root)
     identity_evidence: list[dict[str, Any]] = []
     for reference_id in identity_reference_task_ids:
@@ -352,6 +425,30 @@ def register_scene_asset(
     manifest["registered_asset_count"] = len(manifest["assets"])
     manifest["last_registered_at"] = record["registered_at"]
     manifest["next_stage_status"] = "awaiting_scene_review" if len(manifest["assets"]) == len(tasks) else "awaiting_scene_assets"
+    evidence_written = False
+    if reference_pack is not None or reference_inputs is not None:
+        ref_inputs = _expand_reference_inputs(root, list(reference_inputs or []), reference_pack)
+        if generation_attempt_id is None:
+            raise SceneAssetError("generation_attempt_id is required when reference inputs are declared")
+        if provider_receipt is None:
+            raise SceneAssetError("provider_receipt is required when reference inputs are declared")
+        try:
+            write_scene_reference_evidence(
+                root,
+                release_id=str(manifest["release_id"]),
+                task_id=task_id,
+                reference_pack=reference_pack,
+                reference_inputs=ref_inputs,
+                generation_attempt_id=generation_attempt_id,
+                generation_mode=generation_mode or "reference_conditioned",
+                provider=provider,
+                provider_receipt=provider_receipt,
+                prompt_sha256=str(task["prompt_sha256"]),
+                output_image_sha256=digest,
+            )
+            evidence_written = True
+        except VisualFoundationError as error:
+            raise SceneAssetError(str(error)) from error
     manifest_path = safe_project_output(root, Path(_MANIFEST))
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_manifest = manifest_path.with_suffix(".json.tmp")
@@ -362,9 +459,10 @@ def register_scene_asset(
         tmp_manifest.unlink(missing_ok=True)
         if published_output:
             output.unlink(missing_ok=True)
+        if evidence_written:
+            _rollback_reference_evidence(root, task_id)
         raise SceneAssetError(f"scene asset registration transaction failed: {error}") from error
     return SceneAssetResult(
         "created", manifest_path, task_id, output, len(manifest["assets"]), len(tasks), manifest["next_stage_status"]
     )
-
 

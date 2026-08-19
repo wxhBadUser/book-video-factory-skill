@@ -269,6 +269,19 @@ def project_workflow(project: Path) -> dict[str, Any]:
         raise StyleProfileError(
             "project workflow qualification_scope must be production or hbg-parity-pilot"
         )
+    visual_foundation_policy = workflow.get("visual_foundation_policy", "required")
+    if visual_foundation_policy not in {"legacy", "required"}:
+        raise StyleProfileError(
+            "project workflow visual_foundation_policy must be legacy or required"
+        )
+    narration_provider_policy = workflow.get(
+        "narration_provider_policy",
+        "minimax_required" if visual_foundation_policy == "required" else "legacy_edge",
+    )
+    if narration_provider_policy not in {"legacy_edge", "minimax_required"}:
+        raise StyleProfileError(
+            "project workflow narration_provider_policy must be legacy_edge or minimax_required"
+        )
     return {
         "mode": mode,
         "style_profile": style,
@@ -277,4 +290,6 @@ def project_workflow(project: Path) -> dict[str, Any]:
         "orientation": orientation,
         "generation_lane": generation_lane,
         "qualification_scope": qualification_scope,
+        "visual_foundation_policy": visual_foundation_policy,
+        "narration_provider_policy": narration_provider_policy,
     }

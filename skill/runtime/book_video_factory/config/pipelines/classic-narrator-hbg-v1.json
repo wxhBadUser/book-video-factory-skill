@@ -6,10 +6,10 @@
   "production_engine": "vendor/hbg-life-simulation",
   "state_authority": "workflow-gates-manifests",
   "script_contract": "script.narrator-essay.v1",
-  "audio_provider": "edge-tts",
-  "timing_source": "edge-vtt",
+  "audio_provider": "minimax",
+  "timing_source": "provider",
   "preview_renderer": "hbg-hyperframes",
-  "master_renderer": "hbg-streaming-ffmpeg",
+  "master_renderer": "static_streaming_ffmpeg",
   "default_orientation": "landscape",
   "default_canvas": {
     "width": 1920,

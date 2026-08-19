@@ -97,7 +97,10 @@ def validate_bridge_input(
              "brand.episode_number must be a positive integer")
 
     narration = _mapping(normalized.get("narration"), "narration")
-    _require(narration.get("provider") == "edge-tts", "narration.provider must be edge-tts")
+    _require(
+        narration.get("provider") in {"edge-tts", "minimax"},
+        "narration.provider must be edge-tts or minimax",
+    )
     _text(narration.get("voice"), "narration.voice")
     for key in ("body_rate", "lead_rate", "reveal_rate"):
         rate = _text(narration.get(key), f"narration.{key}")

@@ -135,6 +135,7 @@ def _scene_review_vision_blockers(
     # That is what makes a post-approval caption edit show up as stale evidence.
     live_caption_texts: dict[str, str] | None = None
     live_group_ids: dict[str, str] | None = None
+    span_units: dict[str, dict[str, Any]] | None = None
     if require_current:
         contract_root = root if root is not None else decision_path.parent.parent
         try:
@@ -151,6 +152,19 @@ def _scene_review_vision_blockers(
                 group_id = str(group.get("group_id", ""))
                 for caption_id in group.get("caption_ids", []):
                     live_group_ids[str(caption_id)] = group_id
+            # Scene Continuity Spans are the production unit for the current
+            # director stage. They are optional here: legacy fine-grained
+            # projects have no spans, and span-bound tasks fail closed below
+            # when the span document is missing or stale.
+            try:
+                from book_video_factory.semantic_alignment.scene_continuity import (
+                    build_span_review_groups,
+                    load_current_scene_continuity_document,
+                )
+                continuity = load_current_scene_continuity_document(contract_root)
+                span_units = build_span_review_groups(continuity=continuity, grouping=grouping)
+            except Exception:
+                span_units = None
         except Exception as error:
             raise RenderPreflightError(
                 f"current scene review requires the live caption contract and grouping: {error}"
@@ -246,19 +260,43 @@ def _scene_review_vision_blockers(
                     raise StaleVisionEvidenceError(
                         f"reviewed captions are no longer in the caption contract: {missing}"
                     )
-                live_groups = {live_group_ids.get(cid, "") for cid in task_caption_ids}
-                if len(live_groups) != 1 or "" in live_groups:
+                binding_group_id = str(task.get("prompt_binding", {}).get("group_id", ""))
+                if binding_group_id.startswith("SCS_"):
+                    # Scene Span mode: one stable representative frame per
+                    # Scene Continuity Span. The task's captions must be exactly
+                    # the span's caption sequence and the evidence is verified
+                    # against the span hash, not any single fine-grained group.
+                    if span_units is None or binding_group_id not in span_units:
+                        raise StaleVisionEvidenceError(
+                            "reviewed captions reference a scene continuity span that is unavailable or stale"
+                        )
+                    unit = span_units[binding_group_id]
+                    if [str(item) for item in unit.get("caption_ids", [])] != list(task_caption_ids):
+                        raise StaleVisionEvidenceError(
+                            "reviewed captions no longer match the scene continuity span"
+                        )
+                    expected_group_id = str(unit.get("group_id", ""))
+                    expected_group_sha = str(unit.get("caption_group_sha256", ""))
+                else:
+                    live_groups = {live_group_ids.get(cid, "") for cid in task_caption_ids}
+                    if len(live_groups) != 1 or "" in live_groups:
+                        raise StaleVisionEvidenceError(
+                            "reviewed captions are no longer covered by exactly one caption group"
+                        )
+                    expected_group_id = live_groups.pop()
+                    expected_group_sha = str(task.get("prompt_binding", {}).get("caption_group_sha256", ""))
+                if not expected_group_id or not expected_group_sha:
                     raise StaleVisionEvidenceError(
-                        "reviewed captions are no longer covered by exactly one caption group"
+                        "reviewed captions have no authoritative caption group binding"
                     )
                 verify_current_evidence(
                     evidence,
                     image_path=image_path,
                     task_id=str(task_id),
-                    group_id=live_groups.pop(),
+                    group_id=expected_group_id,
                     caption_ids=task_caption_ids,
                     caption_texts={cid: live_caption_texts[cid] for cid in task_caption_ids},
-                    caption_group_sha256=str(task.get("prompt_binding", {}).get("caption_group_sha256", "")),
+                    caption_group_sha256=expected_group_sha,
                     prompt_sha256=hashlib.sha256(str(task.get("prompt", "")).encode("utf-8")).hexdigest(),
                     proposition_sha256=proposition.content_sha256(),
                     visible_persistent_character_ids=tuple(str(value) for value in task.get("anchor_refs", [])),
@@ -361,6 +399,17 @@ def _contract_currency_blockers(contract_path: Path, root: Path, release_id: str
     if set(caption_to_group) != set(contracts):
         raise RenderPreflightError("caption grouping audit does not exactly cover current contracts")
 
+    span_units: dict[str, dict[str, Any]] | None = None
+    try:
+        from book_video_factory.semantic_alignment.scene_continuity import (
+            build_span_review_groups,
+            load_current_scene_continuity_document,
+        )
+        continuity = load_current_scene_continuity_document(root)
+        span_units = build_span_review_groups(continuity=continuity, grouping=grouping)
+    except Exception:
+        span_units = None
+
     try:
         from book_video_factory.production_visuals.registry import _tasks as _load_tasks
 
@@ -381,6 +430,47 @@ def _contract_currency_blockers(contract_path: Path, root: Path, release_id: str
             continue
         if any(str(caption_id) not in caption_to_group for caption_id in caption_ids):
             blockers.append(str(tid))
+            continue
+        binding_group_id = str((task.get("prompt_binding") or {}).get("group_id", ""))
+        if binding_group_id.startswith("SCS_"):
+            # Scene Span mode: the production unit is the Scene Continuity
+            # Span, whose caption sequence and contract bindings aggregate its
+            # source fine-grained groups.
+            if span_units is None or binding_group_id not in span_units:
+                blockers.append(str(tid))
+                continue
+            unit = span_units[binding_group_id]
+            task_caption_ids = [str(item) for item in caption_ids]
+            if [str(item) for item in unit.get("caption_ids", [])] != task_caption_ids or binding_group_id in covered_groups:
+                blockers.append(str(tid))
+                continue
+            bindings = [dict(item) for item in unit.get("contract_bindings", [])]
+            try:
+                expected_contract_sha = aggregate_contract_bindings_sha256(
+                    bindings, expected_caption_ids=task_caption_ids
+                )
+                proposition = VisualProposition.from_mapping(task.get("visual_proposition", {}))
+                verify_prompt_binding(
+                    task.get("prompt_binding", {}),
+                    caption_text=str(task.get("caption_text", "")),
+                    proposition=proposition,
+                    prompt=str(task.get("prompt", "")),
+                    caption_visual_contract_sha256=expected_contract_sha,
+                    group_id=str(unit.get("group_id", "")),
+                    caption_contract_bindings=bindings,
+                    caption_group_sha256=str(unit.get("caption_group_sha256", "")),
+                    caption_ids=task_caption_ids,
+                    scene_id=str(task.get("scene_id", "")),
+                    shot_id=str(task.get("shot_id", "")),
+                    beat_ids=[str(item) for item in task.get("source_beat_ids", [])],
+                )
+            except (ContractBindingError, PromptBindingError, TypeError, ValueError):
+                blockers.append(str(tid))
+                continue
+            if task.get("caption_visual_contract_sha256") != expected_contract_sha:
+                blockers.append(str(tid))
+                continue
+            covered_groups.add(str(unit.get("group_id", "")))
             continue
         group = caption_to_group[str(caption_ids[0])]
         group_id = str(group.get("group_id", ""))
@@ -414,7 +504,13 @@ def _contract_currency_blockers(contract_path: Path, root: Path, release_id: str
             blockers.append(str(tid))
             continue
         covered_groups.add(group_id)
-    if covered_groups != set(groups_by_id) and not blockers:
+    span_mode = span_units is not None and any(
+        isinstance(task, Mapping)
+        and str((task.get("prompt_binding") or {}).get("group_id", "")).startswith("SCS_")
+        for task in task_map.values()
+    )
+    expected_covered = set(span_units) if span_mode else set(groups_by_id)
+    if covered_groups != expected_covered and not blockers:
         blockers.append("caption_group_coverage")
     return blockers
 
@@ -681,7 +777,7 @@ def preflight_render(
     required_gib = int(manifest["minimum_free_gib"])
     required_bytes = required_gib * 1024 ** 3
     output_stem = Path(str(manifest["output_name"])).stem
-    expected_name = f"ffmpeg-work-{output_stem}" if manifest["renderer"] == "streaming_ffmpeg" else None
+    expected_name = f"ffmpeg-work-{output_stem}" if manifest["renderer"] in {"streaming_ffmpeg", "static_streaming_ffmpeg"} else None
     try:
         processes = (process_lister or _default_processes)()
     except Exception as error:
@@ -803,7 +899,7 @@ def verify_render_preflight(project: Path) -> dict[str, Any]:
     if current_free < int(report["required_disk_bytes"]):
         raise RenderPreflightError("render preflight disk headroom is no longer sufficient")
     output_stem = Path(str(manifest.get("output_name", ""))).stem
-    expected_name = f"ffmpeg-work-{output_stem}" if manifest.get("renderer") == "streaming_ffmpeg" else None
+    expected_name = f"ffmpeg-work-{output_stem}" if manifest.get("renderer") in {"streaming_ffmpeg", "static_streaming_ffmpeg"} else None
     expected_work_dir = f"renders/{expected_name}" if expected_name else None
     expected_job_id = hashlib.sha256(
         f"{sha256_file(manifest_path)}:{manifest.get('output_name')}".encode("utf-8")

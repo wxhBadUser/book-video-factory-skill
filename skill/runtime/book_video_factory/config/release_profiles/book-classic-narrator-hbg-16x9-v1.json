@@ -2,7 +2,7 @@
   "schema_version": "1.0",
   "profile_id": "book-classic-narrator-hbg-16x9-v1",
   "profile_revision": 1,
-  "renderer": "hbg-streaming-ffmpeg",
+  "renderer": "static_streaming_ffmpeg",
   "workflow_kind": "classic_narrator_hbg",
   "canvas": {
     "width": 1920,
@@ -64,8 +64,8 @@
   "audio": {
     "codec": "aac",
     "sample_rate_hz": 48000,
-    "provider": "edge-tts",
-    "timing_source": "edge-vtt",
+    "provider": "minimax",
+    "timing_source": "provider",
     "body_rate": "+0%",
     "bgm_mode": "fixed-baseline",
     "narration_priority": true,
@@ -76,7 +76,7 @@
     "pixel_format": "yuv420p",
     "frame_rate_policy": "constant_30fps",
     "preview_renderer": "hbg-hyperframes",
-    "master_renderer": "hbg-streaming-ffmpeg",
+    "master_renderer": "static_streaming_ffmpeg",
     "generated_audio_policy": "strip"
   }
 }

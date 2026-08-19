@@ -7,7 +7,7 @@
   "properties": {
     "schema_version": {"const": "1.0"},
     "profile_id": {"enum": ["book-classic-narrator-hbg-16x9-v1", "book-classic-narrator-hbg-9x16-v1"]},
-    "renderer": {"const": "hbg-streaming-ffmpeg"},
+    "renderer": {"const": "static_streaming_ffmpeg"},
     "workflow_kind": {"const": "classic_narrator_hbg"},
     "canvas": {
       "type": "object",
@@ -35,8 +35,8 @@
       "type": "object",
       "required": ["provider", "timing_source"],
       "properties": {
-        "provider": {"const": "edge-tts"},
-        "timing_source": {"const": "edge-vtt"}
+        "provider": {"const": "minimax"},
+        "timing_source": {"const": "provider"}
       }
     },
     "video": {
@@ -44,7 +44,7 @@
       "required": ["preview_renderer", "master_renderer"],
       "properties": {
         "preview_renderer": {"const": "hbg-hyperframes"},
-        "master_renderer": {"const": "hbg-streaming-ffmpeg"}
+        "master_renderer": {"const": "static_streaming_ffmpeg"}
       }
     },
     "visual": {"type": "object"}

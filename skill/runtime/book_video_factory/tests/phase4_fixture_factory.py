@@ -52,6 +52,7 @@ def audio_stage_input(project: Path) -> dict:
         "schema_version": "audio-stage-input.v1",
         "release_id": "r1",
         "provider": "edge-tts",
+        "provider_policy": "legacy_edge",
         "voice": "zh-CN-YunjianNeural",
         "body_rate": "+0%",
         "lead_rate": "+0%",
@@ -105,6 +106,40 @@ def write_phase4_inputs(project: Path) -> tuple[Path, Path]:
     payload["bindings"]["pronunciation_lexicon_sha256"] = sha256_file(lexicon_path)
     input_path = audio_dir / "AUDIO_STAGE_INPUT.json"
     write_json(input_path, payload)
+    return input_path, lexicon_path
+
+
+def minimax_audio_stage_input(project: Path) -> dict:
+    payload = audio_stage_input(project)
+    payload.update({
+        "provider": "minimax",
+        "provider_policy": "minimax_required",
+        "voice": "Chinese (Mandarin)_Sincere_Adult",
+        "body_rate": "/",
+        "lead_rate": "/",
+        "reveal_rate": "/",
+        "pitch": "/",
+    })
+    return payload
+
+
+def write_minimax_phase4_inputs(project: Path) -> tuple[Path, Path]:
+    from book_video_factory.audio_stage.voice_foundation import build_voice_foundation
+
+    audio_dir = project / "04_audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    lexicon_path = audio_dir / "PRONUNCIATION_LEXICON.json"
+    write_json(lexicon_path, pronunciation_lexicon())
+    payload = minimax_audio_stage_input(project)
+    payload["bindings"]["pronunciation_lexicon_sha256"] = sha256_file(lexicon_path)
+    input_path = audio_dir / "AUDIO_STAGE_INPUT.json"
+    write_json(input_path, payload)
+    foundation = build_voice_foundation(
+        release_id="r1",
+        voice_strategy="system_voice",
+        voice_id=payload["voice"],
+    ).to_dict()
+    write_json(audio_dir / "VOICE_FOUNDATION.json", foundation)
     return input_path, lexicon_path
 
 
@@ -239,7 +274,10 @@ def build_storyboard_audio_plan(project: Path) -> dict:
             register_changed = bool(current) and (
                 caption.get("narrative_function") != current[-1].get("narrative_function")
             )
-            if current and (len(current) == 6 or register_changed):
+            exceeds_target_duration = bool(current) and (
+                float(caption["end"]) - float(current[0]["start"]) > 5.5
+            )
+            if current and (len(current) == 6 or register_changed or exceeds_target_duration):
                 chunks.append(current)
                 current = []
             current.append(caption)

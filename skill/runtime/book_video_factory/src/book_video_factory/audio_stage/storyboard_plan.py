@@ -47,7 +47,10 @@ def _audio_meta_sha256(audio_meta: Mapping[str, Any]) -> str:
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$")
 _PLACEHOLDER_RE = re.compile(r"(?:TODO|TBD|PLACEHOLDER|FIXME|待定|后补|自动生成|占位)", re.I)
 _LOCAL_PATH_RE = re.compile(r"(?:^|[\s'\"])(?:/[A-Za-z0-9_.-]+/|[A-Za-z]:\\|~[/\\])")
-_FAKE_COVERAGE_RE = re.compile(r"(?:只用|仅用|依靠|靠).{0,12}(?:zoom|pan|推近|拉远|平移).{0,12}(?:拖|撑|替代|覆盖)", re.I)
+_FAKE_COVERAGE_RE = re.compile(
+    r"(?:只用|仅用|依靠|靠).{0,12}(?:zoom|pan|推近|拉远|平移|静态画面|不换场景|硬撑).{0,12}(?:拖|撑|替代|覆盖)",
+    re.I,
+)
 _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 _HIGH_RISK_FLAGS = {
     "hands", "phone", "tool_use", "water_action", "animal_contact",
@@ -339,6 +342,10 @@ def validate_storyboard_audio_plan(
         if not set(allowed).issubset(character_ids): raise StoryboardPlanError(f"shot {shot_id} contains an unknown participant")
         if not set(allowed).issubset(anchors): raise StoryboardPlanError(f"every visible participant in {shot_id} requires an identity anchor")
         motion = _text(raw.get("motion"), f"shots[{index}].motion")
+        if motion != "hold":
+            raise StoryboardPlanError(
+                f"shot {shot_id} motion must be 'hold' (scene images are static stills); got {motion!r}"
+            )
         visual_load = raw.get("visual_load")
         if visual_load not in {"ordinary", "strong"}: raise StoryboardPlanError(f"shot {shot_id} visual_load is invalid")
         intentional_hold = raw.get("intentional_hold")
@@ -371,7 +378,9 @@ def validate_storyboard_audio_plan(
             if not intentional_hold or len(hold_reason) < 8:
                 raise StoryboardPlanError(f"shot {shot_id} over 12 seconds requires a concrete intentional hold")
             if _FAKE_COVERAGE_RE.search(hold_reason):
-                raise StoryboardPlanError("zoom or pan cannot substitute for missing visual coverage")
+                raise StoryboardPlanError(
+                    "zoom/pan/static hold cannot substitute for missing visual coverage"
+                )
         if 8.0 - 1e-9 <= duration <= 12.0 + 1e-9 and visual_load != "strong":
             raise StoryboardPlanError(f"shot {shot_id} between 8 and 12 seconds requires visual_load=strong")
         normalized.update({"relative_start": round(start, 3), "relative_end": round(end, 3), "duration": round(duration, 3)})

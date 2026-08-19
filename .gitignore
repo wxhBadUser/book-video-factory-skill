@@ -26,6 +26,10 @@
 
 # ---- Top-level dev verification scripts (not part of the skill) ----
 /scripts/
+/_tmp_*
+
+# ---- Agent local workspace metadata (never source) ----
+/.workbuddy/
 
 # ---- Project knowledge docs (supplementary, not the skill) ----
 /docs/

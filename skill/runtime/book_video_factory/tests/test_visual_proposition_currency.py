@@ -68,7 +68,7 @@ def _minimal_plan_and_meta() -> tuple[dict, dict, list[dict]]:
             "generation_mode": "single",
             "anchor_refs": [],
             "participants": {"count": 0, "allowed": []},
-            "motion": "zoom-in",
+            "motion": "hold",
             "intentional_hold": False,
             "hold_reason": "",
             "semantic_rationale": "字幕与画面共享当前场景",
@@ -76,7 +76,7 @@ def _minimal_plan_and_meta() -> tuple[dict, dict, list[dict]]:
             "relative_end": 3.0,
         }],
     }
-    phase2_beats = [{"beatId": "B001", "chapter": 1, "requiredEntities": ["X"], "cue": "第一段", "description": "x", "forbiddenEntities": [], "riskFlags": [], "generationMode": "single", "anchorRefs": [], "participants": {"count": 0, "allowed": []}, "motion": "static"}]
+    phase2_beats = [{"beatId": "B001", "chapter": 1, "requiredEntities": ["X"], "cue": "第一段", "description": "x", "forbiddenEntities": [], "riskFlags": [], "generationMode": "single", "anchorRefs": [], "participants": {"count": 0, "allowed": []}, "motion": "hold"}]
     return plan, audio_meta, phase2_beats
 
 

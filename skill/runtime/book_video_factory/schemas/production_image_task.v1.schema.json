@@ -67,6 +67,92 @@
       ],
       "additionalProperties": false
     },
+    "visual_event_state": {
+      "type": ["object", "null"],
+      "properties": {
+        "action_predicate": {"type": "string"},
+        "cause_type": {"type": "string"},
+        "is_reference_death": {"type": "boolean"},
+        "actors": {"type": "array", "items": {"type": "string"}},
+        "participant_roles": {"type": "array", "items": {"type": "string"}},
+        "objects": {"type": "array", "items": {"type": "string"}},
+        "subject_state": {"type": "string"},
+        "required_observable_evidence": {"type": "array", "items": {"type": "string"}},
+        "forbidden_contradictory_state": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["action_predicate", "cause_type", "is_reference_death", "actors", "participant_roles", "objects", "subject_state", "required_observable_evidence", "forbidden_contradictory_state"],
+      "additionalProperties": false
+    },
+    "group_visual_focus": {
+      "type": "string"
+    },
+    "participant_constraint": {
+      "type": ["object", "null"],
+      "properties": {
+        "expected_visible_character_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "expected_narrative_character_count": {"type": "integer", "minimum": 1},
+        "allow_unlisted_narrative_characters": {"type": "boolean"}
+      },
+      "required": ["expected_visible_character_ids", "expected_narrative_character_count", "allow_unlisted_narrative_characters"],
+      "additionalProperties": false
+    },
+    "reference_contract": {
+      "type": ["object", "null"],
+      "properties": {
+        "schema_version": {"const": "visual-reference-contract.v1"},
+        "style": {
+          "type": "object",
+          "required": ["required"],
+          "properties": {"required": {"const": true}, "role": {"type": "string"}},
+          "additionalProperties": false
+        },
+        "identity": {
+          "type": "object",
+          "required": ["required_when_characters_present", "characters"],
+          "properties": {
+            "required_when_characters_present": {"type": "boolean"},
+            "characters": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["character_id", "life_stage"],
+                "properties": {
+                  "character_id": {"type": "string", "minLength": 1},
+                  "life_stage": {"type": "string"},
+                  "apparent_age_range": {"type": "string"},
+                  "wardrobe_state": {"type": "string"},
+                  "narrative_role": {"type": "string"},
+                  "gender_presentation": {"type": "string"}
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "location": {
+          "type": "object",
+          "properties": {
+            "location_id": {"type": "string"},
+            "location_reference_type": {"enum": ["persistent_location_anchor", "generic_environment_reference", "none"]},
+            "required_persistent": {"type": "boolean"}
+          },
+          "additionalProperties": false
+        },
+        "continuity": {
+          "type": "object",
+          "required": ["use_previous_scene", "required", "reason"],
+          "properties": {
+            "use_previous_scene": {"type": "boolean"},
+            "required": {"type": "boolean"},
+            "reason": {"type": "string"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": ["schema_version", "style", "identity", "location", "continuity"],
+      "additionalProperties": false
+    },
     "prompt_binding": {
       "type": "object",
       "required": [

@@ -49,7 +49,7 @@ class ReleaseProfile:
         if not isinstance(profile_id, str) or not profile_id.strip():
             raise ContractError("release profile requires profile_id")
         renderer = payload.get("renderer")
-        if renderer not in {"hbg-streaming-ffmpeg"}:
+        if renderer not in {"static_streaming_ffmpeg"}:
             raise ContractError("release profile uses an unknown renderer")
 
         canvas = _mapping(payload, "canvas")

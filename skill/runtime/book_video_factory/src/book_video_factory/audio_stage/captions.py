@@ -45,6 +45,7 @@ def restore_display_captions(
     min_duration: float,
     allow_short_cues: set[int] | None = None,
     section_register: Sequence[CaptionSectionRegister] | None = None,
+    coalesce_target_chars: int | None = None,
 ) -> list[dict[str, Any]]:
     """Restore display captions and (optionally) tag them with real registers.
 
@@ -87,6 +88,102 @@ def restore_display_captions(
         cursor = norm_end
     if cursor != len(spoken_normalized):
         raise CaptionAlignmentError("raw VTT omits part of the spoken body")
+
+    if coalesce_target_chars is not None:
+        target = max(min_chars, min(max_chars, int(coalesce_target_chars)))
+        coalesced: list[dict[str, Any]] = []
+        current: dict[str, Any] | None = None
+
+        def covered_by_one_section(start: int, end: int) -> bool:
+            return section_register is None or sum(
+                entry.display_start <= start and end <= entry.display_end
+                for entry in section_register
+            ) == 1
+
+        def combine(raw_indexes: Sequence[int]) -> dict[str, Any]:
+            parts = [mapped[index] for index in raw_indexes]
+            return {
+                "start": parts[0]["start"],
+                "end": parts[-1]["end"],
+                "display_start": parts[0]["display_start"],
+                "display_end": parts[-1]["display_end"],
+                "allow_short": all(bool(part.get("allow_short")) for part in parts),
+                "raw_indexes": list(raw_indexes),
+            }
+
+        def rebalance_short_tail(tail: dict[str, Any]) -> dict[str, Any]:
+            if not coalesced:
+                return tail
+            previous = coalesced[-1]
+            if not covered_by_one_section(previous["display_start"], tail["display_end"]):
+                return tail
+            indexes = [*previous["raw_indexes"], *tail["raw_indexes"]]
+            candidates: list[tuple[int, int, dict[str, Any], dict[str, Any]]] = []
+            for split in range(1, len(indexes)):
+                left = combine(indexes[:split])
+                right = combine(indexes[split:])
+                left_length = len(normalize_text(
+                    compilation.display_text[left["display_start"]:left["display_end"]]
+                ))
+                right_length = len(normalize_text(
+                    compilation.display_text[right["display_start"]:right["display_end"]]
+                ))
+                if min_chars <= left_length <= max_chars and min_chars <= right_length <= max_chars:
+                    candidates.append((abs(left_length - target), -left_length, left, right))
+            if not candidates:
+                return tail
+            _distance, _left_bias, left, right = min(candidates, key=lambda item: item[:2])
+            coalesced[-1] = left
+            return right
+
+        for item in mapped:
+            if current is None:
+                current = dict(item)
+            elif not covered_by_one_section(current["display_start"], item["display_end"]):
+                if len(normalize_text(
+                    compilation.display_text[current["display_start"]:current["display_end"]]
+                )) < min_chars:
+                    current = rebalance_short_tail(current)
+                coalesced.append(current)
+                current = dict(item)
+            else:
+                current["end"] = item["end"]
+                current["display_end"] = item["display_end"]
+                current["allow_short"] = bool(current.get("allow_short")) and bool(item.get("allow_short"))
+                current["raw_indexes"].extend(item["raw_indexes"])
+            current_text = compilation.display_text[current["display_start"]:current["display_end"]].strip()
+            current_length = len(normalize_text(current_text))
+            terminal = current_text.endswith(("。", "！", "？", ".", "!", "?", "；", ";"))
+            soft_boundary = current_text.endswith(("，", "、", "：", ",", ":"))
+            if (
+                (terminal and current_length >= min_chars)
+                or (soft_boundary and current_length >= target)
+                or current_length >= max_chars
+            ):
+                coalesced.append(current)
+                current = None
+        if current is not None:
+            tail_length = len(normalize_text(
+                compilation.display_text[current["display_start"]:current["display_end"]]
+            ))
+            if tail_length < min_chars:
+                current = rebalance_short_tail(current)
+                tail_length = len(normalize_text(
+                    compilation.display_text[current["display_start"]:current["display_end"]]
+                ))
+            if (
+                coalesced
+                and tail_length < min_chars
+                and covered_by_one_section(coalesced[-1]["display_start"], current["display_end"])
+            ):
+                previous = coalesced[-1]
+                previous["end"] = current["end"]
+                previous["display_end"] = current["display_end"]
+                previous["allow_short"] = bool(previous.get("allow_short")) and bool(current.get("allow_short"))
+                previous["raw_indexes"].extend(current["raw_indexes"])
+            else:
+                coalesced.append(current)
+        mapped = coalesced
 
     # A pronunciation replacement can be split across Edge cues. Merge any
     # adjacent cues whose display intervals overlap so the helper pronunciation

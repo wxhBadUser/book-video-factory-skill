@@ -13,8 +13,17 @@ from unittest import mock
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
-REPO = ROOT.parent
 sys.path.insert(0, str(ROOT / "src"))
+
+
+def _repository_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "scripts/verify_vfinal_architecture.py").is_file():
+            return parent
+    raise AssertionError("repository root was not found")
+
+
+REPO = _repository_root()
 
 from phase2_fixture_factory import write_json
 from phase3_fixture_factory import build_phase3_input, build_phase3_project

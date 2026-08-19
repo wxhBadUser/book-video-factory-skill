@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 from book_video_factory.hbg_bridge.provenance import _default_repository_root, _verify_vendor
 from book_video_factory.manifests import sha256_file
+from book_video_factory.style_profiles import project_workflow
 from book_video_factory.visual_stage.approval import VisualApprovalError, verify_visual_approval
 
 
@@ -27,11 +28,18 @@ _SSML_RE = re.compile(r"</?[A-Za-z][^>]*>")
 _COMMAND_RE = re.compile(r"(?:\$\(|`|&&|\|\||;\s*(?:rm|curl|wget|python|bash|sh)\b)", re.I)
 
 _INPUT_KEYS = {
-    "schema_version", "release_id", "provider", "voice", "body_rate", "lead_rate",
-    "reveal_rate", "pitch", "lead_text", "reveal_text", "caption_min_chars",
+    "schema_version", "release_id", "provider", "provider_policy", "voice", "body_rate",
+    "lead_rate", "reveal_rate", "pitch", "lead_text", "reveal_text", "caption_min_chars",
     "caption_max_chars", "caption_min_duration", "lead_start", "flash_gap_after_lead",
     "flash_duration", "reveal_hold", "body_gap", "body_mode", "bindings",
 }
+_PROVIDERS = {"edge-tts", "minimax"}
+_PROVIDER_POLICIES = {"legacy_edge", "minimax_required"}
+# Edge voice identifiers look like zh-CN-YunjianNeural; MiniMax voice ids are
+# opaque cloned/system identifiers (uuid-like, vendor tokens, or China system
+# names such as ``Chinese (Mandarin)_Sincere_Adult``) and must not be forced
+# through the Edge regex.
+_VOICE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._():-]{0,127}$")
 _BINDING_PATHS = {
     "script_md_sha256": "SCRIPT.md",
     "project_spec_sha256": "PROJECT_SPEC.json",
@@ -104,24 +112,53 @@ def _safe_project_evidence(root: Path, relative: str, label: str) -> Path:
 def validate_audio_stage_input(project: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise AudioStageContractError("audio stage input must be a JSON object")
+    payload = dict(payload)
+    provider = payload.get("provider")
+    if provider not in _PROVIDERS:
+        raise AudioStageContractError("provider must be one of edge-tts/minimax")
+    if "provider_policy" not in payload:
+        # Legacy inputs predate the provider policy field. The default is
+        # derived from the provider so old Edge projects keep working as
+        # explicit legacy and MiniMax inputs default to minimax_required;
+        # a silent Edge fallback for an expressive pipeline is still rejected.
+        payload["provider_policy"] = (
+            "legacy_edge" if provider == "edge-tts" else "minimax_required"
+        )
     _ensure_exact_keys(payload, _INPUT_KEYS, "audio stage input")
     if payload.get("schema_version") != "audio-stage-input.v1":
         raise AudioStageContractError("audio stage input schema_version is invalid")
     release_id = _text(payload.get("release_id"), "release_id")
-    if payload.get("provider") != "edge-tts":
-        raise AudioStageContractError("provider must be edge-tts")
+    provider = payload.get("provider")
+    if provider not in _PROVIDERS:
+        raise AudioStageContractError("provider must be one of edge-tts/minimax")
+    provider_policy = payload.get("provider_policy")
+    if provider_policy not in _PROVIDER_POLICIES:
+        raise AudioStageContractError("provider_policy must be legacy_edge or minimax_required")
+    if (provider == "edge-tts") != (provider_policy == "legacy_edge"):
+        raise AudioStageContractError(
+            "provider/provider_policy mismatch: edge-tts requires legacy_edge and "
+            "minimax requires minimax_required; an expressive pipeline must never "
+            "silently fall back to Edge-TTS"
+        )
     voice = _text(payload.get("voice"), "voice")
-    if not _VOICE_RE.fullmatch(voice):
-        raise AudioStageContractError("voice must be an Edge Neural voice identifier")
+    if provider == "edge-tts":
+        if not _VOICE_RE.fullmatch(voice):
+            raise AudioStageContractError("voice must be an Edge Neural voice identifier")
+    elif not _VOICE_ID_RE.fullmatch(voice):
+        raise AudioStageContractError("voice must be a MiniMax voice_id")
     rates: dict[str, str] = {}
     for field in ("body_rate", "lead_rate", "reveal_rate"):
         rate = _text(payload.get(field), field)
-        if not _RATE_RE.fullmatch(rate):
+        if provider == "edge-tts" and not _RATE_RE.fullmatch(rate):
             raise AudioStageContractError(f"{field} must use strict Edge syntax like +0%")
+        if provider == "minimax" and rate != "/":
+            raise AudioStageContractError(f"{field} must be / for MiniMax provider control")
         rates[field] = rate
     pitch = _text(payload.get("pitch"), "pitch")
-    if not _PITCH_RE.fullmatch(pitch):
+    if provider == "edge-tts" and not _PITCH_RE.fullmatch(pitch):
         raise AudioStageContractError("pitch must use strict Edge syntax like +0Hz")
+    if provider == "minimax" and pitch != "/":
+        raise AudioStageContractError("pitch must be / for MiniMax provider control")
     lead_text = _text(payload.get("lead_text"), "lead_text")
     reveal_text = _text(payload.get("reveal_text"), "reveal_text")
     if _SSML_RE.search(lead_text) or _SSML_RE.search(reveal_text):
@@ -154,7 +191,8 @@ def validate_audio_stage_input(project: Path, payload: Mapping[str, Any]) -> dic
     return {
         "schema_version": "audio-stage-input.v1",
         "release_id": release_id,
-        "provider": "edge-tts",
+        "provider": provider,
+        "provider_policy": provider_policy,
         "voice": voice,
         **rates,
         "pitch": pitch,
@@ -244,13 +282,36 @@ def verify_phase4_prerequisites(
     root = project.expanduser().resolve()
     try:
         approval = verify_visual_approval(root, release_id)
-        if not approval.approved or approval.next_stage_status != "ready_for_edge_tts":
-            raise AudioStageContractError("current approved visual evidence is required")
+        if not approval.approved or approval.next_stage_status not in {"ready_for_edge_tts", "ready_for_narration"}:
+            raise AudioStageContractError(
+                "current approved visual evidence is required (next_stage_status must be "
+                "ready_for_edge_tts or ready_for_narration)"
+            )
         commit = _verify_vendor(repository_root or _default_repository_root())
     except (VisualApprovalError, RuntimeError) as error:
         if isinstance(error, AudioStageContractError):
             raise
         raise AudioStageContractError(f"Phase 4 prerequisites are invalid: {error}") from error
+    try:
+        visual_foundation_policy = project_workflow(root)["visual_foundation_policy"]
+    except Exception as error:
+        raise AudioStageContractError(f"Phase 4 workflow policy is invalid: {error}") from error
+    visual_foundation: dict[str, str] = {}
+    if visual_foundation_policy == "required":
+        from book_video_factory.visual_foundation.approval import (
+            VisualFoundationError,
+            verify_visual_foundation_approval,
+        )
+        try:
+            foundation = verify_visual_foundation_approval(root, release_id)
+        except VisualFoundationError as error:
+            raise AudioStageContractError(
+                f"current approved visual foundation is required before formal audio: {error}"
+            ) from error
+        visual_foundation = {
+            "visual_foundation_approval_path": foundation.approval_path.relative_to(root).as_posix(),
+            "visual_foundation_approval_sha256": sha256_file(foundation.approval_path),
+        }
     approval_payload = _read_object(approval.approval_path, "visual approval")
     return {
         "release_id": release_id,
@@ -259,6 +320,7 @@ def verify_phase4_prerequisites(
         "visual_review_digest": approval_payload.get("review_digest"),
         "next_stage_status": approval.next_stage_status,
         "hbg_commit": commit,
+        **visual_foundation,
     }
 
 
@@ -326,6 +388,299 @@ def validate_voice_performance_plan(payload: Mapping[str, Any]) -> dict[str, Any
         "audio_meta_sha256": payload.get("audio_meta_sha256"),
         "status": status,
         "captions": normalized,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Audio Generation Evidence (M4A) -- binds every provider chunk SHA, the audio
+# master, and the provider VTT; the only valid timing source for expressive
+# production is the provider itself.
+# ---------------------------------------------------------------------------
+
+_AGE_KEYS = {
+    "schema_version", "release_id", "variant", "voice_id", "model", "timing_source",
+    "chunks", "master", "provider_vtt",
+}
+_AGE_CHUNK_KEYS = {
+    "chunk_id", "provider", "model", "voice_id", "audio_path", "audio_sha256",
+    "duration", "trace_id", "request_digest", "subtitle_granularity",
+    "subtitle_timestamps",
+}
+_AGE_MASTER_KEYS = {"path", "sha256", "duration", "sample_rate", "channels", "sample_width"}
+_AGE_VTT_KEYS = {"path", "sha256"}
+_AGE_TIMING_SOURCES = {"provider", "edge_vtt"}
+
+
+def validate_audio_generation_evidence(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise AudioStageContractError("audio generation evidence must be a JSON object")
+    _ensure_exact_keys(payload, _AGE_KEYS, "audio generation evidence")
+    if payload.get("schema_version") != "audio-generation-evidence.v1":
+        raise AudioStageContractError("audio generation evidence schema_version is invalid")
+    _text(payload.get("release_id"), "release_id")
+    _text(payload.get("variant"), "variant")
+    _text(payload.get("voice_id"), "voice_id")
+    _text(payload.get("model"), "model")
+    timing_source = _text(payload.get("timing_source"), "timing_source")
+    if timing_source not in _AGE_TIMING_SOURCES:
+        raise AudioStageContractError("audio generation evidence timing_source is invalid")
+    chunks = payload.get("chunks")
+    if not isinstance(chunks, list) or not chunks:
+        raise AudioStageContractError("audio generation evidence chunks must be a nonempty list")
+    normalized_chunks: list[dict[str, Any]] = []
+    for chunk in chunks:
+        if not isinstance(chunk, Mapping):
+            raise AudioStageContractError("audio generation evidence chunk must be an object")
+        _ensure_exact_keys(chunk, _AGE_CHUNK_KEYS, "audio generation evidence chunk")
+        _text(chunk.get("chunk_id"), "chunk_id")
+        _text(chunk.get("provider"), "provider")
+        _text(chunk.get("model"), "model")
+        _text(chunk.get("voice_id"), "voice_id")
+        _text(chunk.get("audio_path"), "audio_path")
+        if not _SHA256_RE.fullmatch(chunk.get("audio_sha256", "")):
+            raise AudioStageContractError("audio generation evidence chunk audio_sha256 must be a SHA-256")
+        _number(chunk.get("duration"), "duration", minimum=0.0, maximum=3600.0)
+        trace_id = chunk.get("trace_id")
+        if trace_id is not None and (not isinstance(trace_id, str) or not trace_id.strip()):
+            raise AudioStageContractError("audio generation evidence chunk trace_id is invalid")
+        if not _SHA256_RE.fullmatch(chunk.get("request_digest", "")):
+            raise AudioStageContractError("audio generation evidence chunk request_digest must be a SHA-256")
+        granularity = _text(chunk.get("subtitle_granularity"), "subtitle_granularity")
+        if granularity not in {"word", "sentence"}:
+            raise AudioStageContractError("audio generation evidence chunk subtitle_granularity must be word or sentence")
+        timestamps = chunk.get("subtitle_timestamps")
+        if not isinstance(timestamps, list) or not timestamps:
+            raise AudioStageContractError("audio generation evidence chunk has no subtitle timestamps")
+        previous_end = -1.0
+        for item in timestamps:
+            if not isinstance(item, Mapping):
+                raise AudioStageContractError("audio generation evidence timestamp must be an object")
+            start = _number(item.get("start"), "start", minimum=0.0, maximum=3600.0)
+            end = _number(item.get("end"), "end", minimum=0.0, maximum=3600.0)
+            if end <= start or start + 1e-9 < previous_end:
+                raise AudioStageContractError("audio generation evidence timestamps are non-monotonic")
+            _text(item.get("text"), "text")
+            previous_end = end
+        normalized_chunks.append({
+            "chunk_id": chunk.get("chunk_id"),
+            "provider": chunk.get("provider"),
+            "model": chunk.get("model"),
+            "voice_id": chunk.get("voice_id"),
+            "audio_path": chunk.get("audio_path"),
+            "audio_sha256": chunk.get("audio_sha256"),
+            "duration": chunk.get("duration"),
+            "trace_id": trace_id,
+            "request_digest": chunk.get("request_digest"),
+            "subtitle_granularity": granularity,
+            "subtitle_timestamps": list(timestamps),
+        })
+    master = payload.get("master")
+    if not isinstance(master, Mapping):
+        raise AudioStageContractError("audio generation evidence master must be an object")
+    _ensure_exact_keys(master, _AGE_MASTER_KEYS, "audio generation evidence master")
+    _text(master.get("path"), "master path")
+    if not _SHA256_RE.fullmatch(master.get("sha256", "")):
+        raise AudioStageContractError("audio generation evidence master sha256 must be a SHA-256")
+    _number(master.get("duration"), "master duration", minimum=0.0, maximum=36000.0)
+    vtt = payload.get("provider_vtt")
+    if not isinstance(vtt, Mapping):
+        raise AudioStageContractError("audio generation evidence provider_vtt must be an object")
+    _ensure_exact_keys(vtt, _AGE_VTT_KEYS, "audio generation evidence provider_vtt")
+    _text(vtt.get("path"), "provider_vtt path")
+    if not _SHA256_RE.fullmatch(vtt.get("sha256", "")):
+        raise AudioStageContractError("audio generation evidence provider_vtt sha256 must be a SHA-256")
+    return {
+        "schema_version": "audio-generation-evidence.v1",
+        "release_id": payload.get("release_id"),
+        "variant": payload.get("variant"),
+        "voice_id": payload.get("voice_id"),
+        "model": payload.get("model"),
+        "timing_source": timing_source,
+        "chunks": normalized_chunks,
+        "master": dict(master),
+        "provider_vtt": dict(vtt),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Voice Foundation (M4A) -- pins the production voice identity (cloned or
+# system) before any narration is synthesized.
+# ---------------------------------------------------------------------------
+
+_VF_KEYS = {
+    "schema_version", "release_id", "provider", "voice_strategy", "voice_id",
+    "model_family", "cloned_at", "last_used_at", "unused_activation_window_hours",
+    "source_audio_sha256", "prompt_audio_sha256", "evidence",
+}
+_VF_STRATEGIES = {"cloned_voice", "system_voice"}
+
+
+def validate_voice_foundation(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise AudioStageContractError("voice foundation must be a JSON object")
+    _ensure_exact_keys(payload, _VF_KEYS, "voice foundation")
+    if payload.get("schema_version") != "voice-foundation.v1":
+        raise AudioStageContractError("voice foundation schema_version is invalid")
+    _text(payload.get("release_id"), "release_id")
+    provider = payload.get("provider")
+    if provider != "minimax":
+        raise AudioStageContractError("voice foundation provider must be minimax")
+    strategy = _text(payload.get("voice_strategy"), "voice_strategy")
+    if strategy not in _VF_STRATEGIES:
+        raise AudioStageContractError("voice foundation voice_strategy is invalid")
+    voice_id = _text(payload.get("voice_id"), "voice_id")
+    if not _VOICE_ID_RE.fullmatch(voice_id):
+        raise AudioStageContractError("voice foundation voice_id is invalid")
+    _text(payload.get("model_family"), "model_family")
+    cloned_at = payload.get("cloned_at")
+    if cloned_at is not None and (not isinstance(cloned_at, str) or not cloned_at.strip()):
+        raise AudioStageContractError("voice foundation cloned_at must be an ISO string or null")
+    if strategy == "cloned_voice" and not cloned_at:
+        raise AudioStageContractError("cloned_voice foundation requires cloned_at")
+    last_used_at = payload.get("last_used_at")
+    if last_used_at is not None and (not isinstance(last_used_at, str) or not last_used_at.strip()):
+        raise AudioStageContractError("voice foundation last_used_at must be an ISO string or null")
+    window = int(_number(
+        payload.get("unused_activation_window_hours"),
+        "unused_activation_window_hours",
+        minimum=1,
+        maximum=24 * 90,
+    ))
+    for field in ("source_audio_sha256", "prompt_audio_sha256"):
+        value = payload.get(field)
+        if value is not None and (not isinstance(value, str) or not _SHA256_RE.fullmatch(value)):
+            raise AudioStageContractError(f"voice foundation {field} must be a SHA-256 or null")
+    evidence = payload.get("evidence")
+    if not isinstance(evidence, Mapping):
+        raise AudioStageContractError("voice foundation evidence must be an object")
+    return {
+        "schema_version": "voice-foundation.v1",
+        "release_id": payload.get("release_id"),
+        "provider": provider,
+        "voice_strategy": strategy,
+        "voice_id": voice_id,
+        "model_family": payload.get("model_family"),
+        "cloned_at": cloned_at,
+        "last_used_at": last_used_at,
+        "unused_activation_window_hours": window,
+        "source_audio_sha256": payload.get("source_audio_sha256"),
+        "prompt_audio_sha256": payload.get("prompt_audio_sha256"),
+        "evidence": dict(evidence),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Narration Performance Plan (M4A) -- expressive performance segments, never
+# per-caption, produced by the Narration Performance Director.
+# ---------------------------------------------------------------------------
+
+_NPP_KEYS = {
+    "schema_version", "release_id", "variant", "variant_label", "intensity_factor",
+    "audio_meta_sha256", "voice_profile", "segments",
+}
+_NPP_VARIANTS = {"A", "B", "C"}
+_NPP_SEGMENT_REQUIRED = {
+    "segment_id", "source_unit_ids", "source_text", "spoken_text",
+    "narrative_function", "delivery_mode", "intensity", "speed", "volume", "pitch",
+    "pause_before_ms", "pause_after_ms", "sound_tags", "performance_note",
+    "estimated_seconds",
+}
+_NPP_SEGMENT_OPTIONAL = {"emotion"}
+_NPP_SEGMENT_KEYS = _NPP_SEGMENT_REQUIRED | _NPP_SEGMENT_OPTIONAL
+_NPP_MODES = {"storytelling", "warmth", "tension", "grief", "impact", "reflection"}
+_NPP_EMOTIONS = {"neutral", "calm", "sad", "warm", "tense", "impactful", "reflective"}
+_NPP_SOUND_TAGS = {"sighs", "breath", "inhale", "exhale", "crying"}
+
+
+def validate_narration_performance_plan(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate a ``narration-performance-plan.v1`` document (M4A)."""
+
+    if not isinstance(payload, Mapping):
+        raise AudioStageContractError("narration performance plan must be a JSON object")
+    _ensure_exact_keys(payload, _NPP_KEYS, "narration performance plan")
+    if payload.get("schema_version") != "narration-performance-plan.v1":
+        raise AudioStageContractError("narration performance plan schema_version is invalid")
+    _text(payload.get("release_id"), "release_id")
+    variant = payload.get("variant")
+    if variant not in _NPP_VARIANTS:
+        raise AudioStageContractError("narration performance plan variant must be A/B/C")
+    _text(payload.get("variant_label"), "variant_label")
+    factor = _number(payload.get("intensity_factor"), "intensity_factor", minimum=0.0, maximum=2.0)
+    audio_meta = payload.get("audio_meta_sha256")
+    if audio_meta is not None and (not isinstance(audio_meta, str) or not _SHA256_RE.fullmatch(audio_meta)):
+        raise AudioStageContractError("narration performance plan audio_meta_sha256 must be a SHA-256 or null")
+    voice_profile = payload.get("voice_profile")
+    if not isinstance(voice_profile, Mapping):
+        raise AudioStageContractError("narration performance plan voice_profile must be an object")
+    segments = payload.get("segments")
+    if not isinstance(segments, list) or not segments:
+        raise AudioStageContractError("narration performance plan segments must be a nonempty list")
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for raw in segments:
+        if not isinstance(raw, Mapping):
+            raise AudioStageContractError("narration performance plan segments must be objects")
+        keys = set(raw)
+        if not _NPP_SEGMENT_REQUIRED <= keys or not keys <= _NPP_SEGMENT_KEYS:
+            raise AudioStageContractError("narration performance plan segment fields are invalid")
+        segment_id = _text(raw.get("segment_id"), "segment_id")
+        if segment_id in seen_ids:
+            raise AudioStageContractError(f"narration performance plan segment {segment_id!r} is duplicated")
+        seen_ids.add(segment_id)
+        unit_ids = raw.get("source_unit_ids")
+        if not isinstance(unit_ids, list) or not unit_ids or not all(isinstance(x, str) and x for x in unit_ids):
+            raise AudioStageContractError(f"segment {segment_id!r} source_unit_ids must be a nonempty list of strings")
+        _text(raw.get("source_text"), f"segment {segment_id!r} source_text")
+        _text(raw.get("spoken_text"), f"segment {segment_id!r} spoken_text")
+        _text(raw.get("narrative_function"), f"segment {segment_id!r} narrative_function", allow_empty=True)
+        mode = _text(raw.get("delivery_mode"), f"segment {segment_id!r} delivery_mode")
+        if mode not in _NPP_MODES:
+            raise AudioStageContractError(f"segment {segment_id!r} delivery_mode is invalid")
+        emotion = raw.get("emotion")
+        if emotion is not None:
+            emotion = _text(emotion, f"segment {segment_id!r} emotion")
+            if emotion not in _NPP_EMOTIONS:
+                raise AudioStageContractError(f"segment {segment_id!r} emotion is invalid")
+        intensity = _number(raw.get("intensity"), f"segment {segment_id!r} intensity", minimum=0.0, maximum=1.0)
+        speed = _number(raw.get("speed"), f"segment {segment_id!r} speed", minimum=0.5, maximum=1.5)
+        volume = _number(raw.get("volume"), f"segment {segment_id!r} volume", minimum=0.0, maximum=2.0)
+        pitch = _number(raw.get("pitch"), f"segment {segment_id!r} pitch", minimum=-12.0, maximum=12.0)
+        pause_before = int(_number(raw.get("pause_before_ms"), f"segment {segment_id!r} pause_before_ms", minimum=0, maximum=10000))
+        pause_after = int(_number(raw.get("pause_after_ms"), f"segment {segment_id!r} pause_after_ms", minimum=0, maximum=10000))
+        tags = raw.get("sound_tags")
+        if not isinstance(tags, list) or not all(isinstance(t, str) and t in _NPP_SOUND_TAGS for t in tags):
+            raise AudioStageContractError(f"segment {segment_id!r} sound_tags are invalid")
+        if len(tags) > 2:
+            raise AudioStageContractError(f"segment {segment_id!r} uses more than 2 sound tags")
+        _text(raw.get("performance_note"), f"segment {segment_id!r} performance_note", allow_empty=True)
+        _number(raw.get("estimated_seconds"), f"segment {segment_id!r} estimated_seconds", minimum=0.0, maximum=120.0)
+        normalized.append({
+            "segment_id": segment_id,
+            "source_unit_ids": list(unit_ids),
+            "source_text": raw.get("source_text"),
+            "spoken_text": raw.get("spoken_text"),
+            "narrative_function": raw.get("narrative_function"),
+            "delivery_mode": mode,
+            "emotion": emotion,
+            "intensity": intensity,
+            "speed": speed,
+            "volume": volume,
+            "pitch": pitch,
+            "pause_before_ms": pause_before,
+            "pause_after_ms": pause_after,
+            "sound_tags": list(tags),
+            "performance_note": raw.get("performance_note"),
+            "estimated_seconds": raw.get("estimated_seconds"),
+        })
+    return {
+        "schema_version": "narration-performance-plan.v1",
+        "release_id": payload.get("release_id"),
+        "variant": variant,
+        "variant_label": payload.get("variant_label"),
+        "intensity_factor": factor,
+        "audio_meta_sha256": audio_meta,
+        "voice_profile": dict(voice_profile),
+        "segments": normalized,
     }
 
 

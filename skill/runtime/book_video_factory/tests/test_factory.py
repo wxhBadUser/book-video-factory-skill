@@ -65,6 +65,37 @@ class ProjectTests(unittest.TestCase):
             }
             self.assertEqual(set(example), allowed)
 
+    def test_initialized_project_contains_phase2_bridge_example(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = initialize_project(Path(temp), "sample", "样书", "作者")
+            path = project / "02_story_script_故事脚本/HBG_BRIDGE_INPUT.example.json"
+            self.assertTrue(path.is_file())
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["schema_version"], "hbg-bridge-input.v1")
+            self.assertEqual(payload["narration"]["provider"], "minimax")
+            self.assertEqual(
+                payload["narration"]["voice"],
+                "Chinese (Mandarin)_Male_Announcer",
+            )
+
+    def test_legacy_project_keeps_edge_templates_only_when_explicitly_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project = initialize_project(
+                Path(temp), "legacy", "样书", "作者", visual_foundation_policy="legacy"
+            )
+            bridge = json.loads(
+                (project / "02_story_script_故事脚本/HBG_BRIDGE_INPUT.example.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            audio = json.loads(
+                (project / "04_audio/AUDIO_STAGE_INPUT.example.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(bridge["narration"]["provider"], "edge-tts")
+            self.assertEqual(audio["provider_policy"], "legacy_edge")
+
     def test_removed_style_profile_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             with self.assertRaisesRegex(StyleProfileError, "unknown style profile"):
@@ -277,17 +308,5 @@ class FreesoundPolicyTests(unittest.TestCase):
                 "noncommercial_preview_only",
             )
             self.assertEqual(manifest["search_query"], "cinematic ambient piano")
-
-
-
-    def test_initialized_project_contains_phase2_bridge_example(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            project = initialize_project(Path(temp), "sample", "样书", "作者")
-            path = project / "02_story_script_故事脚本/HBG_BRIDGE_INPUT.example.json"
-            self.assertTrue(path.is_file())
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(payload["schema_version"], "hbg-bridge-input.v1")
-            self.assertEqual(payload["narration"]["provider"], "edge-tts")
-
 if __name__ == "__main__":
     unittest.main()

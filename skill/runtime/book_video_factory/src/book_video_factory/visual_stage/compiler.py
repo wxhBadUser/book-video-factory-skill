@@ -170,6 +170,7 @@ def _profile(normalized: dict[str, Any]) -> dict[str, Any]:
         "character_anchors": normalized["character_anchors"],
         "scene_anchors": normalized["scene_anchors"],
         "object_anchors": normalized["object_anchors"],
+        "symbolic_mappings": normalized.get("symbolic_mappings", []),
         "machine_diagnostics_are_aesthetic_approval": False,
         "human_review_status": "pending",
     }

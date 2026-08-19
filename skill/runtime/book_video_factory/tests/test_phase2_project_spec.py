@@ -10,6 +10,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
+VENDOR_PROJECT_CONFIG = next(
+    (
+        candidate / "vendor/hbg-life-simulation/scripts/project_config.mjs"
+        for candidate in (ROOT, *ROOT.parents)
+        if (candidate / "vendor/hbg-life-simulation/scripts/project_config.mjs").is_file()
+    ),
+    None,
+)
 
 from phase1_fixture_factory import build_phase1_inputs
 from phase2_fixture_factory import build_bridge_input
@@ -44,6 +52,16 @@ class Phase2ProjectSpecTests(unittest.TestCase):
         self.assertEqual(spec["workflow"]["hbgUpstreamCommit"], DummyHandoff.hbg_commit)
         self.assertEqual(spec["opening"]["flashMedia"], "assets/opening/flash.mp4")
 
+    def test_preserves_minimax_provider_instead_of_silently_reverting_to_edge(self) -> None:
+        bridge = json.loads(json.dumps(self.bridge, ensure_ascii=False))
+        bridge["narration"]["provider"] = "minimax"
+        bridge["narration"]["voice"] = "Chinese (Mandarin)_Male_Announcer"
+
+        spec = build_project_spec(self.project_contract, DummyHandoff(), bridge, self.exports)
+
+        self.assertEqual(spec["narration"]["provider"], "minimax")
+        self.assertEqual(spec["narration"]["voice"], "Chinese (Mandarin)_Male_Announcer")
+
     def test_spec_does_not_declare_an_unproduced_quote_ledger(self) -> None:
         spec = build_project_spec(self.project_contract, DummyHandoff(), self.bridge, self.exports)
         self.assertNotIn("quoteLedger", spec["book"])
@@ -65,7 +83,8 @@ class Phase2ProjectSpecTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             project = Path(temp)
             (project / "PROJECT_SPEC.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
-            module_uri = (ROOT.parent / "vendor/hbg-life-simulation/scripts/project_config.mjs").resolve().as_uri()
+            self.assertIsNotNone(VENDOR_PROJECT_CONFIG)
+            module_uri = VENDOR_PROJECT_CONFIG.resolve().as_uri()
             code = f"import {{loadProjectSpec}} from {module_uri!r}; console.log(loadProjectSpec(process.cwd()).title);"
             result = subprocess.run(["node", "--input-type=module", "-e", code], cwd=project, capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(result.returncode, 0, result.stderr)

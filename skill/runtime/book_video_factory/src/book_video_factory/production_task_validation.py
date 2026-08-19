@@ -43,8 +43,70 @@ def _schema_path(error: Any) -> str:
     return ".".join(str(item) for item in error.absolute_path) or "$"
 
 
+def _validate_reference_contract(contract: Mapping[str, Any]) -> None:
+    """Structural validation for the optional visual reference contract on a scene task."""
+    if not isinstance(contract, Mapping):
+        raise ProductionTaskValidationError("reference_contract must be an object")
+    if contract.get("schema_version") != "visual-reference-contract.v1":
+        raise ProductionTaskValidationError("reference_contract schema_version is invalid")
+    style = contract.get("style")
+    if not isinstance(style, Mapping) or style.get("required") is not True:
+        raise ProductionTaskValidationError("reference_contract.style.required must be true")
+    identity = contract.get("identity")
+    if not isinstance(identity, Mapping):
+        raise ProductionTaskValidationError("reference_contract.identity must be an object")
+    characters = identity.get("characters", [])
+    if not isinstance(characters, list):
+        raise ProductionTaskValidationError("reference_contract.identity.characters must be an array")
+    for item in characters:
+        if not isinstance(item, Mapping) or not isinstance(item.get("character_id"), str) or not item["character_id"]:
+            raise ProductionTaskValidationError("reference_contract.identity.characters entries must declare character_id")
+        for field in ("apparent_age_range", "wardrobe_state", "narrative_role", "gender_presentation"):
+            if field in item and not isinstance(item[field], str):
+                raise ProductionTaskValidationError(f"reference_contract.identity.characters.{field} must be a string")
+    location = contract.get("location")
+    if not isinstance(location, Mapping):
+        raise ProductionTaskValidationError("reference_contract.location must be an object")
+    location_type = location.get("location_reference_type")
+    if location_type not in {"persistent_location_anchor", "generic_environment_reference", "none"}:
+        raise ProductionTaskValidationError(
+            "reference_contract.location.location_reference_type must be persistent_location_anchor, "
+            "generic_environment_reference, or none"
+        )
+    if not isinstance(location.get("required_persistent", False), bool):
+        raise ProductionTaskValidationError("reference_contract.location.required_persistent must be a boolean")
+    continuity = contract.get("continuity")
+    if not isinstance(continuity, Mapping) or not isinstance(continuity.get("use_previous_scene"), bool):
+        raise ProductionTaskValidationError("reference_contract.continuity must declare use_previous_scene")
+
+
+def _validate_participant_agreement(task: Mapping[str, Any], contract: Mapping[str, Any]) -> None:
+    """S4: when unlisted characters are forbidden, the declared identity characters must
+    exactly equal the expected visible character set (cardinality reaches scene generation)."""
+    participant = task.get("participant_constraint")
+    if not isinstance(participant, Mapping):
+        return
+    if participant.get("allow_unlisted_narrative_characters") is False:
+        expected = {str(item) for item in participant.get("expected_visible_character_ids", []) if str(item).strip()}
+        identity = contract.get("identity") or {}
+        declared = [
+            str(item.get("character_id", "")).strip()
+            for item in identity.get("characters", [])
+            if isinstance(item, Mapping) and str(item.get("character_id", "")).strip()
+        ]
+        if sorted(expected) != sorted(declared):
+            raise ProductionTaskValidationError(
+                "participant cardinality mismatch: expected visible characters "
+                f"{sorted(expected)} do not match declared identity characters {sorted(declared)}"
+            )
+
+
 def validate_production_image_task(task: Mapping[str, Any]) -> None:
     """Fail closed on Schema, mode, hash, aggregate, or Prompt Binding drift."""
+    raw_contract = task.get("reference_contract")
+    if raw_contract is not None:
+        _validate_reference_contract(raw_contract)
+        _validate_participant_agreement(task, raw_contract)
 
     if not isinstance(task, Mapping):
         raise ProductionTaskValidationError("production image task must be an object")

@@ -14,7 +14,7 @@
   "supported_workflow_modes": [
     "single-book"
   ],
-  "description": "Source-grounded single-narrator Chinese classic-book video using Book Video Factory editorial contracts and the vendored HBG Edge TTS/VTT, storyboard, opening, caption, audio-mix and streaming FFmpeg engine.",
+  "description": "Source-grounded single-narrator Chinese classic-book video using Book Video Factory editorial contracts, MiniMax expressive narration with provider word timestamps, and the vendored HBG static-image FFmpeg renderer (no camera motion).",
   "output": {
     "local_master": {
       "width": 1920,

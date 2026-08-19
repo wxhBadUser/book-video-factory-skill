@@ -23,6 +23,7 @@ from book_video_factory.production_visuals.registry import (
     _tasks,
 )
 from book_video_factory.render_stage.qa import evaluate_final_video
+from book_video_factory.render_stage.static_policy import StaticRenderPolicyError, validate_static_workspace
 
 
 class RenderStageError(RuntimeError):
@@ -100,8 +101,8 @@ def _render_input(
         raise RenderStageError("render stage input fields are invalid")
     if value.get("release_id") != release_id:
         raise RenderStageError("render stage input release is stale")
-    if value.get("renderer") not in {"streaming_ffmpeg", "hyperframes"}:
-        raise RenderStageError("renderer must be streaming_ffmpeg or hyperframes")
+    if value.get("renderer") not in {"streaming_ffmpeg", "static_streaming_ffmpeg", "hyperframes"}:
+        raise RenderStageError("renderer must be streaming_ffmpeg, static_streaming_ffmpeg, or hyperframes")
     output_name = value.get("output_name")
     if not isinstance(output_name, str) or not output_name.endswith(".mp4") or Path(output_name).name != output_name:
         raise RenderStageError("output_name must be a simple .mp4 filename")
@@ -124,7 +125,7 @@ def _render_input(
         if not isinstance(preview, str) or not preview or preview != preview.strip():
             raise RenderStageError("opening preview path is invalid")
         safe_project_output(root, Path(preview))
-    if require_preview and value["renderer"] == "streaming_ffmpeg":
+    if require_preview and value["renderer"] in {"streaming_ffmpeg", "static_streaming_ffmpeg"}:
         _verify_opening_preview(root, preview, release_id, input_path=input_path)
     elif require_preview and preview is not None:
         _project_media(root, preview, "opening preview video")
@@ -177,8 +178,12 @@ def _verify_opening_preview(
         raise RenderStageError("opening preview manifest fields are invalid")
     if manifest.get("release_id") != release_id or manifest.get("preview_path") != relative:
         raise RenderStageError("opening preview manifest belongs to different inputs")
-    if manifest.get("renderer") != "hbg-hyperframes-opening-preview":
-        raise RenderStageError("opening preview was not produced by the HBG HyperFrames route")
+    allowed_preview_renderers = {
+        "hbg-hyperframes-opening-preview",
+        "static-hard-cut-opening-preview",
+    }
+    if manifest.get("renderer") not in allowed_preview_renderers:
+        raise RenderStageError("opening preview renderer is not an approved HBG/static route")
     if manifest.get("preview_bytes") != preview.stat().st_size or manifest.get("preview_sha256") != sha256_file(preview):
         raise RenderStageError("opening preview video was modified")
     binding = _opening_preview_binding(root, input_path)
@@ -513,6 +518,29 @@ def _default_preview_runner(workspace: Path, output: Path, manifest: dict[str, A
     run(["node", str(scripts / "validate_style_system.mjs"), str(workspace)])
 
 
+def _default_static_preview_runner(workspace: Path, output: Path, manifest: dict[str, Any]) -> None:
+    root = repository_root()
+    try:
+        _verify_vendor(root)
+    except RuntimeError as error:
+        raise RenderStageError(f"HBG vendor integrity failed: {error}") from error
+    renderer = root / "skill/runtime/book_video_factory/scripts/render_static_opening_preview.mjs"
+    if not renderer.is_file():
+        raise RenderStageError("static opening renderer is missing")
+    completed = subprocess.run(
+        ["node", str(renderer), str(workspace), str(output)],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if completed.returncode != 0:
+        raise RenderStageError(completed.stderr.strip() or completed.stdout.strip() or "static opening renderer failed")
+    if output.is_symlink() or not output.is_file() or output.stat().st_size == 0:
+        raise RenderStageError("static opening renderer did not create a nonempty MP4")
+
+
 def generate_opening_preview(
     project: Path, input_path: Path, *, preview_runner: PreviewRunner | None = None,
 ) -> OpeningPreviewResult:
@@ -549,7 +577,11 @@ def generate_opening_preview(
         "preview_path": preview_relative,
         "preview_sha256": "",
         "preview_bytes": 0,
-        "renderer": "hbg-hyperframes-opening-preview",
+        "renderer": (
+            "static-hard-cut-opening-preview"
+            if render_input["renderer"] == "static_streaming_ffmpeg"
+            else "hbg-hyperframes-opening-preview"
+        ),
         "hbg_vendor_lock_sha256": expected_binding["hbg_vendor_lock_sha256"],
         "next_stage_status": "awaiting_opening_mix_calibration",
     }
@@ -558,7 +590,12 @@ def generate_opening_preview(
             workspace = Path(temp) / "project"
             workspace.mkdir(parents=True)
             _populate_workspace(root, workspace, render_input, scene_manifest, include_preview=False)
-            (preview_runner or _default_preview_runner)(workspace, staging_output, {
+            default_runner = (
+                _default_static_preview_runner
+                if render_input["renderer"] == "static_streaming_ffmpeg"
+                else _default_preview_runner
+            )
+            (preview_runner or default_runner)(workspace, staging_output, {
                 **preview_manifest,
                 "minimum_free_gib": render_input["minimum_free_gib"],
             })
@@ -592,13 +629,30 @@ def _default_render_runner(workspace: Path, output: Path, manifest: dict[str, An
         )
         if completed.returncode != 0:
             raise RenderStageError(completed.stderr.strip() or completed.stdout.strip() or f"command failed: {command}")
-    run(["node", str(scripts / "build_composition.mjs")])
-    run(["node", str(scripts / "validate_style_system.mjs"), str(workspace)])
     output.parent.mkdir(parents=True, exist_ok=True)
     if manifest["renderer"] == "streaming_ffmpeg":
+        run(["node", str(scripts / "build_composition.mjs")])
+        run(["node", str(scripts / "validate_style_system.mjs"), str(workspace)])
         env = os.environ.copy(); env["HBG_VALIDATE_ONLY"] = "1"
         run(["node", str(scripts / "render_streaming_ffmpeg.mjs"), str(workspace), str(output)], env)
         run(["node", str(scripts / "render_streaming_ffmpeg.mjs"), str(workspace), str(output)])
+    elif manifest["renderer"] == "static_streaming_ffmpeg":
+        try:
+            validate_static_workspace(workspace)
+        except StaticRenderPolicyError as error:
+            raise RenderStageError(f"static render policy failed: {error}") from error
+        adapter = root / "skill/runtime/book_video_factory/scripts/run_hbg_static_streaming_adapter.mjs"
+        if not adapter.is_file():
+            raise RenderStageError("static HBG streaming adapter is missing")
+        # The vendored animated style validator deliberately requires camera
+        # motion, so it cannot gate a static still-image render: validate_static_workspace
+        # above is the authoritative static gate.  The renderer also spawns
+        # validate_style_system.mjs from its own script dir unless skipped, and
+        # the adapter does not copy that script into its disposable runtime dir.
+        env = os.environ.copy(); env["HBG_SKIP_STYLE_VALIDATION"] = "1"
+        validate_env = dict(env); validate_env["HBG_VALIDATE_ONLY"] = "1"
+        run(["node", str(adapter), str(root / "vendor/hbg-life-simulation"), str(workspace), str(output)], validate_env)
+        run(["node", str(adapter), str(root / "vendor/hbg-life-simulation"), str(workspace), str(output)], env)
     else:
         env = os.environ.copy(); env["HBG_RENDER_QUALITY"] = manifest["quality"]; env["HBG_MIN_FREE_GIB"] = str(manifest["minimum_free_gib"])
         run(_hbg_bash_command(scripts / "render_long_video.sh", workspace, output), env)

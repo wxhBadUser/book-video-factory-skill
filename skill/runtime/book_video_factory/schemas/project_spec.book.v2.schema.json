@@ -16,7 +16,7 @@
     "narration": {
       "type": "object",
       "required": ["provider", "voice"],
-      "properties": {"provider": {"const": "edge-tts"}, "voice": {"type": "string", "minLength": 1}}
+      "properties": {"provider": {"const": "minimax"}, "voice": {"type": "string", "minLength": 1}}
     }
   }
 }

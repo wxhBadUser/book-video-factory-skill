@@ -71,6 +71,31 @@ def _load_object(path: Path, label: str) -> dict[str, Any]:
     return value
 
 
+_ALLOWED_STORYBOARD_MOTIONS = {"hold"}
+
+
+def _require_hold_only_storyboard(project: Path) -> None:
+    """Reject any camera motion injected into the HBG-normalized storyboard."""
+    path = project / "STORYBOARD_BASE.json"
+    try:
+        beats = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise HbgBridgeCompileError(
+            f"STORYBOARD_BASE.json is unreadable after HBG validation: {error}"
+        ) from error
+    if not isinstance(beats, list):
+        raise HbgBridgeCompileError(
+            "STORYBOARD_BASE.json must be an array after HBG validation"
+        )
+    for index, beat in enumerate(beats, start=1):
+        motion = beat.get("motion") if isinstance(beat, Mapping) else None
+        if motion not in _ALLOWED_STORYBOARD_MOTIONS:
+            raise HbgBridgeCompileError(
+                f"storyboard beat {index} motion must be 'hold' "
+                f"(scene images are static stills); got {motion!r}"
+            )
+
+
 def _initial_project_spec(path: Path, project_contract: Mapping[str, Any]) -> bool:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -83,7 +108,14 @@ def _initial_project_spec(path: Path, project_contract: Mapping[str, Any]) -> bo
     author = book.get("author")
     if not isinstance(title, str) or not isinstance(author, str):
         return False
-    return value == build_initial_project_spec(title, author)
+    workflow = project_contract.get("workflow")
+    provider_policy = (
+        workflow.get("narration_provider_policy")
+        if isinstance(workflow, Mapping)
+        else None
+    )
+    provider = "minimax" if provider_policy == "minimax_required" else "edge-tts"
+    return value == build_initial_project_spec(title, author, narration_provider=provider)
 
 
 def _is_recognized_placeholder(
@@ -268,6 +300,7 @@ def compile_hbg_bridge(project: Path, bridge_input_path: Path) -> BridgeResult:
         (staging / "STORYBOARD_BASE.json").write_bytes(_pretty_bytes(storyboard))
         initialize_style(staging, normalized["orientation"])
         validate_storyboard(staging)
+        _require_hold_only_storyboard(staging)
 
         payloads: dict[str, bytes] = {
             "SCRIPT_SOURCE.md": (staging / "SCRIPT_SOURCE.md").read_bytes(),

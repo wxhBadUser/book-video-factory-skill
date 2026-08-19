@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "scene_continuity_span.v1.schema.json",
+  "title": "Scene Continuity Span V1",
+  "type": "object",
+  "required": ["schema_version", "release_id", "source_grouping_sha256", "source_contract_sha256", "group_count", "caption_count", "span_count", "stats", "spans"],
+  "properties": {
+    "schema_version": {"const": "scene-continuity-span.v1"},
+    "release_id": {"type": "string", "minLength": 1},
+    "source_grouping_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_contract_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "group_count": {"type": "integer", "minimum": 1},
+    "caption_count": {"type": "integer", "minimum": 1},
+    "span_count": {"type": "integer", "minimum": 1},
+    "stats": {"type": "object"},
+    "spans": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["span_id", "group_ids", "caption_ids", "caption_text", "start", "end", "duration", "scene_identity", "location", "time_block", "narrative_function", "core_participants", "supporting_participants", "relationship_core", "scene_defining_props", "scene_core", "narration_only_actions", "representative_visual_core", "cut_in_reason", "cut_out_reason"]
+      }
+    }
+  }
+}

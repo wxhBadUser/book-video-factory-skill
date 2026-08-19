@@ -54,7 +54,14 @@ from phase4_fixture_factory import (
 )
 from test_phase4_storyboard_plan import _extend_meta, _project, _valid
 
-REPO = Path(__file__).resolve().parents[2]
+def _repository_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "scripts/verify_vfinal_architecture.py").is_file():
+            return parent
+    raise AssertionError("repository root was not found")
+
+
+REPO = _repository_root()
 
 
 class PhaseFourAdversarialMutations(unittest.TestCase):

@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,7 +19,9 @@ from .captions import CaptionAlignmentError, restore_display_captions
 from .contracts import (
     AudioStageContractError,
     validate_audio_stage_input,
+    validate_audio_generation_evidence,
     validate_pronunciation_lexicon,
+    validate_voice_foundation,
     verify_phase4_prerequisites,
 )
 from .hbg_adapter import (
@@ -31,6 +34,16 @@ from .hbg_adapter import (
 from .media_probe import MediaValidationError, VttCue, parse_vtt, probe_audio, validate_vtt
 from .pronunciation import PronunciationError, SpokenCompilation, SpokenSegment, compile_spoken_script
 from .provenance import tool_provenance
+from .performance import NarrationSourceUnit, build_narration_performance_plan
+from .provider_timeline import (
+    assert_provider_timeline_authority,
+    build_audio_generation_evidence,
+    concat_audio_master,
+    restore_display_captions_from_provider,
+    write_provider_vtt,
+)
+from .providers import NarrationChunkRequest
+from .providers.minimax import MiniMaxNarrationProvider
 from ..semantic_alignment.caption_grouping import (
     CaptionSectionRegister,
     normalize_script_register,
@@ -76,6 +89,9 @@ _TOOL_PROVENANCE_KEYS = {
     "ffprobe",
     "edge_tts",
     "external_edge_service_exercised",
+}
+_MINIMAX_PRELIMINARY_MANIFEST_KEYS = (_PRELIMINARY_MANIFEST_KEYS - {"external_edge_service_exercised"}) | {
+    "provider", "provider_policy", "voice_id", "evidence_relative",
 }
 
 
@@ -616,6 +632,485 @@ def _verify_existing_preliminary(
     return stage_path
 
 
+def _performance_units(
+    compilation: SpokenCompilation,
+    display_chapters: Sequence[str],
+    section_register: Sequence[CaptionSectionRegister],
+) -> list[NarrationSourceUnit]:
+    del display_chapters
+
+    def spoken_boundary(display_offset: int) -> int:
+        if display_offset <= 0:
+            return 0
+        if display_offset >= len(compilation.display_text):
+            return len(compilation.spoken_text)
+        for segment in compilation.segments:
+            if display_offset == segment.display_start:
+                return segment.spoken_start
+            if display_offset == segment.display_end:
+                return segment.spoken_end
+            if segment.display_start < display_offset < segment.display_end:
+                display_width = segment.display_end - segment.display_start
+                spoken_width = segment.spoken_end - segment.spoken_start
+                if display_width != spoken_width:
+                    raise AudioStageError(
+                        "script section boundary cuts through a pronunciation replacement"
+                    )
+                return segment.spoken_start + display_offset - segment.display_start
+        raise AudioStageError("script section boundary has no spoken compilation mapping")
+
+    units: list[NarrationSourceUnit] = []
+    for section_index, register in enumerate(section_register, start=1):
+        section_text = compilation.display_text[register.display_start:register.display_end]
+        sentence_spans = [
+            match.span()
+            for match in re.finditer(r".*?[。！？!?；;]+|.+$", section_text, flags=re.S)
+            if match.group().strip()
+        ]
+        if not sentence_spans:
+            raise AudioStageError(f"script section {section_index} has empty MiniMax narration text")
+        for sentence_index, (local_start, local_end) in enumerate(sentence_spans, start=1):
+            display_start = register.display_start + local_start
+            display_end = register.display_start + local_end
+            display = compilation.display_text[display_start:display_end].strip()
+            spoken = compilation.spoken_text[
+                spoken_boundary(display_start):spoken_boundary(display_end)
+            ].strip()
+            if not display or not spoken:
+                raise AudioStageError(
+                    f"script section {section_index} sentence {sentence_index} has empty MiniMax narration text"
+                )
+            units.append(NarrationSourceUnit(
+                unit_id=f"body-{section_index:04d}-{sentence_index:03d}",
+                text=display,
+                spoken_text=spoken,
+                chapter_id=f"section-{section_index:04d}",
+                narrative_function=register.narrative_function,
+                is_paragraph_start=sentence_index == 1,
+            ))
+    return units
+
+
+def _transcode_wav(source: Path, target: Path, codec: str) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
+        "-ar", "48000", "-ac", "1", "-c:a", codec,
+    ]
+    if codec in {"aac", "libmp3lame"}:
+        command.extend(["-b:a", "96k"])
+    command.append(str(target))
+    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
+    if completed.returncode != 0:
+        raise AudioStageError(f"MiniMax audio transcode failed: {completed.stderr.strip()[:300]}")
+
+
+def _provider_storyboard_base(
+    plan: Mapping[str, Any], display_meta: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    captions = display_meta.get("captions")
+    if not isinstance(captions, list):
+        raise AudioStageError("provider caption evidence is missing for finalization")
+    index = {item.get("id"): item for item in captions if isinstance(item, Mapping)}
+    result: list[dict[str, Any]] = []
+    for shot in plan["shots"]:
+        caption_ids = shot["caption_ids"]
+        cue = str(index.get(caption_ids[0], {}).get("text", "")) if caption_ids else str(shot["cue"])
+        if not cue.strip():
+            raise AudioStageError(f"shot {shot['id']} has no provider caption cue")
+        result.append({
+            "id": shot["id"], "beatId": shot["source_beat_ids"][0],
+            "sourceBeatIds": list(shot["source_beat_ids"]), "chapter": shot["chapter"],
+            "cue": cue, "description": shot["description"], "captionIntent": shot["cue"],
+            "requiredEntities": list(shot["required_entities"]),
+            "forbiddenEntities": list(shot["forbidden_entities"]),
+            "riskFlags": list(shot["risk_flags"]), "generationMode": shot["generation_mode"],
+            "anchorRefs": list(shot["anchor_refs"]), "participants": dict(shot["participants"]),
+            "highRisk": bool(shot["risk_flags"]),
+            "asset": f"assets/generated/scenes/{shot['id']}.png", "motion": shot["motion"],
+        })
+    return result
+
+
+def _provider_preliminary_storyboard(
+    beats: Sequence[Mapping[str, Any]],
+    display_chapters: Sequence[str],
+    *,
+    body_start: float,
+    body_duration: float,
+) -> list[dict[str, Any]]:
+    if not beats:
+        raise AudioStageError("Phase 2 storyboard base must contain scenes")
+    scene_duration = body_duration / len(beats)
+    return [
+        {
+            **dict(beat),
+            "cueTime": round(index * scene_duration, 3),
+            "narration": display_chapters[int(beat["chapter"]) - 1],
+            "start": round(body_start + index * scene_duration, 3),
+            "duration": round(scene_duration, 3),
+            "end": round(body_start + (index + 1) * scene_duration, 3),
+        }
+        for index, beat in enumerate(beats)
+    ]
+
+
+def _collect_tree_payloads(root: Path, relative_root: str) -> dict[str, bytes]:
+    base = root / relative_root
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in base.rglob("*")
+        if path.is_file()
+    }
+
+
+def _minimax_media_report(
+    audio_dir: Path,
+    *,
+    body_text: str,
+    lead_text: str,
+    reveal_text: str,
+) -> dict[str, Any]:
+    body_wav = probe_audio(audio_dir / "narration_master.wav")
+    body_m4a = probe_audio(audio_dir / "narration.m4a")
+    body_mp3 = probe_audio(audio_dir / "narration-full.mp3")
+    lead = probe_audio(audio_dir / "opening/lead-natural.wav")
+    reveal = probe_audio(audio_dir / "opening/reveal-natural.wav")
+    body_vtt = validate_vtt(
+        parse_vtt(audio_dir / "provider.vtt"), duration=body_wav.duration, expected_text=body_text
+    )
+    lead_vtt = validate_vtt(
+        parse_vtt(audio_dir / "opening/lead-natural.vtt"), duration=lead.duration, expected_text=lead_text
+    )
+    reveal_vtt = validate_vtt(
+        parse_vtt(audio_dir / "opening/reveal-natural.vtt"), duration=reveal.duration, expected_text=reveal_text
+    )
+    return {
+        "provider": "minimax", "timing_source": "provider",
+        "body": {
+            "wav": {"path": "assets/audio/narration_master.wav", "duration": body_wav.duration, "sha256": sha256_file(body_wav.path)},
+            "m4a": {"path": "assets/audio/narration.m4a", "duration": body_m4a.duration, "sha256": sha256_file(body_m4a.path)},
+            "mp3": {"path": "assets/audio/narration-full.mp3", "duration": body_mp3.duration, "sha256": sha256_file(body_mp3.path)},
+            "vtt": body_vtt,
+        },
+        "opening": {
+            "lead": {"duration": lead.duration, "sha256": sha256_file(lead.path), "vtt": lead_vtt},
+            "reveal": {"duration": reveal.duration, "sha256": sha256_file(reveal.path), "vtt": reveal_vtt},
+        },
+    }
+
+
+def _verify_existing_minimax_preliminary(
+    root: Path,
+    manifest_path: Path,
+    *,
+    release_id: str,
+    input_digest: str,
+    voice_id: str,
+    display_sha256: str | None = None,
+    spoken_sha256: str | None = None,
+    final_exists: bool = False,
+) -> Path:
+    existing = _load_object(manifest_path, "existing MiniMax audio preliminary manifest")
+    if set(existing) != _MINIMAX_PRELIMINARY_MANIFEST_KEYS:
+        raise AudioStageConflict("existing MiniMax preliminary manifest fields are invalid")
+    expected = {
+        "schema_version": "audio-preliminary-manifest.v1", "release_id": release_id,
+        "input_digest": input_digest, "provider": "minimax",
+        "provider_policy": "minimax_required", "voice_id": voice_id,
+        "next_stage_status": "awaiting_audio_storyboard_plan",
+    }
+    for key, value in expected.items():
+        if existing.get(key) != value:
+            raise AudioStageConflict(f"existing MiniMax preliminary identity mismatch: {key}")
+    for key, value in (
+        ("display_text_sha256", display_sha256),
+        ("spoken_text_sha256", spoken_sha256),
+    ):
+        if value is not None and existing.get(key) != value:
+            raise AudioStageConflict(f"existing MiniMax preliminary identity mismatch: {key}")
+    hashes = _verify_preliminary_outputs(root, existing, final_exists=final_exists)
+    evidence_relative = existing.get("evidence_relative")
+    if not isinstance(evidence_relative, str) or evidence_relative not in hashes:
+        raise AudioStageConflict("existing MiniMax evidence binding is invalid")
+    evidence = _load_object(root / evidence_relative, "MiniMax audio generation evidence")
+    evidence = validate_audio_generation_evidence(evidence)
+    assert_provider_timeline_authority(evidence)
+    for chunk in evidence["chunks"]:
+        chunk_path = _safe_project_artifact(root, chunk["audio_path"], "MiniMax provider chunk")
+        if sha256_file(chunk_path) != chunk["audio_sha256"]:
+            raise AudioStageConflict("MiniMax provider chunk hash is stale")
+    for label, record in (
+        ("MiniMax master", evidence["master"]),
+        ("MiniMax provider VTT", evidence["provider_vtt"]),
+    ):
+        artifact = _safe_project_artifact(root, record["path"], label)
+        if sha256_file(artifact) != record["sha256"]:
+            raise AudioStageConflict(f"{label} hash is stale")
+    stage_relative = existing.get("stage_manifest_path")
+    if not isinstance(stage_relative, str) or hashes.get(stage_relative) != existing.get("stage_manifest_sha256"):
+        raise AudioStageConflict("existing MiniMax stage binding is invalid")
+    return root / stage_relative
+
+
+def _generate_minimax_audio_stage(
+    root: Path,
+    *,
+    input_data: Mapping[str, Any],
+    input_digest: str,
+    spoken_script: str,
+    compilation: SpokenCompilation,
+    lead_compilation: SpokenCompilation,
+    reveal_compilation: SpokenCompilation,
+    display_chapters: Sequence[str],
+    section_register: Sequence[CaptionSectionRegister],
+    storyboard_base: Sequence[Mapping[str, Any]],
+) -> AudioStageResult:
+    manifest_relative = "04_audio/AUDIO_PRELIMINARY_MANIFEST.json"
+    manifest_path = root / manifest_relative
+    if manifest_path.is_file():
+        stage_path = _verify_existing_minimax_preliminary(
+            root,
+            manifest_path,
+            release_id=str(input_data["release_id"]),
+            input_digest=input_digest,
+            voice_id=str(input_data["voice"]),
+        )
+        return AudioStageResult("unchanged", manifest_path, stage_path, "awaiting_audio_storyboard_plan")
+
+    foundation_path = _official_project_file(
+        root,
+        root / "04_audio/VOICE_FOUNDATION.json",
+        "04_audio/VOICE_FOUNDATION.json",
+        "voice foundation",
+    )
+    foundation = validate_voice_foundation(_load_object(foundation_path, "voice foundation"))
+    if (
+        foundation["release_id"] != input_data["release_id"]
+        or foundation["voice_id"] != input_data["voice"]
+    ):
+        raise AudioStageError("MiniMax voice foundation does not match the Phase 4 input")
+    units = _performance_units(compilation, display_chapters, section_register)
+    performance_plan = build_narration_performance_plan(
+        units,
+        release_id=str(input_data["release_id"]),
+        variant="B",
+        voice_profile={
+            "provider": "minimax",
+            "voice_id": foundation["voice_id"],
+            "model": foundation["model_family"],
+        },
+    )
+
+    with tempfile.TemporaryDirectory(prefix="book-video-phase4-minimax-") as temp:
+        staging = Path(temp) / "project"
+        evidence_dir = staging / "04_audio/provider_evidence/chunks"
+        audio_dir = staging / "assets/audio"
+        opening_dir = audio_dir / "opening"
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        opening_dir.mkdir(parents=True, exist_ok=True)
+        model = str(foundation["model_family"])
+        with MiniMaxNarrationProvider(
+            voice_id=str(foundation["voice_id"]),
+            model=model,
+            allow_sentence_fallback=True,
+        ) as provider:
+            if foundation["voice_strategy"] == "system_voice":
+                provider.verify_system_voice(str(foundation["voice_id"]))
+
+            def synthesize_opening(chunk_id: str, text: str):
+                return provider.synthesize(
+                    NarrationChunkRequest(
+                        chunk_id=chunk_id,
+                        text=text,
+                        provider="minimax",
+                        model=model,
+                        voice_id=str(foundation["voice_id"]),
+                    ),
+                    evidence_dir=evidence_dir,
+                )
+
+            lead_result = synthesize_opening("opening-lead", lead_compilation.spoken_text)
+            reveal_result = synthesize_opening("opening-reveal", reveal_compilation.spoken_text)
+            body_results = []
+            for segment in performance_plan["segments"]:
+                request = NarrationChunkRequest(
+                    chunk_id=str(segment["segment_id"]),
+                    text=str(segment["spoken_text"]),
+                    provider="minimax",
+                    model=model,
+                    voice_id=str(foundation["voice_id"]),
+                    speed=float(segment["speed"]),
+                    volume=float(segment["volume"]),
+                    pitch=float(segment["pitch"]),
+                    pause_before_ms=int(segment["pause_before_ms"]),
+                    pause_after_ms=int(segment["pause_after_ms"]),
+                    sound_tags=tuple(segment["sound_tags"]),
+                    emotion=segment.get("emotion"),
+                    intensity=float(segment["intensity"]),
+                )
+                body_results.append(provider.synthesize(request, evidence_dir=evidence_dir))
+
+        body_vtt, _provider_cues, _provider_duration = write_provider_vtt(
+            body_results, audio_dir / "provider.vtt"
+        )
+        master = concat_audio_master(
+            body_results, audio_dir, audio_dir=evidence_dir, name="narration_master"
+        )
+        shutil.copy2(audio_dir / "narration_master.wav", audio_dir / "narration-full.wav")
+        _transcode_wav(audio_dir / "narration_master.wav", audio_dir / "narration.m4a", "aac")
+        _transcode_wav(audio_dir / "narration_master.wav", audio_dir / "narration-full.mp3", "libmp3lame")
+
+        for result, stem, text in (
+            (lead_result, "lead-natural", lead_compilation.spoken_text),
+            (reveal_result, "reveal-natural", reveal_compilation.spoken_text),
+        ):
+            source = evidence_dir / result.audio_path
+            target = opening_dir / f"{stem}.wav"
+            shutil.copy2(source, target)
+            _transcode_wav(target, opening_dir / f"{stem}.mp3", "libmp3lame")
+            write_provider_vtt([result], opening_dir / f"{stem}.vtt")
+            (opening_dir / f"{stem}.txt").write_text(text + "\n", encoding="utf-8")
+            (opening_dir / f"{stem}.settings.json").write_bytes(_pretty({
+                "provider": "minimax", "voice_id": foundation["voice_id"], "model": model,
+            }))
+
+        captions = restore_display_captions_from_provider(
+            body_results,
+            compilation,
+            min_chars=int(input_data["caption_min_chars"]),
+            max_chars=int(input_data["caption_max_chars"]),
+            min_duration=float(input_data["caption_min_duration"]),
+            section_register=section_register,
+        )
+        body_duration = float(master["duration"])
+        body_start = round(
+            float(input_data["lead_start"])
+            + float(lead_result.duration)
+            + float(input_data["flash_gap_after_lead"])
+            + float(input_data["flash_duration"])
+            + float(reveal_result.duration)
+            + float(input_data["reveal_hold"])
+            + float(input_data["body_gap"]),
+            3,
+        )
+        chapters = []
+        total_chars = max(1, sum(len(text) for text in display_chapters))
+        cursor = 0.0
+        for index, text in enumerate(display_chapters, start=1):
+            start = cursor
+            cursor = body_duration if index == len(display_chapters) else cursor + body_duration * len(text) / total_chars
+            chapters.append({
+                "id": f"ch{index:02d}", "chapter": index, "title": f"第{index}章",
+                "text": text, "start": round(body_start + start, 3),
+                "end": round(body_start + cursor, 3), "duration": round(cursor - start, 3),
+            })
+        display_meta = {
+            "provider": "MiniMax", "provider_policy": "minimax_required",
+            "voice": foundation["voice_id"], "model": model,
+            "syncMode": "provider-vtt-master", "timing_source": "provider",
+            "openingDuration": body_start,
+            "opening": {
+                "bodyStart": body_start,
+                "lead": {"path": "assets/audio/opening/lead-natural.wav", "duration": lead_result.duration},
+                "reveal": {"path": "assets/audio/opening/reveal-natural.wav", "duration": reveal_result.duration},
+            },
+            "body": {
+                "text": compilation.display_text,
+                "path": "assets/audio/narration.m4a",
+                "sourcePath": "assets/audio/narration_master.wav",
+                "vtt": "assets/audio/provider.vtt",
+                "duration": body_duration,
+                "captionTimingSource": "provider",
+            },
+            "chapters": chapters, "captions": captions,
+            "captionAudit": {
+                "minChars": int(input_data["caption_min_chars"]),
+                "maxChars": int(input_data["caption_max_chars"]),
+                "minDuration": float(input_data["caption_min_duration"]), "defects": 0,
+            },
+            "narrationDuration": body_duration, "totalDuration": round(body_start + body_duration, 3),
+        }
+        storyboard = _provider_preliminary_storyboard(
+            storyboard_base,
+            display_chapters,
+            body_start=body_start,
+            body_duration=body_duration,
+        )
+        gaps = _gap_report(storyboard, captions)
+        evidence = build_audio_generation_evidence(
+            chunk_results=body_results,
+            master={**master, "path": "assets/audio/narration_master.wav"},
+            vtt_path=body_vtt,
+            vtt_sha256=sha256_file(body_vtt),
+            release_id=str(input_data["release_id"]),
+            variant="B",
+            voice_id=str(foundation["voice_id"]),
+            model=model,
+        )
+        evidence["provider_vtt"]["path"] = "assets/audio/provider.vtt"
+        for item in evidence["chunks"]:
+            item["audio_path"] = f"04_audio/provider_evidence/chunks/{item['audio_path']}"
+        validate_audio_generation_evidence(evidence)
+        assert_provider_timeline_authority(evidence)
+        evidence_relative = "04_audio/provider_evidence/AUDIO_GENERATION_EVIDENCE.json"
+        (staging / evidence_relative).write_bytes(_pretty(evidence))
+        media_report = _minimax_media_report(
+            audio_dir,
+            body_text=compilation.spoken_text,
+            lead_text=lead_compilation.spoken_text,
+            reveal_text=reveal_compilation.spoken_text,
+        )
+
+        payloads = _collect_audio_payloads(staging)
+        payloads.update(_collect_tree_payloads(staging, "04_audio/provider_evidence"))
+        payloads.update({
+            "04_audio/SCRIPT_SPOKEN.md": spoken_script.encode("utf-8"),
+            "04_audio/SPOKEN_DISPLAY_MAP.json": _pretty(_compilation_json(compilation)),
+            "04_audio/NARRATION_PERFORMANCE_PLAN.json": _pretty(performance_plan),
+            "04_audio/AUDIO_STORYBOARD_GAPS.json": _pretty(gaps),
+            "audio_meta.json": _pretty(display_meta), "STORYBOARD.json": _pretty(storyboard),
+        })
+        output_hashes = {relative: _sha_bytes(data) for relative, data in payloads.items()}
+        stage_relative = f"manifests/stages/audio_preliminary/audio-preliminary-{input_digest[:16]}.json"
+        stage = {
+            "schema_version": "1.0", "manifest_id": f"audio-preliminary-{input_digest[:16]}",
+            "project_id": root.name, "stage": "audio_preliminary",
+            "release_id": input_data["release_id"],
+            "producer": {"tool": "book-video-factory-audio-stage"}, "status": "success",
+            "inputs": {"digest": input_digest},
+            "outputs": [
+                {"path": relative, "bytes": len(payloads[relative]), "sha256": output_hashes[relative]}
+                for relative in sorted(payloads)
+            ],
+            "checks": [
+                {"id": "provider_evidence_bound", "result": "pass", "severity": "error"},
+                {"id": "display_caption_restoration", "result": "pass", "severity": "error"},
+            ],
+        }
+        payloads[stage_relative] = _pretty(stage)
+        output_hashes[stage_relative] = _sha_bytes(payloads[stage_relative])
+        manifest = {
+            "schema_version": "audio-preliminary-manifest.v1",
+            "release_id": input_data["release_id"], "input_digest": input_digest,
+            "display_text_sha256": compilation.display_sha256,
+            "spoken_text_sha256": compilation.spoken_sha256,
+            "output_hashes": output_hashes, "media_report": media_report,
+            "tool_provenance": tool_provenance(minimax_provider_exercised=True),
+            "provider": "minimax", "provider_policy": "minimax_required",
+            "voice_id": foundation["voice_id"], "evidence_relative": evidence_relative,
+            "stage_manifest_path": stage_relative,
+            "stage_manifest_sha256": output_hashes[stage_relative],
+            "next_stage_status": "awaiting_audio_storyboard_plan",
+        }
+        payloads[manifest_relative] = _pretty(manifest)
+        for relative in payloads:
+            if (root / relative).exists() and not relative.startswith("assets/audio/"):
+                raise AudioStageConflict(f"refusing to overwrite pre-existing Phase 4 output: {relative}")
+        _publish(root, payloads)
+        return AudioStageResult("created", manifest_path, root / stage_relative, "awaiting_audio_storyboard_plan")
+
+
 def generate_audio_stage(project:Path,input_path:Path,lexicon_path:Path,*,runner:AudioRunner|None=None)->AudioStageResult:
     root=project.expanduser().resolve()
     try:
@@ -638,7 +1133,22 @@ def generate_audio_stage(project:Path,input_path:Path,lexicon_path:Path,*,runner
         reveal_comp=compile_spoken_script(input_data["reveal_text"],lexicon,scope="reveal")
         staging_input=dict(input_data); staging_input["lead_text"]=lead_comp.spoken_text; staging_input["reveal_text"]=reveal_comp.spoken_text
         storyboard_base=json.loads((root/"STORYBOARD_BASE.json").read_text(encoding="utf-8"))
+        if not isinstance(storyboard_base, list):
+            raise AudioStageError("Phase 2 storyboard base must be an array")
         input_digest=_sha_bytes(_canonical({"input":input_data,"lexicon":lexicon,"prior":prior,"spoken":comp.spoken_sha256}))
+        if input_data["provider"] == "minimax":
+            return _generate_minimax_audio_stage(
+                root,
+                input_data=input_data,
+                    input_digest=input_digest,
+                    spoken_script=spoken_script,
+                    compilation=comp,
+                    lead_compilation=lead_comp,
+                    reveal_compilation=reveal_comp,
+                display_chapters=display_chapters,
+                section_register=section_register,
+                storyboard_base=storyboard_base,
+            )
         manifest_relative="04_audio/AUDIO_PRELIMINARY_MANIFEST.json"
         existing_path=root/manifest_relative
         if existing_path.is_file():
@@ -780,6 +1290,8 @@ def _timeline_audit(
     storyboard: Sequence[Mapping[str, Any]],
     bindings: Mapping[str, Any],
     audio_hashes: Mapping[str, str],
+    *,
+    provider: str = "edge-tts",
 ) -> dict[str, Any]:
     durations = [float(item["duration"]) for item in storyboard]
     return {
@@ -798,11 +1310,184 @@ def _timeline_audit(
         "checks": [
             {"id": "all_phase2_beats_disposed", "result": "pass"},
             {"id": "all_display_captions_bound", "result": "pass"},
-            {"id": "real_audio_timing_only", "result": "pass"},
+            {"id": "provider_audio_timing_only" if provider == "minimax" else "real_audio_timing_only", "result": "pass"},
             {"id": "audio_hashes_unchanged", "result": "pass"},
             {"id": "density_contract", "result": "pass"},
         ],
     }
+
+
+def _finalize_minimax_audio_stage(
+    root: Path,
+    *,
+    preliminary_path: Path,
+    preliminary: Mapping[str, Any],
+    final_manifest_path: Path,
+    final_exists: bool,
+    plan_path: Path,
+    plan_raw: Mapping[str, Any],
+    input_data: Mapping[str, Any],
+    lexicon: Mapping[str, Any],
+    prior: Mapping[str, Any],
+    compilation: SpokenCompilation,
+    phase2_beats_raw: Sequence[Mapping[str, Any]],
+) -> AudioStageResult:
+    from .storyboard_plan import compile_final_storyboard, validate_storyboard_audio_plan
+
+    preliminary_input_digest = _sha_bytes(_canonical({
+        "input": input_data,
+        "lexicon": lexicon,
+        "prior": prior,
+        "spoken": compilation.spoken_sha256,
+    }))
+    _verify_existing_minimax_preliminary(
+        root,
+        preliminary_path,
+        release_id=str(input_data["release_id"]),
+        input_digest=preliminary_input_digest,
+        voice_id=str(input_data["voice"]),
+        display_sha256=compilation.display_sha256,
+        spoken_sha256=compilation.spoken_sha256,
+        final_exists=final_exists,
+    )
+    preliminary_hashes = _verify_preliminary_outputs(root, preliminary, final_exists=final_exists)
+    preliminary_audio_hashes = _audio_hashes(preliminary_hashes)
+    display_meta = _load_object(root / "audio_meta.json", "display-safe audio metadata")
+    for final_only_key in ("storyboardMode", "storyboardPlanSha256", "captionBindingsPath"):
+        display_meta.pop(final_only_key, None)
+    if display_meta.get("timing_source") != "provider":
+        raise AudioStageError("MiniMax finalization requires provider timing authority")
+    normalized_plan = validate_storyboard_audio_plan(
+        root,
+        plan_raw,
+        preliminary,
+        audio_meta=display_meta,
+        phase2_beats=phase2_beats_raw,
+    )
+    final_storyboard, bindings = compile_final_storyboard(
+        normalized_plan, display_meta, phase2_beats_raw
+    )
+    final_provider_base = _provider_storyboard_base(normalized_plan, display_meta)
+    caption_fingerprint = _sha_bytes(_canonical(display_meta.get("captions")))
+    plan_digest = _sha_bytes(_canonical(plan_raw))
+    input_digest = _sha_bytes(_canonical({
+        "preliminary_manifest_sha256": sha256_file(preliminary_path),
+        "plan_sha256": sha256_file(plan_path),
+        "plan_digest": plan_digest,
+        "prior": prior,
+        "input": input_data,
+        "lexicon": lexicon,
+    }))
+    final_meta = copy.deepcopy(display_meta)
+    final_meta["storyboardMode"] = "audio-driven-final"
+    final_meta["storyboardPlanSha256"] = sha256_file(plan_path)
+    final_meta["captionBindingsPath"] = "04_audio/CAPTION_BINDINGS.json"
+    audit = _timeline_audit(
+        normalized_plan,
+        final_storyboard,
+        bindings,
+        preliminary_audio_hashes,
+        provider="minimax",
+    )
+    final_payloads: dict[str, bytes] = {
+        "04_audio/STORYBOARD_BASE.audio-final.json": _pretty(final_provider_base),
+        "04_audio/CAPTION_BINDINGS.json": _pretty(bindings),
+        "04_audio/AUDIO_TIMELINE_AUDIT.json": _pretty(audit),
+        "audio_meta.json": _pretty(final_meta),
+        "STORYBOARD.json": _pretty(final_storyboard),
+    }
+    contract_rel = "04_audio/CAPTION_VISUAL_CONTRACT.json"
+    if (
+        (root / "02_story_script_故事脚本/SCRIPT_PACKAGE.json").is_file()
+        and (root / "STORYBOARD_BASE.json").is_file()
+        and (root / "03_images_生成图片/BOOK_VISUAL_PROFILE.json").is_file()
+    ):
+        from book_video_factory.semantic_alignment.caption_contract import (
+            build_caption_visual_contract_from_project,
+        )
+        contract_doc = build_caption_visual_contract_from_project(
+            root,
+            release_id=str(input_data["release_id"]),
+            validate_only=True,
+            caption_bindings=bindings,
+        )
+        final_payloads[contract_rel] = _pretty(contract_doc)
+    final_output_hashes = {path: _sha_bytes(data) for path, data in final_payloads.items()}
+    stage_relative = f"manifests/stages/audio_final/audio-final-{input_digest[:16]}.json"
+    stage = {
+        "schema_version": "1.0",
+        "manifest_id": f"audio-final-{input_digest[:16]}",
+        "project_id": root.name,
+        "stage": "audio_final",
+        "release_id": input_data["release_id"],
+        "producer": {"tool": "book-video-factory-audio-stage"},
+        "status": "success",
+        "inputs": {
+            "digest": input_digest,
+            "preliminary_manifest_sha256": sha256_file(preliminary_path),
+            "storyboard_plan_sha256": sha256_file(plan_path),
+        },
+        "outputs": [
+            {"path": path, "bytes": len(final_payloads[path]), "sha256": final_output_hashes[path]}
+            for path in sorted(final_payloads)
+        ],
+        "checks": audit["checks"],
+    }
+    final_payloads[stage_relative] = _pretty(stage)
+    final_output_hashes[stage_relative] = _sha_bytes(final_payloads[stage_relative])
+    manifest = {
+        "schema_version": "audio-stage-manifest.v1",
+        "release_id": input_data["release_id"],
+        "input_digest": input_digest,
+        "preliminary_manifest_path": "04_audio/AUDIO_PRELIMINARY_MANIFEST.json",
+        "preliminary_manifest_sha256": sha256_file(preliminary_path),
+        "storyboard_plan_path": "04_audio/STORYBOARD_AUDIO_PLAN.json",
+        "storyboard_plan_sha256": sha256_file(plan_path),
+        "preliminary_audio_hashes": preliminary_audio_hashes,
+        "final_output_hashes": final_output_hashes,
+        "caption_timeline_sha256": caption_fingerprint,
+        "media_report": preliminary["media_report"],
+        "tool_provenance": tool_provenance(minimax_provider_exercised=True),
+        "provider": "minimax",
+        "provider_policy": "minimax_required",
+        "voice_id": input_data["voice"],
+        "stage_manifest_path": stage_relative,
+        "stage_manifest_sha256": final_output_hashes[stage_relative],
+        "next_stage_status": "ready_for_image_task_planning",
+    }
+    manifest_bytes = _pretty(manifest)
+    if final_exists:
+        existing = _load_object(final_manifest_path, "existing final audio manifest")
+        if existing.get("input_digest") != input_digest:
+            raise AudioStageConflict("a different final audio timeline already exists")
+        if existing.get("final_output_hashes") != final_output_hashes:
+            existing_hashes = existing.get("final_output_hashes")
+            existing_hashes = existing_hashes if isinstance(existing_hashes, Mapping) else {}
+            differing = sorted(
+                path for path in set(existing_hashes) | set(final_output_hashes)
+                if existing_hashes.get(path) != final_output_hashes.get(path)
+            )
+            raise AudioStageConflict(
+                f"existing final audio manifest differs from deterministic outputs: {differing}"
+            )
+        for relative, expected in final_output_hashes.items():
+            if not (root / relative).is_file() or sha256_file(root / relative) != expected:
+                raise AudioStageConflict(f"existing final audio output hash mismatch: {relative}")
+        if sha256_file(final_manifest_path) != _sha_bytes(manifest_bytes):
+            raise AudioStageConflict("existing final audio manifest was modified")
+        return AudioStageResult(
+            "unchanged", final_manifest_path, root / stage_relative, "ready_for_image_task_planning"
+        )
+    final_payloads["04_audio/AUDIO_STAGE_MANIFEST.json"] = manifest_bytes
+    for relative in final_payloads:
+        if relative in {"audio_meta.json", "STORYBOARD.json", contract_rel}:
+            continue
+        if (root / relative).exists():
+            raise AudioStageConflict(f"refusing to overwrite pre-existing final Phase 4 output: {relative}")
+    _publish(root, final_payloads)
+    return AudioStageResult(
+        "created", final_manifest_path, root / stage_relative, "ready_for_image_task_planning"
+    )
 
 
 def finalize_audio_stage(
@@ -840,6 +1525,24 @@ def finalize_audio_stage(
         prior = verify_phase4_prerequisites(root, input_data["release_id"])
         original_script = (root / "SCRIPT.md").read_text(encoding="utf-8")
         spoken_script, compilation, display_chapters, chapter_ranges = _compile_scripts(original_script, lexicon)
+        if input_data["provider"] == "minimax":
+            phase2_beats_raw = json.loads((root / "STORYBOARD_BASE.json").read_text(encoding="utf-8"))
+            if not isinstance(phase2_beats_raw, list):
+                raise AudioStageError("Phase 2 storyboard base must be an array")
+            return _finalize_minimax_audio_stage(
+                root,
+                preliminary_path=preliminary_path,
+                preliminary=preliminary,
+                final_manifest_path=final_manifest_path,
+                final_exists=final_exists,
+                plan_path=plan_path,
+                plan_raw=plan_raw,
+                input_data=input_data,
+                lexicon=lexicon,
+                prior=prior,
+                compilation=compilation,
+                phase2_beats_raw=phase2_beats_raw,
+            )
         section_register = _build_section_register(
             root, chapter_ranges, display_text=compilation.display_text
         )
@@ -952,20 +1655,25 @@ def finalize_audio_stage(
             # source of truth the Director and Render stages consume) as a
             # Phase-4 artifact when the locked inputs exist. Fail-closed: an
             # unbindable caption rejects the whole audio stage rather than
-            # shipping a frame with no semantic contract. Only added on a fresh
-            # finalize so already-finalized manifests are not retro-modified.
+            # shipping a frame with no semantic contract. Derive it from the
+            # in-memory bindings so the first and every identical finalize see
+            # the same deterministic output set.
             contract_rel = "04_audio/CAPTION_VISUAL_CONTRACT.json"
             if (
                 (root / "02_story_script_故事脚本/SCRIPT_PACKAGE.json").is_file()
                 and (root / "STORYBOARD_BASE.json").is_file()
-                and (root / "04_audio/CAPTION_BINDINGS.json").is_file()
                 and (root / "03_images_生成图片/BOOK_VISUAL_PROFILE.json").is_file()
             ):
                 from book_video_factory.semantic_alignment.caption_contract import (
                     build_caption_visual_contract_from_project,
                 )
-                build_caption_visual_contract_from_project(root, release_id=input_data["release_id"])
-                final_payloads[contract_rel] = (root / contract_rel).read_bytes()
+                contract_doc = build_caption_visual_contract_from_project(
+                    root,
+                    release_id=input_data["release_id"],
+                    validate_only=True,
+                    caption_bindings=bindings,
+                )
+                final_payloads[contract_rel] = _pretty(contract_doc)
             final_output_hashes = {path: _sha_bytes(data) for path, data in final_payloads.items()}
             stage_relative = f"manifests/stages/audio_final/audio-final-{input_digest[:16]}.json"
             stage = {

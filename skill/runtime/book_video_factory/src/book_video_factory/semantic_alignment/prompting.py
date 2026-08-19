@@ -125,6 +125,10 @@ def build_aligned_prompt_blocks(
     anchors: Sequence[str] | Iterable[str] = (),
     must_show: Sequence[str] | Iterable[str] = (),
     must_not_show: Sequence[str] | Iterable[str] = (),
+    visual_event_state: Mapping[str, Any] | None = None,
+    expected_visible_character_ids: Sequence[str] | Iterable[str] = (),
+    expected_narrative_character_count: int = 0,
+    allow_unlisted_narrative_characters: bool = True,
 ) -> tuple[str, ...]:
     """Return the numbered prompt blocks in strict priority order.
 
@@ -189,6 +193,30 @@ def build_aligned_prompt_blocks(
         f"Environment: {proposition.environment or 'approved atmospheric setting only'}. "
         f"Narrative function: {narrative_function} — {NARRATIVE_FUNCTION_GUIDANCE[narrative_function]}."
     )
+    # FIX 1 (pilot R2): the caption's observable Visual Event State is load
+    # bearing. Listing the right nouns is not enough; the frame must establish
+    # the required evidence and avoid the forbidden contradictory state.
+    if isinstance(visual_event_state, Mapping):
+        predicate = str(visual_event_state.get("action_predicate") or "").strip()
+        subject_state = str(visual_event_state.get("subject_state") or "").strip()
+        evidence = [
+            str(item).strip()
+            for item in visual_event_state.get("required_observable_evidence", [])
+            if str(item).strip()
+        ]
+        forbidden_states = [
+            str(item).strip()
+            for item in visual_event_state.get("forbidden_contradictory_state", [])
+            if str(item).strip()
+        ]
+        if evidence:
+            event_text = f" Observable event state: {predicate or 'caption_scene_state'};"
+            if subject_state:
+                event_text += f" subject state: {subject_state}."
+            event_text += " Evidence the frame must establish: " + "；".join(evidence) + "."
+            if forbidden_states:
+                event_text += " Forbidden contradictory state: " + "；".join(forbidden_states) + "."
+            blocks[-1] = blocks[-1] + event_text
 
     if proposition.mode == "Abstract":
         required_visible = (
@@ -206,6 +234,15 @@ def build_aligned_prompt_blocks(
             " Per the Caption Visual Contract, this frame MUST show: "
             + ", ".join(contract_must_show)
             + ". If a named character or object above is missing, the frame fails the contract."
+        )
+    # FIX A (pilot R2.1): exact narrative participant cardinality. A literal
+    # character scene must not invent an extra person the caption never named.
+    expected_ids = [str(item).strip() for item in expected_visible_character_ids if str(item).strip()]
+    if expected_ids and expected_narrative_character_count and not allow_unlisted_narrative_characters:
+        required_visible += (
+            f" Exactly {expected_narrative_character_count} narrative characters are present "
+            f"in this scene: {', '.join(expected_ids)}. Do not add another woman, man, child, "
+            "relative, neighbour, bystander or extra family member in the foreground or midground."
         )
     blocks.append(f"[4/9 REQUIRED VISIBLE] {required_visible}")
 

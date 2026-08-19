@@ -21,7 +21,14 @@ from book_video_factory.render_stage.compiler import RenderStageError, prepare_r
 from book_video_factory.render_stage.qa import FinalVideoQaError, evaluate_final_video
 from test_phase7_render_stage import RenderStageTests, write_json
 
-ROOT = Path(__file__).resolve().parents[2]
+def _repository_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "scripts/verify_vfinal_architecture.py").is_file():
+            return parent
+    raise AssertionError("repository root was not found")
+
+
+ROOT = _repository_root()
 
 
 def load_scanner(name: str):

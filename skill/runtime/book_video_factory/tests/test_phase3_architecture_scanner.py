@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
+def _repository_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "scripts/verify_vfinal_architecture.py").is_file():
+            return parent
+    raise AssertionError("repository root was not found")
+
+
+REPO = _repository_root()
 SCANNER = REPO / "scripts/verify_phase3_visual_stage.py"
 
 
@@ -89,8 +97,22 @@ class PhaseThreeArchitectureScannerTests(unittest.TestCase):
             path = root / "book_video_factory/tests/fixtures/fake-output.png"
             path.parent.mkdir(parents=True)
             path.write_bytes(b"not a source fixture")
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            subprocess.run(["git", "add", "-f", path.relative_to(root)], cwd=root, check=True)
             findings = scanner.scan_committed_generated_media(root)
         self.assertTrue(any(item["check_id"] == "committed_generated_media" for item in findings))
+
+    def test_untracked_ignored_media_fixture_is_not_reported_as_committed(self) -> None:
+        scanner = load_scanner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "book_video_factory/tests/fixtures/local-output.png"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"local diagnostic fixture")
+            (root / ".gitignore").write_text("*.png\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            findings = scanner.scan_committed_generated_media(root)
+        self.assertFalse(any(item["check_id"] == "committed_generated_media" for item in findings))
 
     def test_phase_three_docs_cannot_claim_audio_or_video_completion(self) -> None:
         scanner = load_scanner()
