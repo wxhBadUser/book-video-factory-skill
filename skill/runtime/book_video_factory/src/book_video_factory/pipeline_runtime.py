@@ -13,6 +13,12 @@ from book_video_factory.gates import current_approvals
 from book_video_factory.style_profiles import project_workflow
 from book_video_factory.repository_integrity import repository_integrity_block
 from book_video_factory.source_ingestion import source_rights_state
+from book_video_factory.visual_covenant import (
+    VisualCovenantError,
+    promote_covenant_assets,
+    verify_asset_catalog,
+    verify_visual_covenant,
+)
 from book_video_factory.visual_stage.approval import visual_stage_next_status
 
 
@@ -61,6 +67,46 @@ def _v2_host_orchestration(root: Path, release_id: str) -> dict[str, Any] | None
             "next_action": next_action,
             "command": None,
         }
+    covenant_status = verify_visual_covenant(root)
+    if covenant_status.get("status") != "visual_covenant_verified":
+        if covenant_status.get("status") in {"missing_visual_covenant", "invalid_visual_covenant"}:
+            return {
+                "release_id": release_id,
+                "stage": "visual_covenant",
+                "status": covenant_status["status"],
+                "human_review_required": False,
+                "next_action": "approve the Visual Covenant baseline after the locked script is verified",
+                "command": None,
+            }
+        return {
+            "release_id": release_id,
+            "stage": "visual_covenant",
+            "status": covenant_status["status"],
+            "human_review_required": False,
+            "next_action": covenant_status.get("reason", "restore the Visual Covenant baseline evidence"),
+            "command": None,
+        }
+    catalog_status = verify_asset_catalog(root)
+    if catalog_status.get("status") != "asset_catalog_verified":
+        try:
+            promote = promote_covenant_assets(root)
+        except (VisualCovenantError, OSError, ValueError) as error:
+            return {
+                "release_id": release_id,
+                "stage": "asset_catalog",
+                "status": "blocked_by_catalog_integrity",
+                "human_review_required": False,
+                "next_action": f"re-promotion blocked: {error}",
+                "command": None,
+            }
+        return {
+            "release_id": release_id,
+            "stage": "asset_catalog",
+            "status": promote.get("status", "asset_catalog_ready"),
+            "human_review_required": False,
+            "next_action": f"auto-promoted {promote.get('promoted_count', 0)} covenant assets into the asset catalog",
+            "command": None,
+        }
     action = derive_next_action(root)
     if action is not None:
         return {
@@ -74,9 +120,10 @@ def _v2_host_orchestration(root: Path, release_id: str) -> dict[str, Any] | None
         }
     return {
         "release_id": release_id,
-        "stage": "locked_script",
-        "status": "script_locked",
-        "next_action": "locked script verified; await the next legal Host action",
+        "stage": "asset_catalog",
+        "status": "asset_catalog_ready",
+        "human_review_required": False,
+        "next_action": "covenant assets promoted; await the next legal Host action",
         "command": None,
     }
 

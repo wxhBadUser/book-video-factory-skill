@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jaxxmind.local/schemas/asset_catalog.v2.schema.json",
+  "title": "Asset Catalog V2 contract",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "release_id",
+    "project_id",
+    "covenant_approval_sha256",
+    "assets",
+    "catalog_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "asset-catalog.v2"},
+    "release_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "covenant_approval_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "asset_id",
+          "asset_family",
+          "visual_function",
+          "origin",
+          "status",
+          "path",
+          "file_sha256",
+          "covenant_approval_sha256",
+          "provenance",
+          "promoted_at"
+        ],
+        "properties": {
+          "asset_id": {"type": "string", "minLength": 1},
+          "asset_family": {"type": "string", "minLength": 1},
+          "visual_function": {"type": "string", "minLength": 1},
+          "origin": {"const": "visual_covenant"},
+          "status": {"const": "approved_production_asset"},
+          "path": {"type": "string", "minLength": 1},
+          "file_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "covenant_approval_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "provenance": {
+            "type": "object",
+            "required": ["provider", "tool_call_id"],
+            "properties": {
+              "provider": {"type": "string", "minLength": 1},
+              "tool_call_id": {"type": "string", "minLength": 1}
+            }
+          },
+          "promoted_at": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": true
+      }
+    },
+    "catalog_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "additionalProperties": true
+}

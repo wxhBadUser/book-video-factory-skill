@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jaxxmind.local/schemas/visual_covenant.v2.schema.json",
+  "title": "Visual Covenant V2 contract",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "release_id",
+    "project_id",
+    "locked_script_sha256",
+    "assets",
+    "visual_covenant_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "visual-covenant.v2"},
+    "release_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "locked_script_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "asset_id",
+          "asset_family",
+          "visual_function",
+          "source",
+          "production_eligible",
+          "technical_status",
+          "path",
+          "file_sha256",
+          "provenance"
+        ],
+        "properties": {
+          "asset_id": {"type": "string", "minLength": 1},
+          "asset_family": {"type": "string", "minLength": 1},
+          "visual_function": {"type": "string", "minLength": 1},
+          "source": {"const": "visual_covenant"},
+          "production_eligible": {"type": "boolean"},
+          "technical_status": {"const": "verified"},
+          "path": {"type": "string", "minLength": 1},
+          "file_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "provenance": {
+            "type": "object",
+            "required": ["provider", "tool_call_id"],
+            "properties": {
+              "provider": {"type": "string", "minLength": 1},
+              "tool_call_id": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "visual_covenant_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "additionalProperties": true
+}
