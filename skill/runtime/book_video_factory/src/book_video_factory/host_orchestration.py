@@ -158,6 +158,12 @@ def _read_owned(root: Path) -> dict[str, Any]:
     return {"actions": _jsonl(actions), "events": _jsonl(events)}
 
 
+def read_ledgers(project: Path) -> dict[str, Any]:
+    """Return the raw actions/events ledgers for a V2 project (fail-closed on corruption)."""
+    root = project.expanduser().resolve()
+    return _read_owned(root)
+
+
 def verify_host_event(project: Path, event: dict[str, Any]) -> dict[str, Any]:
     valid = validate_host_event(event)
     root = project.expanduser().resolve()

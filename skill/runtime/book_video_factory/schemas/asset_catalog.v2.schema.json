@@ -36,8 +36,14 @@
           "asset_id": {"type": "string", "minLength": 1},
           "asset_family": {"type": "string", "minLength": 1},
           "visual_function": {"type": "string", "minLength": 1},
-          "origin": {"const": "visual_covenant"},
-          "status": {"const": "approved_production_asset"},
+          "origin": {
+            "type": "string",
+            "enum": ["visual_covenant", "production_generation"]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["approved_production_asset", "pending_judge", "pending_generation", "blocked_quality_failure"]
+          },
           "path": {"type": "string", "minLength": 1},
           "file_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
           "covenant_approval_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},

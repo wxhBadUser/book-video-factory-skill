@@ -10,6 +10,7 @@ from book_video_factory.locked_script import verify_locked_script
 from book_video_factory.manifests import sha256_file
 from book_video_factory.delivery_stage import FinalMasterApprovalError, verify_final_master_approval
 from book_video_factory.gates import current_approvals
+from book_video_factory.production_orchestration import ProductionOrchestrationError, production_status
 from book_video_factory.style_profiles import project_workflow
 from book_video_factory.repository_integrity import repository_integrity_block
 from book_video_factory.source_ingestion import source_rights_state
@@ -107,6 +108,19 @@ def _v2_host_orchestration(root: Path, release_id: str) -> dict[str, Any] | None
             "next_action": f"auto-promoted {promote.get('promoted_count', 0)} covenant assets into the asset catalog",
             "command": None,
         }
+    try:
+        production = production_status(root)
+    except ProductionOrchestrationError as error:
+        return {
+            "release_id": release_id,
+            "stage": "host_orchestration",
+            "status": "blocked_by_production_integrity",
+            "human_review_required": False,
+            "next_action": str(error),
+            "command": None,
+        }
+    if production is not None:
+        return production
     action = derive_next_action(root)
     if action is not None:
         return {

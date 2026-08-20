@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jaxxmind.local/schemas/multimodal_visual_judge.v2.schema.json",
+  "title": "Multimodal Visual Judge V2 contract",
+  "description": "A Host multimodal-agent verdict bound to the current Covenant approval, the source Visual Paragraph, and the active Judge Policy by hash. The verdict carries the Host-observed dimensions, hard failures, warnings, and a retry strategy when the Runtime should revise and regenerate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "action_id",
+    "asset_id",
+    "asset_sha256",
+    "covenant_approval_sha256",
+    "visual_paragraph_sha256",
+    "judge_policy_sha256",
+    "verdict",
+    "dimensions",
+    "hard_failures",
+    "warnings",
+    "reason",
+    "judge_model",
+    "judge_call_id"
+  ],
+  "properties": {
+    "schema_version": {"const": "multimodal-visual-judge.v2"},
+    "action_id": {"type": "string", "minLength": 1},
+    "asset_id": {"type": "string", "minLength": 1},
+    "asset_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "covenant_approval_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "visual_paragraph_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "judge_policy_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "verdict": {
+      "type": "string",
+      "enum": ["pass", "warning", "retryable_failure", "hard_failure"]
+    },
+    "dimensions": {"type": "object", "additionalProperties": true},
+    "hard_failures": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "reason": {"type": "string", "minLength": 1},
+    "retry_strategy": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "judge_model": {"type": "string", "minLength": 1},
+    "judge_call_id": {"type": "string", "minLength": 1}
+  }
+}

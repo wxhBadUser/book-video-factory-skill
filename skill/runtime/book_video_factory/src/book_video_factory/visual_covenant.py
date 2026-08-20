@@ -217,6 +217,27 @@ def _write_immutable_json(path: Path, payload: dict[str, Any]) -> None:
     )
 
 
+def write_asset_catalog(
+    project: Path,
+    *,
+    release_id: str,
+    approval_sha: str,
+    assets: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Write the immutable asset catalog with its self-referential catalog_sha256."""
+    root = project.expanduser().resolve()
+    payload = {
+        "schema_version": "asset-catalog.v2",
+        "release_id": release_id,
+        "project_id": root.name,
+        "covenant_approval_sha256": approval_sha,
+        "assets": assets,
+    }
+    catalog_path = safe_project_output(root, Path(CATALOG_REL))
+    _write_immutable_json(catalog_path, payload)
+    return payload
+
+
 def promote_covenant_assets(project: Path) -> dict[str, Any]:
     """Promote only production_eligible covenant assets into the asset catalog."""
     root = project.expanduser().resolve()
@@ -290,6 +311,21 @@ def promote_covenant_assets(project: Path) -> dict[str, Any]:
             entry["covenant_approval_sha256"] = approval_sha
         else:
             entry = next(e for e in promoted if e["asset_id"] == asset_id)
+        merged_assets.append(entry)
+    # Preserve production-generated assets already bound to the current approval.
+    # Re-promotion must not drop them; they carry their own registered evidence.
+    produced = [
+        dict(item)
+        for item in existing.values()
+        if isinstance(item, dict)
+        and item.get("origin") == "production_generation"
+        and item.get("covenant_approval_sha256") == approval_sha
+    ]
+    for entry in sorted(produced, key=lambda item: str(item.get("asset_id", ""))):
+        asset_id = str(entry.get("asset_id", ""))
+        if asset_id in seen:
+            continue
+        seen.add(asset_id)
         merged_assets.append(entry)
     next_catalog: dict[str, Any] = {
         "schema_version": "asset-catalog.v2",
@@ -401,6 +437,11 @@ def load_asset_catalog(project: Path) -> dict[str, Any]:
 
 
 def covenant_production_assets(project: Path) -> list[dict[str, Any]]:
-    """Return production-ready catalog assets (director reuse_asset readiness)."""
+    """Return approved production-ready catalog assets (director reuse_asset readiness)."""
     catalog = load_asset_catalog(project)
-    return [item for item in catalog.get("assets", []) if isinstance(item, dict)]
+    return [
+        item
+        for item in catalog.get("assets", [])
+        if isinstance(item, dict)
+        and item.get("status") == "approved_production_asset"
+    ]
