@@ -13,6 +13,7 @@ from book_video_factory.gates import current_approvals
 from book_video_factory.production_orchestration import ProductionOrchestrationError, production_status
 from book_video_factory.style_profiles import project_workflow
 from book_video_factory.repository_integrity import repository_integrity_block
+from book_video_factory.v2_render import V2RenderError, render_delivery_status
 from book_video_factory.source_ingestion import source_rights_state
 from book_video_factory.visual_covenant import (
     VisualCovenantError,
@@ -120,6 +121,18 @@ def _v2_host_orchestration(root: Path, release_id: str) -> dict[str, Any] | None
             "command": None,
         }
     if production is not None:
+        if production.get("status") == "asset_catalog_ready":
+            try:
+                return render_delivery_status(root)
+            except V2RenderError as error:
+                return {
+                    "release_id": release_id,
+                    "stage": "render",
+                    "status": "blocked_by_render_integrity",
+                    "human_review_required": False,
+                    "next_action": str(error),
+                    "command": None,
+                }
         return production
     action = derive_next_action(root)
     if action is not None:
