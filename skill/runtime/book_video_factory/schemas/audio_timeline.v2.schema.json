@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Audio Timeline v2",
+  "description": "Provider-authoritative narration timing plus the autonomous BGM binding. Real audio (provider VTT + master) is the only timing authority; captions are bound by hash but never re-time the narration.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_id",
+    "project_id",
+    "narration_master_path",
+    "narration_master_sha256",
+    "provider_vtt_path",
+    "provider_vtt_sha256",
+    "caption_timeline_path",
+    "caption_timeline_sha256",
+    "timing_authority",
+    "narration_duration_seconds",
+    "bgm"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "audio-timeline.v2"
+    },
+    "release_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "narration_master_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "narration_master_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "provider_vtt_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provider_vtt_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "caption_timeline_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "caption_timeline_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timing_authority": {
+      "const": "provider"
+    },
+    "narration_duration_seconds": {
+      "type": "number",
+      "minimum": 0.0
+    },
+    "bgm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bgm_mode"
+      ],
+      "properties": {
+        "bgm_mode": {
+          "type": "string",
+          "enum": [
+            "library",
+            "none"
+          ]
+        },
+        "track_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "rights_status": {
+          "const": "cleared"
+        },
+        "selection_reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "loop_policy": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ducking_db": {
+          "type": "number"
+        },
+        "target_lufs": {
+          "type": "number"
+        },
+        "license": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

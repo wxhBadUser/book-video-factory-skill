@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BGM Candidates v1",
+  "description": "Declared, rights-cleared BGM library used by the autonomous selector. Missing file degrades to bgm_mode=none; an invalid document is corrupt evidence and fails closed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tracks"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "bgm-candidates.v1"
+    },
+    "release_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "track_id",
+          "path",
+          "rights_status",
+          "selection_score"
+        ],
+        "properties": {
+          "track_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "rights_status": {
+            "type": "string",
+            "enum": [
+              "cleared"
+            ]
+          },
+          "selection_score": {
+            "type": "number",
+            "minimum": 0.0
+          },
+          "selection_reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "loop_policy": {
+            "type": "string",
+            "minLength": 1
+          },
+          "ducking_db": {
+            "type": "number"
+          },
+          "target_lufs": {
+            "type": "number"
+          },
+          "license": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  }
+}

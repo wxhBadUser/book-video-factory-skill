@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Audio Mix Manifest v1",
+  "description": "Machine-completed ducking, loop, and loudness QA for autonomous BGM. bgm_mode=none is a legal production result with mix_qa.status=not_applicable.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_id",
+    "project_id",
+    "narration_master_path",
+    "narration_master_sha256",
+    "timing_authority",
+    "bgm_mode",
+    "bgm",
+    "mix_qa"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "audio-mix-manifest.v1"
+    },
+    "release_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "narration_master_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "narration_master_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timing_authority": {
+      "const": "provider"
+    },
+    "bgm_mode": {
+      "type": "string",
+      "enum": [
+        "library",
+        "none"
+      ]
+    },
+    "bgm": {
+      "type": "object"
+    },
+    "mix_qa": {
+      "type": "object"
+    }
+  }
+}
