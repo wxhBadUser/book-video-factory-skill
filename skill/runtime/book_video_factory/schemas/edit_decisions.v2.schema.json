@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jaxxmind.local/schemas/edit_decisions.v2.schema.json",
+  "title": "Edit Decisions V2 contract",
+  "description": "Director expression of literary intent per visual paragraph. hold_current and reuse_asset carry no resolved asset for the renderer; the runtime resolver turns each decision into an explicit edit-timeline event.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_id",
+    "project_id",
+    "visual_paragraphs_sha256",
+    "decisions"
+  ],
+  "properties": {
+    "schema_version": {"const": "edit-decisions.v2"},
+    "release_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "visual_paragraphs_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "decisions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "paragraph_id",
+          "decision"
+        ],
+        "properties": {
+          "paragraph_id": {"type": "string", "minLength": 1},
+          "decision": {
+            "type": "string",
+            "enum": ["generate_new", "reuse_asset", "hold_current"]
+          },
+          "asset_id": {"type": "string", "minLength": 1},
+          "duration": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["start", "end"],
+            "properties": {
+              "start": {"type": "number", "minimum": 0.0},
+              "end": {"type": "number", "minimum": 0.0}
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {"properties": {"decision": {"const": "hold_current"}}},
+            "then": {
+              "properties": {"asset_id": false}
+            }
+          }
+        ]
+      }
+    }
+  }
+}

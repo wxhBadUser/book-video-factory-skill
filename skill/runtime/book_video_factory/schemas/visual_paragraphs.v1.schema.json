@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jaxxmind.local/schemas/visual_paragraphs.v1.schema.json",
+  "title": "Visual Paragraphs V1 contract",
+  "description": "A low-density partition of the narration duration into contiguous, non-overlapping visual paragraphs. Renderer-normative are the time bounds and source caption ids; visual_intent and mood are non-normative Director expression and never drive rendering.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_id",
+    "project_id",
+    "audio_timeline_sha256",
+    "narration_duration_seconds",
+    "paragraphs"
+  ],
+  "properties": {
+    "schema_version": {"const": "visual-paragraphs.v1"},
+    "release_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "audio_timeline_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "narration_duration_seconds": {"type": "number", "minimum": 0.0},
+    "paragraphs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "paragraph_id",
+          "start",
+          "end",
+          "source_caption_ids",
+          "visual_intent",
+          "mood"
+        ],
+        "properties": {
+          "paragraph_id": {"type": "string", "minLength": 1},
+          "start": {"type": "number", "minimum": 0.0},
+          "end": {"type": "number", "minimum": 0.0},
+          "source_caption_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "visual_intent": {"type": "string", "minLength": 1},
+          "mood": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}
