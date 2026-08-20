@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from book_video_factory.audio_stage.status import audio_stage_status
+from book_video_factory.host_orchestration import derive_next_action
+from book_video_factory.locked_script import verify_locked_script
 from book_video_factory.manifests import sha256_file
 from book_video_factory.delivery_stage import FinalMasterApprovalError, verify_final_master_approval
 from book_video_factory.gates import current_approvals
@@ -41,11 +43,52 @@ def _release_id(root: Path) -> str:
     return str(workflow.get("releaseId","r1"))
 
 
+def _v2_host_orchestration(root: Path, release_id: str) -> dict[str, Any] | None:
+    lock_status = verify_locked_script(root)
+    status = lock_status.get("status")
+    if status in {"missing_locked_script", "invalid_locked_script"}:
+        # No V2 locked contract yet; fall through to the legacy Phase 0-7 path.
+        return None
+    if status != "script_locked":
+        next_action = {
+            "blocked_rights": "clear and verify source rights before locking the V2 script",
+            "blocked_by_script_integrity": "recompute and restore the locked script hash evidence",
+        }.get(status, "resolve the V2 locked script contract blocking state")
+        return {
+            "release_id": release_id,
+            "stage": "locked_script",
+            "status": status,
+            "next_action": next_action,
+            "command": None,
+        }
+    action = derive_next_action(root)
+    if action is not None:
+        return {
+            "release_id": release_id,
+            "stage": "host_orchestration",
+            "status": "host_action_pending",
+            "human_review_required": False,
+            "next_action": f"execute Host action {action['action_id']} and register its terminal event",
+            "command": None,
+            "host_action": action,
+        }
+    return {
+        "release_id": release_id,
+        "stage": "locked_script",
+        "status": "script_locked",
+        "next_action": "locked script verified; await the next legal Host action",
+        "command": None,
+    }
+
+
 def _raw_pipeline_status(project: Path) -> dict[str, Any]:
     root=project.expanduser().resolve(); release_id=_release_id(root)
     integrity_block = repository_integrity_block()
     if integrity_block is not None:
         return {"release_id": release_id, **integrity_block}
+    v2 = _v2_host_orchestration(root, release_id)
+    if v2 is not None:
+        return v2
     final=_json(root/"08_render_合成/final/FINAL_RENDER_MANIFEST.json")
     if final:
         video=root/str(final.get("video_path","")); qa=root/str(final.get("qa_report_path",""))

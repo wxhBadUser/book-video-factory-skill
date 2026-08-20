@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jaxxmind.local/schemas/host_agent_event.v2.schema.json",
+  "title": "Host agent event V2 contract",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "action_id",
+    "event_type",
+    "status",
+    "idempotency_key",
+    "provider",
+    "tool_call_id"
+  ],
+  "properties": {
+    "schema_version": {"const": "host-agent-event.v2"},
+    "action_id": {"type": "string", "minLength": 1},
+    "event_type": {"type": "string", "minLength": 1},
+    "status": {"enum": ["succeeded", "failed"]},
+    "idempotency_key": {"type": "string", "minLength": 1},
+    "provider": {"type": "string", "minLength": 1},
+    "tool_call_id": {"type": "string", "minLength": 1},
+    "output_path": {"type": ["string", "null"]},
+    "output_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "model": {"type": ["string", "null"]},
+    "completed_at": {"type": ["string", "null"]},
+    "failure_class": {"type": ["string", "null"]},
+    "retryable": {"type": ["boolean", "null"]},
+    "has_registered_output": {"type": ["boolean", "null"]}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"status": {"const": "failed"}},
+        "required": ["status"]
+      },
+      "then": {
+        "required": ["failure_class", "retryable", "has_registered_output"]
+      }
+    }
+  ],
+  "additionalProperties": true
+}

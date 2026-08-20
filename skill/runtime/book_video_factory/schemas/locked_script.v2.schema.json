@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jaxxmind.local/schemas/locked_script.v2.schema.json",
+  "title": "Locked script V2 contract",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "release_id",
+    "project_id",
+    "title",
+    "author",
+    "language",
+    "script_path",
+    "script_sha256",
+    "source_sha256",
+    "rights_state",
+    "lock_status",
+    "locked_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "locked-script.v2"},
+    "release_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "title": {"type": "string", "minLength": 1},
+    "author": {"type": "string", "minLength": 1},
+    "language": {"const": "zh"},
+    "script_path": {"type": "string", "minLength": 1},
+    "script_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "rights_state": {"const": "cleared"},
+    "lock_status": {"const": "locked"},
+    "locked_at": {"type": "string", "minLength": 1}
+  },
+  "additionalProperties": true
+}

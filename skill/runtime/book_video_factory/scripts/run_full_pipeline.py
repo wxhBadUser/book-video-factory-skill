@@ -3,12 +3,13 @@ from __future__ import annotations
 import argparse,json,subprocess,sys
 from pathlib import Path
 import _bootstrap  # noqa: F401
+from book_video_factory.host_orchestration import derive_next_action
 from book_video_factory.pipeline_runtime import pipeline_status
 
 def main()->int:
     p=argparse.ArgumentParser(description="Derive the only legal next action for the Phase 0-7 book-video pipeline")
     sub=p.add_subparsers(dest="command",required=True)
-    for name in ("status","next"):
+    for name in ("status","next","next-action"):
         q=sub.add_parser(name); q.add_argument("--project",type=Path,required=True)
     verify=sub.add_parser("verify-repository"); verify.add_argument("--root",type=Path,default=Path.cwd())
     a=p.parse_args()
@@ -22,6 +23,17 @@ def main()->int:
         except Exception as error:
             print(json.dumps({"status":"failed","error":str(error)},ensure_ascii=False)); return 2
         print(json.dumps(payload,ensure_ascii=False,indent=2)); return 0
+    if a.command == "next-action":
+        project = a.project.expanduser().resolve()
+        if not project.is_dir():
+            print(json.dumps({"status":"failed","error":f"project path is not a directory: {project}"},ensure_ascii=False)); return 2
+        try:
+            action = derive_next_action(project)
+        except Exception as error:
+            print(json.dumps({"status":"failed","error":str(error)},ensure_ascii=False)); return 2
+        if action is None:
+            print(json.dumps({"status":"none","action":None},ensure_ascii=False,indent=2)); return 0
+        print(json.dumps({"status":"ready","action":action},ensure_ascii=False,indent=2)); return 0
     root=a.root.expanduser().resolve(); scripts=[f"verify_phase{i}_{name}.py" for i,name in []]
     commands=[
         [sys.executable,str(root/"scripts/verify_phase0_architecture.py"),"--root",str(root)],
