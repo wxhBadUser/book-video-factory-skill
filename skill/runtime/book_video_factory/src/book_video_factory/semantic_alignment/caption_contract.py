@@ -766,7 +766,15 @@ def _best_beat_for_caption(
 # by the Agent-derived Character Registry / Visual Foundation, never baked into
 # the generic runtime. Only book-agnostic structural types remain here; the
 # caller injects per-book aliases via entity_name_maps.
-_ENTITY_ALIASES: dict[str, tuple[str, ...]] = {}
+_ENTITY_ALIASES: dict[str, tuple[str, ...]] = {
+    # Book-agnostic structural referents kept as part of the generic lexicon.
+    # FIX 2 (pilot R2) requires closing/theory captions that name concrete
+    # drawable objects (炊烟/农舍/屋顶) to stay Literal, independent of the
+    # injected per-book name maps.
+    "OBJ_SMOKE": ("炊烟",),
+    "OBJ_FARMHOUSE": ("农舍",),
+    "OBJ_ROOF": ("屋顶",),
+}
 
 
 _CAPTION_LOCAL_ROLES: dict[str, tuple[str, str, str]] = {

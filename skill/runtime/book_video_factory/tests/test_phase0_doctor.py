@@ -67,7 +67,7 @@ class PhaseZeroDoctorTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, serialized.lower())
 
-    def test_production_report_blocks_without_real_edge_tts_and_explains_requirements(self) -> None:
+    def test_production_report_treats_edge_tts_as_optional_legacy_and_explains_provider_policy(self) -> None:
         completed = subprocess.run(
             [sys.executable, str(DOCTOR_PATH), "--profile", "production", "--json"],
             cwd=REPO,
@@ -86,12 +86,12 @@ class PhaseZeroDoctorTests(unittest.TestCase):
             self.assertIn(name, checks)
         self.assertEqual(checks["python_module:jsonschema"]["status"], "ready")
         edge = checks["edge-tts"]
-        self.assertIn(edge["status"], {"ready", "blocked"})
-        self.assertIn("continuous narration", edge["note"].lower())
-        self.assertIn("vtt", edge["note"].lower())
-        self.assertIn("network", edge["note"].lower())
-        if edge["status"] == "blocked":
-            self.assertEqual(completed.returncode, 1)
+        # Edge TTS is a legacy/optional provider; it never blocks production
+        # readiness and never acts as a fallback from MiniMax.
+        self.assertIn(edge["status"], {"ready", "warn"})
+        self.assertIn("legacy", edge["note"].lower())
+        self.assertIn("minimax", edge["note"].lower())
+        self.assertEqual(payload["overall"], "ready")
 
 
     def test_vendor_verifier_detects_hash_tampering(self) -> None:

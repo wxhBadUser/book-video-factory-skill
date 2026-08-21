@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from book_video_factory.content_package import ContentPackageError, compile_content_package
+from book_video_factory.content_package import compile_content_package
 from book_video_factory.originality_check import normalize
 from book_video_factory.project import initialize_project
 
@@ -66,18 +66,31 @@ def _inputs_with_short_script() -> dict[str, dict]:
 
 
 class PilotQualificationScopeTests(unittest.TestCase):
-    def test_short_script_is_rejected_for_normal_production_project(self) -> None:
+    def test_short_script_is_accepted_for_production_with_chars_recorded_diagnostic(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             project = initialize_project(
                 Path(temp) / "warehouse", "normal", "老人与海", "海明威"
             )
-            with self.assertRaisesRegex(ContentPackageError, "chars_range"):
-                compile_content_package(
-                    project,
-                    release_id="r1",
-                    source_root=FIXTURE,
-                    **_inputs_with_short_script(),
+            result = compile_content_package(
+                project,
+                release_id="r1",
+                source_root=FIXTURE,
+                **_inputs_with_short_script(),
+            )
+
+            lock = json.loads(
+                (project / "02_story_script_故事脚本" / "SCRIPT_LOCK.json").read_text(
+                    encoding="utf-8"
                 )
+            )
+            checks = lock["machine_gate"]["checks"]
+            self.assertEqual(result.status, "created")
+            self.assertTrue(lock["machine_locked"])
+            # Character count is recorded for diagnostics only; no hard range
+            # is enforced because the Creative Route decides target length.
+            self.assertNotIn("chars_range", checks)
+            self.assertEqual(checks["chars_recorded"]["passed"], True)
+            self.assertIsNotNone(checks["chars_recorded"]["detail"]["value"])
 
     def test_explicit_pilot_scope_accepts_and_records_60_to_90_second_script(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

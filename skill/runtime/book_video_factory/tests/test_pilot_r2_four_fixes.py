@@ -250,6 +250,7 @@ class TestConcreteCaptionOverridesAbstract:
             section_nf="theory",
             section_text="凤霞出嫁那天，",
             caption_text="凤霞出嫁那天，",
+            name_maps=[{"C004": "凤霞"}],
         )
         assert results[0].visual_mode == "literal"
         assert any(item.natural_language == "凤霞" for item in results[0].must_show)
