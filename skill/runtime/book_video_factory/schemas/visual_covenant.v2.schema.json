@@ -8,6 +8,8 @@
     "release_id",
     "project_id",
     "locked_script_sha256",
+    "world_profile",
+    "world_profile_sha256",
     "assets",
     "visual_covenant_sha256"
   ],
@@ -16,6 +18,12 @@
     "release_id": {"type": "string", "minLength": 1},
     "project_id": {"type": "string", "minLength": 1},
     "locked_script_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "world_profile": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": true
+    },
+    "world_profile_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "assets": {
       "type": "array",
       "items": {

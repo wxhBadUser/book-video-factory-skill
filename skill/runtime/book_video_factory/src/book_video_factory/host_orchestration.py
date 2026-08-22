@@ -22,6 +22,7 @@ class HostActionError(ValueError):
 
 MAX_ATTEMPTS = 3
 ACTION_TYPES = {
+    "plan_visual_covenant",
     "generate_image",
     "judge_visual_asset",
     "select_bgm",

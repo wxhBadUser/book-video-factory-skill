@@ -14,6 +14,7 @@ from book_video_factory.visual_covenant import (
     record_visual_covenant_approval,
     verify_asset_catalog,
     verify_visual_covenant,
+    world_profile_canonical_sha,
 )
 
 
@@ -79,9 +80,11 @@ def _covenant_payload(*, assets: list[dict]) -> dict:
         "schema_version": "visual-covenant.v2",
         "release_id": "release-1",
         "project_id": "pilot",
-        "locked_script_sha256": _sha("locked"),
+        "locked_script_sha256": _sha("covenant narration"),
+        "world_profile": {"period": "nineteenth-century Yorkshire", "palette": "muted earth tones"},
         "assets": assets,
     }
+    payload["world_profile_sha256"] = world_profile_canonical_sha(payload["world_profile"])
     payload["visual_covenant_sha256"] = covenant_canonical_sha(payload)
     return payload
 

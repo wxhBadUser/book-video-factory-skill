@@ -18,11 +18,12 @@ from book_video_factory.production_orchestration import ProductionOrchestrationE
 from book_video_factory.literary_director import LiteraryDirectorError, register_literary_director_action
 from book_video_factory.style_profiles import project_workflow
 from book_video_factory.repository_integrity import repository_integrity_block
-from book_video_factory.v2_render import V2RenderError, render_delivery_status, render_static
+from book_video_factory.v2_render import V2RenderError, render_delivery_status
 from book_video_factory.source_ingestion import source_rights_state
 from book_video_factory.visual_covenant import (
     VisualCovenantError,
     promote_covenant_assets,
+    plan_visual_covenant,
     verify_asset_catalog,
     verify_visual_covenant_approval,
     verify_visual_covenant,
@@ -89,6 +90,27 @@ def _v2_host_orchestration(root: Path, release_id: str) -> dict[str, Any] | None
     covenant_status = verify_visual_covenant(root)
     if covenant_status.get("status") != "visual_covenant_verified":
         if covenant_status.get("status") in {"missing_visual_covenant", "invalid_visual_covenant"}:
+            if covenant_status.get("status") == "missing_visual_covenant":
+                try:
+                    action = plan_visual_covenant(root)
+                except (VisualCovenantError, OSError, ValueError) as error:
+                    return {
+                        "release_id": release_id,
+                        "stage": "visual_covenant",
+                        "status": "blocked_by_visual_covenant_plan",
+                        "human_review_required": False,
+                        "next_action": str(error),
+                        "command": None,
+                    }
+                return {
+                    "release_id": release_id,
+                    "stage": "visual_covenant",
+                    "status": "host_action_pending",
+                    "human_review_required": False,
+                    "next_action": f"execute Host action {action['action_id']} and register its Covenant plan result",
+                    "command": None,
+                    "host_action": action,
+                }
             return {
                 "release_id": release_id,
                 "stage": "visual_covenant",
@@ -180,10 +202,6 @@ def _v2_host_orchestration(root: Path, release_id: str) -> dict[str, Any] | None
         if production.get("status") == "asset_catalog_ready":
             try:
                 render_status = render_delivery_status(root)
-                if render_status.get("status") == "awaiting_static_render":
-                    render_static(root)
-                    render_delivery_status(root)
-                    return render_delivery_status(root)
                 return render_status
             except V2RenderError as error:
                 return {

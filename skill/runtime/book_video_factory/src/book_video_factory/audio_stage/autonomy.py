@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import wave
 from pathlib import Path
 from typing import Any, Sequence
@@ -11,6 +12,7 @@ from typing import Any, Sequence
 from book_video_factory.locked_script import verify_locked_script
 from book_video_factory.manifests import safe_project_output, sha256_file
 from book_video_factory.audio_stage.providers.base import NarrationChunkRequest, NarrationChunkResult
+from book_video_factory.visual_covenant import verify_asset_catalog, verify_visual_covenant_approval
 
 
 class AudioAutonomyError(RuntimeError):
@@ -225,3 +227,59 @@ def generate_audio_timeline_v2(
     }
     _atomic_json(safe_project_output(root, Path(TIMELINE_REL)), timeline)
     return {"status": "audio_timeline_ready", "timeline_path": TIMELINE_REL, "duration": actual_duration}
+
+
+def _provider_value(provider: Any, public_name: str, private_name: str, default: str) -> str:
+    value = getattr(provider, public_name, None)
+    if not isinstance(value, str) or not value:
+        value = getattr(provider, private_name, None)
+    return value if isinstance(value, str) and value else default
+
+
+def _locked_script_requests(root: Path, lock: dict[str, Any], provider: Any) -> list[NarrationChunkRequest]:
+    script_path = safe_project_output(root, Path(str(lock["script_path"])))
+    try:
+        text = script_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise AudioAutonomyError(f"locked script cannot be read for narration: {error}") from error
+    units = [unit.strip() for unit in re.split(r"\n\s*\n", text) if unit.strip()]
+    if not units:
+        raise AudioAutonomyError("locked script contains no narration text")
+    provider_id = _provider_value(provider, "provider_id", "provider_id", "provider-neutral")
+    model = _provider_value(provider, "model", "_model", "provider-neutral-model")
+    voice_id = _provider_value(provider, "voice_id", "_voice_id", "provider-neutral-voice")
+    return [
+        NarrationChunkRequest(
+            chunk_id=f"LOCKED_SCRIPT_{index:04d}",
+            text=unit,
+            provider=provider_id,
+            model=model,
+            voice_id=voice_id,
+            extra={"locked_script_sha256": lock["script_sha256"], "unit_index": index},
+        )
+        for index, unit in enumerate(units, start=1)
+    ]
+
+
+def run_narration_from_locked_script(project: Path, provider: Any) -> dict[str, Any]:
+    """Build provider-neutral narration requests from the locked script itself."""
+    root = project.expanduser().resolve()
+    lock = verify_locked_script(root)
+    if lock.get("status") != "script_locked":
+        raise AudioAutonomyError(f"locked script is not verified: {lock.get('status')}")
+    approval = verify_visual_covenant_approval(root)
+    if approval.get("status") != "visual_covenant_approval_verified":
+        raise AudioAutonomyError(f"visual covenant approval is not verified: {approval.get('status')}")
+    catalog = verify_asset_catalog(root)
+    if catalog.get("status") != "asset_catalog_verified":
+        raise AudioAutonomyError(f"asset catalog is not verified: {catalog.get('status')}")
+    requests = _locked_script_requests(root, lock, provider)
+    preflight = getattr(provider, "preflight", None)
+    close = getattr(provider, "close", None)
+    if callable(preflight):
+        preflight()
+    try:
+        return generate_audio_timeline_v2(root, provider, requests)
+    finally:
+        if callable(close):
+            close()

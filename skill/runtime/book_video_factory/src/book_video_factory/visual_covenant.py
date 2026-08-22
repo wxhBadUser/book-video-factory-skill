@@ -12,7 +12,12 @@ from typing import Any
 
 from book_video_factory.locked_script import verify_locked_script
 from book_video_factory.manifests import safe_project_output, sha256_file
-from book_video_factory.host_orchestration import HostActionError, reconcile_prepared_completions
+from book_video_factory.host_orchestration import (
+    HostActionError,
+    reconcile_prepared_completions,
+    register_action,
+    register_host_event,
+)
 from book_video_factory.transaction_lock import project_transaction_lock
 
 
@@ -21,6 +26,8 @@ class VisualCovenantError(ValueError):
 
 
 COVENANT_REL = "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json"
+PLAN_RESULT_REL = "manifests/host_orchestration/VISUAL_COVENANT_PLAN.v2.json"
+PLAN_SCHEMA_VERSION = "visual-covenant-plan.v2"
 CATALOG_REL = "manifests/asset_catalog/ASSET_CATALOG.v2.json"
 APPROVAL_REL = "04_visual_covenant_视觉契约/VISUAL_COVENANT_APPROVAL.v2.json"
 APPROVAL_EVENTS_REL = "04_visual_covenant_视觉契约/approval_events"
@@ -49,6 +56,48 @@ def covenant_canonical_sha(payload: dict[str, Any]) -> str:
     return _sha_bytes(_canonical(normalized))
 
 
+def world_profile_canonical_sha(world_profile: dict[str, Any]) -> str:
+    """Return the evidence hash carried by every V2 visual world."""
+    if not isinstance(world_profile, dict) or not world_profile:
+        raise VisualCovenantError("world_profile must be a nonempty object")
+    return _sha_bytes(_canonical(world_profile))
+
+
+def plan_visual_covenant(project: Path) -> dict[str, Any]:
+    """Register the sole Host action that plans a Covenant and its images."""
+    root = project.expanduser().resolve()
+    lock = verify_locked_script(root)
+    if lock.get("status") != "script_locked":
+        raise VisualCovenantError(f"locked script is not verified: {lock.get('status')}")
+    script_path = safe_project_output(root, Path(str(lock["script_path"])))
+    action = {
+        "schema_version": "host-agent-action.v2",
+        "action_id": f"COVENANT_{lock['release_id']}",
+        "release_id": str(lock["release_id"]),
+        "project_id": root.name,
+        "action_type": "plan_visual_covenant",
+        "idempotency_key": f"{lock['release_id']}:VISUAL_COVENANT:attempt-1",
+        "attempt": 1,
+        "inputs": [{
+            "kind": "locked_script",
+            "path": str(lock["script_path"]),
+            "sha256": sha256_file(script_path),
+        }],
+        "expected_output": {
+            "schema_version": PLAN_SCHEMA_VERSION,
+            "result_path": PLAN_RESULT_REL,
+        },
+        "max_runtime_seconds": 900,
+    }
+    register_action(root, action)
+    return action
+
+
+def register_visual_covenant_action(project: Path) -> dict[str, Any]:
+    """Compatibility name for callers that register Host actions explicitly."""
+    return plan_visual_covenant(project)
+
+
 def _load_payload(root: Path, relative: str) -> dict[str, Any] | None:
     path = safe_project_output(root, Path(relative))
     if path.is_symlink() or not path.is_file():
@@ -72,6 +121,51 @@ def _verify_asset_file(root: Path, item: dict[str, Any], label: str) -> None:
         raise VisualCovenantError(f"{label} requires file_sha256")
     if sha256_file(target) != expected:
         raise VisualCovenantError(f"{label} file hash is stale: {path_value}")
+
+
+def _validate_covenant_assets(root: Path, assets: Any) -> list[dict[str, Any]]:
+    if not isinstance(assets, list) or not assets:
+        raise VisualCovenantError("visual covenant assets must be a nonempty list")
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in assets:
+        if not isinstance(item, dict):
+            raise VisualCovenantError("visual covenant asset must be an object")
+        for field in ("asset_id", "asset_family", "visual_function"):
+            if not isinstance(item.get(field), str) or not item[field]:
+                raise VisualCovenantError(f"visual covenant asset requires {field}")
+        asset_id = str(item["asset_id"])
+        if asset_id in seen:
+            raise VisualCovenantError(f"duplicate visual covenant asset: {asset_id}")
+        seen.add(asset_id)
+        if item.get("source") != "visual_covenant" or not isinstance(item.get("production_eligible"), bool):
+            raise VisualCovenantError(f"visual covenant asset source/status is invalid: {asset_id}")
+        if item.get("technical_status") != "verified":
+            raise VisualCovenantError(f"visual covenant asset is not technically verified: {asset_id}")
+        _verify_asset_file(root, item, "covenant asset")
+        normalized.append(dict(item))
+    return normalized
+
+
+def validate_visual_covenant_plan(project: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate a Host Covenant plan before Runtime writes the Covenant."""
+    root = project.expanduser().resolve()
+    if payload.get("schema_version") != PLAN_SCHEMA_VERSION:
+        raise VisualCovenantError("visual covenant plan schema_version is invalid")
+    lock = verify_locked_script(root)
+    if lock.get("status") != "script_locked":
+        raise VisualCovenantError(f"locked script is not verified: {lock.get('status')}")
+    if payload.get("project_id") != root.name or payload.get("release_id") != lock.get("release_id"):
+        raise VisualCovenantError("visual covenant plan project or release is stale")
+    if payload.get("locked_script_sha256") != lock.get("script_sha256"):
+        raise VisualCovenantError("visual covenant plan locked script hash is stale")
+    world_profile = payload.get("world_profile")
+    if not isinstance(world_profile, dict) or not world_profile:
+        raise VisualCovenantError("visual covenant plan requires world_profile")
+    if payload.get("world_profile_sha256") != world_profile_canonical_sha(world_profile):
+        raise VisualCovenantError("visual covenant plan world_profile_sha256 is stale")
+    assets = _validate_covenant_assets(root, payload.get("assets"))
+    return {**payload, "assets": assets}
 
 
 def verify_visual_covenant(
@@ -129,6 +223,34 @@ def verify_visual_covenant(
             "status": "invalid_visual_covenant",
             "verified": False,
         }
+    if payload.get("locked_script_sha256") != lock_status.get("script_sha256"):
+        return {
+            "schema_version": "visual-covenant.v2",
+            "status": "invalid_visual_covenant",
+            "verified": False,
+        }
+    world_profile = payload.get("world_profile")
+    world_profile_sha = payload.get("world_profile_sha256")
+    if not isinstance(world_profile, dict) or not world_profile:
+        return {
+            "schema_version": "visual-covenant.v2",
+            "status": "invalid_visual_covenant",
+            "verified": False,
+        }
+    try:
+        expected_world_profile_sha = world_profile_canonical_sha(world_profile)
+    except VisualCovenantError:
+        return {
+            "schema_version": "visual-covenant.v2",
+            "status": "invalid_visual_covenant",
+            "verified": False,
+        }
+    if world_profile_sha != expected_world_profile_sha:
+        return {
+            "schema_version": "visual-covenant.v2",
+            "status": "invalid_visual_covenant",
+            "verified": False,
+        }
     assets = payload.get("assets")
     if not isinstance(assets, list):
         return {
@@ -180,6 +302,7 @@ def verify_visual_covenant(
         "project_id": payload.get("project_id"),
         "visual_covenant_sha256": payload["visual_covenant_sha256"],
         "asset_count": len(assets),
+        "world_profile_sha256": payload.get("world_profile_sha256"),
     }
 
 
@@ -192,6 +315,56 @@ def load_visual_covenant(project: Path) -> dict[str, Any]:
     if status.get("status") != "visual_covenant_verified":
         raise VisualCovenantError(f"visual covenant is not verified: {status.get('status')}")
     return payload
+
+
+def materialize_visual_covenant_result(project: Path, result_path: Path) -> dict[str, Any]:
+    """Materialize one verified Host Covenant plan into the Runtime Covenant."""
+    root = project.expanduser().resolve()
+    path = result_path.expanduser().resolve()
+    if root not in path.parents or path.is_symlink() or not path.is_file():
+        raise VisualCovenantError("visual covenant plan must be a project-local real file")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise VisualCovenantError(f"visual covenant plan is unreadable: {error}") from error
+    if not isinstance(payload, dict):
+        raise VisualCovenantError("visual covenant plan must be an object")
+    plan = validate_visual_covenant_plan(root, payload)
+    covenant = {
+        "schema_version": "visual-covenant.v2",
+        "release_id": plan["release_id"],
+        "project_id": plan["project_id"],
+        "locked_script_sha256": plan["locked_script_sha256"],
+        "world_profile": plan["world_profile"],
+        "world_profile_sha256": plan["world_profile_sha256"],
+        "assets": plan["assets"],
+    }
+    covenant["visual_covenant_sha256"] = covenant_canonical_sha(covenant)
+    covenant_path = safe_project_output(root, Path(COVENANT_REL))
+    _write_approval_json(covenant_path, covenant)
+    status = verify_visual_covenant(root, covenant)
+    if status.get("status") != "visual_covenant_verified":
+        raise VisualCovenantError(f"materialized visual covenant is not verified: {status.get('status')}")
+    return {
+        "status": "visual_covenant_materialized",
+        "covenant_path": COVENANT_REL,
+        "visual_covenant_sha256": covenant["visual_covenant_sha256"],
+        "world_profile_sha256": covenant["world_profile_sha256"],
+        "asset_count": len(covenant["assets"]),
+    }
+
+
+def complete_visual_covenant_from_host_event(project: Path, event: dict[str, Any]) -> dict[str, Any]:
+    """Record one Host plan result, then let Runtime materialize its Covenant."""
+    root = project.expanduser().resolve()
+    register_host_event(root, event)
+    result_path = safe_project_output(root, Path(str(event.get("output_path", ""))))
+    return materialize_visual_covenant_result(root, result_path)
+
+
+def materialize_covenant(project: Path, result_path: Path) -> dict[str, Any]:
+    """Short alias used by Host/runtime integrations."""
+    return materialize_visual_covenant_result(project, result_path)
 
 
 def _approval_canonical(approval: dict[str, Any]) -> bytes:

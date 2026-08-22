@@ -18,6 +18,7 @@ from book_video_factory.visual_covenant import (
     covenant_canonical_sha,
     promote_covenant_assets,
     record_visual_covenant_approval,
+    world_profile_canonical_sha,
 )
 
 
@@ -99,9 +100,11 @@ def _promote(project: Path, *assets: dict) -> None:
         "schema_version": "visual-covenant.v2",
         "release_id": "release-1",
         "project_id": "pilot",
-        "locked_script_sha256": _sha("locked"),
+        "locked_script_sha256": _sha("director narration"),
+        "world_profile": {"period": "nineteenth-century Yorkshire", "palette": "muted earth tones"},
         "assets": list(assets),
     }
+    payload["world_profile_sha256"] = world_profile_canonical_sha(payload["world_profile"])
     payload["visual_covenant_sha256"] = covenant_canonical_sha(payload)
     _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", payload)
     record_visual_covenant_approval(project, reviewer="fixture-reviewer", approved_at="2026-08-22T00:00:00+08:00")

@@ -500,7 +500,7 @@ def _render_delivery_status_locked(project: Path) -> dict[str, Any]:
         "human_review_required": False,
         "next_action": "render the resolved EDIT_TIMELINE, then run machine encoded QA",
         "command": (
-            f"python book_video_factory/scripts/run_v2_render.py "
+            f"python book_video_factory/scripts/run_v2_render.py execute "
             f"--project '{root}'"
         ),
     }

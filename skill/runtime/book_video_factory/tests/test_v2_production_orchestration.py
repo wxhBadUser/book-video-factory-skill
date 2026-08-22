@@ -25,6 +25,7 @@ from book_video_factory.visual_covenant import (
     covenant_canonical_sha,
     promote_covenant_assets,
     record_visual_covenant_approval,
+    world_profile_canonical_sha,
 )
 
 
@@ -81,6 +82,7 @@ def _locked_project(tmp_path: Path, *, name: str = "pilot") -> Path:
         "release_id": "release-1",
         "project_id": name,
         "locked_script_sha256": _sha(script_text),
+        "world_profile": {"period": "nineteenth-century Yorkshire", "palette": "muted earth tones"},
         "assets": [{
             "asset_id": "COV_JANE",
             "asset_family": "character:jane",
@@ -93,6 +95,7 @@ def _locked_project(tmp_path: Path, *, name: str = "pilot") -> Path:
             "provenance": {"provider": "host-imagegen", "tool_call_id": "call-cov-jane"},
         }],
     }
+    covenant_payload["world_profile_sha256"] = world_profile_canonical_sha(covenant_payload["world_profile"])
     covenant_payload["visual_covenant_sha256"] = covenant_canonical_sha(covenant_payload)
     _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", covenant_payload)
     record_visual_covenant_approval(project, reviewer="fixture-reviewer", approved_at="2026-08-22T00:00:00+08:00")

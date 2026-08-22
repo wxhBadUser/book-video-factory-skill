@@ -1,25 +1,21 @@
-"""End-to-end V2 autonomy acceptance fixture (Stages 1-6, offline).
-
-Drives the full autonomous loop: locked script, approved covenant with two
-eligible assets, a generate_new paragraph that is retried once and then passes,
-hold_current resolution, non-contiguous covenant asset reuse, then the static
-render + encoded QA + auto delivery with BGM none. No human approval gate is
-ever required, and every tamper fails closed.
-"""
+"""V2 autonomy E2E: Host doubles feed Runtime-owned production artifacts."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 import wave
 from pathlib import Path
 
-import pytest
-
 from PIL import Image
 
+from book_video_factory.audio_stage.autonomy import run_narration_from_locked_script
+from book_video_factory.audio_stage.providers.base import NarrationChunkRequest, NarrationChunkResult
 from book_video_factory.director_stage.contracts import EDIT_TIMELINE_REL, resolve_edit_timeline
 from book_video_factory.host_orchestration import read_ledgers, register_host_event
+from book_video_factory.literary_director import complete_literary_director_from_host_event
 from book_video_factory.manifests import sha256_file
 from book_video_factory.pipeline_runtime import pipeline_status
 from book_video_factory.production_orchestration import (
@@ -30,24 +26,17 @@ from book_video_factory.production_orchestration import (
     production_status,
 )
 from book_video_factory.visual_covenant import (
-    covenant_canonical_sha,
+    complete_visual_covenant_from_host_event,
     promote_covenant_assets,
     record_visual_covenant_approval,
 )
-from book_video_factory.v2_render import (
-    DEFAULT_VIDEO_REL,
-    DELIVERY_MANIFEST_REL,
-    V2RenderError,
-    render_static,
-    render_delivery_status,
-    verify_delivery_manifest,
-)
+from book_video_factory.v2_render import DELIVERY_MANIFEST_REL, render_delivery_status, verify_delivery_manifest
 
 
-def _sha(text: str | bytes) -> str:
-    if isinstance(text, str):
-        text = text.encode("utf-8")
-    return hashlib.sha256(text).hexdigest()
+def _sha(value: str | bytes) -> str:
+    if isinstance(value, str):
+        value = value.encode("utf-8")
+    return hashlib.sha256(value).hexdigest()
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -55,10 +44,10 @@ def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def _make_png(project: Path, relative: str) -> str:
+def _make_png(project: Path, relative: str, color: tuple[int, int, int]) -> str:
     target = project / relative
     target.parent.mkdir(parents=True, exist_ok=True)
-    Image.new("RGB", (160, 90), (120, 140, 160)).save(target, format="PNG")
+    Image.new("RGB", (160, 90), color).save(target, format="PNG")
     return sha256_file(target)
 
 
@@ -77,7 +66,7 @@ def _locked_project(tmp_path: Path, *, name: str = "pilot") -> Path:
         "public_release_allowed": True,
         "detected_source_declarations": [],
     })
-    script_text = "autonomous V2 narration for the autonomy acceptance fixture"
+    script_text = "第一段旁白。\n\n第二段旁白，仍然属于同一个文学世界。"
     script = project / "02_story_script_故事脚本/SCRIPT_RELEASE.md"
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text(script_text, encoding="utf-8")
@@ -87,177 +76,200 @@ def _locked_project(tmp_path: Path, *, name: str = "pilot") -> Path:
         "project_id": name,
         "language": "zh",
         "script_path": "02_story_script_故事脚本/SCRIPT_RELEASE.md",
-        "script_sha256": _sha(script_text),
+        "script_sha256": sha256_file(script),
         "rights_state": "cleared",
         "lock_status": "locked",
     })
-    assets = [
-        {
-            "asset_id": "COV_CHAR",
-            "asset_family": "character:jane",
-            "visual_function": "character_narration",
-            "source": "visual_covenant",
-            "production_eligible": True,
-            "technical_status": "verified",
-            "path": "03_images_生成图片/covenant/COV_CHAR.png",
-            "file_sha256": _make_png(project, "03_images_生成图片/covenant/COV_CHAR.png"),
-            "provenance": {"provider": "host-imagegen", "tool_call_id": "call-cov-char"},
-        },
-        {
-            "asset_id": "COV_LOC",
-            "asset_family": "location:thrushcross",
-            "visual_function": "location_establishing",
-            "source": "visual_covenant",
-            "production_eligible": True,
-            "technical_status": "verified",
-            "path": "03_images_生成图片/covenant/COV_LOC.png",
-            "file_sha256": _make_png(project, "03_images_生成图片/covenant/COV_LOC.png"),
-            "provenance": {"provider": "host-imagegen", "tool_call_id": "call-cov-loc"},
-        },
-    ]
-    covenant_payload = {
-        "schema_version": "visual-covenant.v2",
-        "release_id": "release-1",
-        "project_id": name,
-        "locked_script_sha256": _sha(script_text),
-        "assets": assets,
-    }
-    covenant_payload["visual_covenant_sha256"] = covenant_canonical_sha(covenant_payload)
-    _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", covenant_payload)
-    record_visual_covenant_approval(project, reviewer="fixture-reviewer", approved_at="2026-08-22T00:00:00+08:00")
-    promote_covenant_assets(project)
+    _write_json(project / "config/PROVIDER_DOUBLES.json", {
+        "narration_provider": "offline-e2e",
+        "image_provider": "host-imagegen-double",
+        "judge_provider": "host-multimodal-double",
+    })
     return project
 
 
-def _vp(paragraph_id: str, start: float, end: float) -> dict:
-    return {
-        "paragraph_id": paragraph_id,
-        "start": start,
-        "end": end,
-        "source_caption_ids": ["C1"],
-        "visual_intent": "stable hold of the established imagery",
-        "mood": "steadfast",
-    }
-
-
-def _plan_asset(asset_id: str, *, family: str, func: str, bound_paragraph_id: str) -> dict:
-    return {
-        "asset_id": asset_id,
-        "asset_family": family,
-        "visual_function": func,
-        "bound_paragraph_id": bound_paragraph_id,
-    }
-
-
-def _audio_timeline(project: Path, *, duration: float) -> str:
-    master_path = project / "04_audio/master.wav"
-    master_path.parent.mkdir(parents=True, exist_ok=True)
-    with wave.open(str(master_path), "wb") as handle:
-        handle.setnchannels(1)
-        handle.setsampwidth(2)
-        handle.setframerate(8000)
-        handle.writeframes(b"\x00\x00" * int(duration * 8000))
-    provider_vtt = project / "04_audio/provider.vtt"
-    provider_vtt.write_text("WEBVTT\n\n1\n00:00:00.000 --> 00:00:01.000\nautonomous narration\n", encoding="utf-8")
-    captions = project / "04_audio/CAPTION_TIMELINE.json"
-    _write_json(captions, {"captions": [{"start": 0.0, "end": duration, "text": "autonomous narration"}]})
-    audio = {
-        "schema_version": "audio-timeline.v2",
-        "release_id": "release-1",
-        "project_id": project.name,
-        "narration_master_path": "04_audio/master.wav",
-        "narration_master_sha256": sha256_file(master_path),
-        "provider_vtt_path": "04_audio/provider.vtt",
-        "provider_vtt_sha256": sha256_file(provider_vtt),
-        "caption_timeline_path": "04_audio/CAPTION_TIMELINE.json",
-        "caption_timeline_sha256": sha256_file(captions),
-        "timing_authority": "provider",
-        "narration_duration_seconds": duration,
-        "bgm": {"bgm_mode": "none"},
-    }
-    _write_json(project / "04_audio/AUDIO_TIMELINE.v2.json", audio)
-    return sha256_file(project / "04_audio/AUDIO_TIMELINE.v2.json")
-
-
-def _director_and_plan(project: Path, *, paragraphs: list, decisions: list, plan_assets: list) -> None:
-    duration = float(paragraphs[-1]["end"])
-    audio_sha = _audio_timeline(project, duration=duration)
-    _write_json(project / "04_director/VISUAL_PARAGRAPHS.json", {
-        "schema_version": "visual-paragraphs.v1",
-        "release_id": "release-1",
-        "project_id": project.name,
-        "audio_timeline_sha256": audio_sha,
-        "narration_duration_seconds": duration,
-        "paragraphs": paragraphs,
-    })
-    vp_sha = sha256_file(project / "04_director/VISUAL_PARAGRAPHS.json")
-    _write_json(project / "04_director/EDIT_DECISIONS.v2.json", {
-        "schema_version": "edit-decisions.v2",
-        "release_id": "release-1",
-        "project_id": project.name,
-        "visual_paragraphs_sha256": vp_sha,
-        "decisions": decisions,
-    })
-    _write_json(project / "04_director/PRODUCTION_IMAGE_PLAN.v2.json", {
-        "schema_version": "production-image-plan.v2",
-        "release_id": "release-1",
-        "project_id": project.name,
-        "assets": plan_assets,
-    })
-
-
-def _decision(paragraph_id: str, decision: str, asset_id: str | None = None) -> dict:
-    item = {"paragraph_id": paragraph_id, "decision": decision}
-    if asset_id is not None:
-        item["asset_id"] = asset_id
-    return item
-
-
-def _ledgers(project: Path) -> tuple:
+def _ledgers(project: Path) -> tuple[list[dict], list[dict]]:
     state = read_ledgers(project)
     return state["actions"], state["events"]
 
 
-def _active_action(project: Path, action_type: str, asset_id: str) -> dict:
+def _active_action(project: Path, action_type: str, marker: str) -> dict:
     actions, events = _ledgers(project)
     terminal = {str(item["idempotency_key"]) for item in events}
-    prefix = {"generate_image": "GEN_", "judge_visual_asset": "JUDGE_"}[action_type]
     candidates = [
-        item
-        for item in actions
+        item for item in actions
         if item.get("action_type") == action_type
-        and f"{prefix}{asset_id}:" in str(item.get("idempotency_key", ""))
+        and marker in str(item.get("idempotency_key", ""))
         and str(item.get("idempotency_key")) not in terminal
     ]
-    assert candidates, f"no active {action_type} action for {asset_id}"
+    assert candidates, f"no active {action_type} action containing {marker}"
     return sorted(candidates, key=lambda item: item["attempt"])[-1]
 
 
-def _simulate_generate(project: Path, asset_id: str) -> int:
-    action = _active_action(project, "generate_image", asset_id)
-    image_relative = f"03_images_生成图片/production/{asset_id}_a{action['attempt']}.png"
-    image_sha = _make_png(project, image_relative)
-    event = {
+def _host_covenant_double(project: Path, action: dict) -> dict:
+    char_path = "03_images_生成图片/covenant/CHAR.png"
+    loc_path = "03_images_生成图片/covenant/LOCATION.png"
+    char_sha = _make_png(project, char_path, (120, 140, 160))
+    loc_sha = _make_png(project, loc_path, (140, 120, 100))
+    world_profile = {
+        "period": "fictional literary present",
+        "geography": "an unnamed inland town",
+        "visual_world": "restrained literary realism",
+        "materials": ["wood", "paper", "wool"],
+        "palette": ["slate", "umber", "paper white"],
+        "lighting": ["soft overcast daylight", "quiet practical light"],
+        "composition": ["negative space", "stable tableau", "subtitle-safe lower frame"],
+        "negative_constraints": ["no modern logos", "no watermark", "no embedded text"],
+    }
+    world_profile_sha = _sha(json.dumps(world_profile, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+    result_path = project / action["expected_output"]["result_path"]
+    _write_json(result_path, {
+        "schema_version": "visual-covenant-plan.v2",
+        "release_id": action["release_id"],
+        "project_id": project.name,
+        "locked_script_sha256": action["inputs"][0]["sha256"],
+        "world_profile": world_profile,
+        "world_profile_sha256": world_profile_sha,
+        "assets": [
+            {
+                "asset_id": "COV_CHAR",
+                "asset_family": "character:subject",
+                "visual_function": "character_portrait",
+                "source": "visual_covenant",
+                "production_eligible": True,
+                "technical_status": "verified",
+                "path": char_path,
+                "file_sha256": char_sha,
+                "provenance": {"provider": "host-imagegen-double", "tool_call_id": "cov-char-double"},
+            },
+            {
+                "asset_id": "COV_LOC",
+                "asset_family": "location:town",
+                "visual_function": "location_establishing",
+                "source": "visual_covenant",
+                "production_eligible": True,
+                "technical_status": "verified",
+                "path": loc_path,
+                "file_sha256": loc_sha,
+                "provenance": {"provider": "host-imagegen-double", "tool_call_id": "cov-location-double"},
+            },
+        ],
+    })
+    return {
+        "schema_version": "host-agent-event.v2",
+        "action_id": action["action_id"],
+        "event_type": action["action_type"],
+        "status": "succeeded",
+        "idempotency_key": action["idempotency_key"],
+        "provider": "host-imagegen-double",
+        "tool_call_id": "cov-plan-double",
+        "output_path": result_path.relative_to(project).as_posix(),
+        "output_sha256": sha256_file(result_path),
+    }
+
+
+class _NarrationDouble:
+    provider_id = "offline-e2e"
+    policy = "minimax_required"
+    model = "offline-model"
+    voice_id = "offline-voice"
+
+    def synthesize(self, request: NarrationChunkRequest, *, evidence_dir: Path) -> NarrationChunkResult:
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        audio_path = evidence_dir / f"{request.chunk_id}.wav"
+        with wave.open(str(audio_path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(8000)
+            handle.writeframes(b"\x00\x00" * 800)
+        return NarrationChunkResult(
+            chunk_id=request.chunk_id,
+            provider=self.provider_id,
+            model=self.model,
+            voice_id=self.voice_id,
+            audio_path=audio_path.name,
+            audio_sha256=sha256_file(audio_path),
+            duration=0.1,
+            subtitle_timestamps=({"start": 0.0, "end": 0.1, "text": request.text},),
+            subtitle_granularity="sentence",
+            trace_id=f"trace-{request.chunk_id}",
+            request_digest=request.digest(),
+        )
+
+
+def _host_director_double(project: Path, action: dict) -> dict:
+    result_path = project / action["expected_output"]["result_path"]
+    audio_path = project / "04_audio/AUDIO_TIMELINE.v2.json"
+    captions_path = project / "04_audio/CAPTION_TIMELINE.json"
+    catalog_path = project / "manifests/asset_catalog/ASSET_CATALOG.v2.json"
+    duration = json.loads(audio_path.read_text(encoding="utf-8"))["narration_duration_seconds"]
+    script_input = next(item for item in action["inputs"] if item["path"].endswith("SCRIPT_RELEASE.md"))
+    approval_input = next(item for item in action["inputs"] if item["path"].endswith("VISUAL_COVENANT_APPROVAL.v2.json"))
+    policy_input = next(item for item in action["inputs"] if item["kind"] == "director_policy")
+    approval_sha = json.loads((project / approval_input["path"]).read_text(encoding="utf-8"))["visual_covenant_approval_sha256"]
+    _write_json(result_path, {
+        "schema_version": "literary-director-result.v2",
+        "release_id": action["release_id"],
+        "project_id": project.name,
+        "locked_script_sha256": script_input["sha256"],
+        "audio_timeline_sha256": sha256_file(audio_path),
+        "caption_timeline_sha256": sha256_file(captions_path),
+        "visual_covenant_approval_sha256": approval_sha,
+        "asset_catalog_sha256": sha256_file(catalog_path),
+        "director_policy_sha256": policy_input["sha256"],
+        "paragraphs": [{
+            "paragraph_id": "VP_001",
+            "start": 0.0,
+            "end": duration,
+            "source_caption_ids": ["C1", "C2"],
+            "narrative_focus": "quiet reflection",
+            "visual_function": "character_narration",
+            "visual_center": "the subject",
+            "mood": "steadfast",
+            "rationale": "one visual paragraph for the locked narration",
+            "decision": "generate_new",
+            "asset_family": "character:subject",
+            "minimal_generation_intent": "a restrained portrait in the approved literary world",
+            "recommended_reference_asset_ids": ["COV_CHAR"],
+        }],
+    })
+    return {
+        "schema_version": "host-agent-event.v2",
+        "action_id": action["action_id"],
+        "event_type": action["action_type"],
+        "status": "succeeded",
+        "idempotency_key": action["idempotency_key"],
+        "provider": "host-literary-director-double",
+        "tool_call_id": "director-plan-double",
+        "output_path": result_path.relative_to(project).as_posix(),
+        "output_sha256": sha256_file(result_path),
+    }
+
+
+def _host_generate_double(project: Path, asset_id: str) -> None:
+    action = _active_action(project, "generate_image", f"GEN_{asset_id}:")
+    relative = f"03_images_生成图片/production/{asset_id}.png"
+    image_sha = _make_png(project, relative, (160, 130, 110))
+    register_host_event(project, {
         "schema_version": "host-agent-event.v2",
         "action_id": action["action_id"],
         "event_type": "generate_image",
         "status": "succeeded",
         "idempotency_key": action["idempotency_key"],
-        "provider": "host-imagegen",
-        "tool_call_id": f"call-gen-{asset_id}-{action['attempt']}",
-        "output_path": image_relative,
+        "provider": "host-imagegen-double",
+        "tool_call_id": "production-image-double",
+        "output_path": relative,
         "output_sha256": image_sha,
-    }
-    register_host_event(project, event)
+    })
     incorporate_generated_assets(project)
-    return action["attempt"]
 
 
-def _simulate_judge(project: Path, asset_id: str, verdict: dict) -> None:
+def _host_judge_double(project: Path, asset_id: str) -> None:
     ensure_judge_actions(project)
-    action = _active_action(project, "judge_visual_asset", asset_id)
+    action = _active_action(project, "judge_visual_asset", f"JUDGE_{asset_id}:")
     expected = action["expected_output"]
-    payload = {
+    result_path = project / f"03_images_生成图片/judgments/{asset_id}.json"
+    _write_json(result_path, {
         "schema_version": "multimodal-visual-judge.v2",
         "action_id": action["action_id"],
         "asset_id": asset_id,
@@ -265,124 +277,91 @@ def _simulate_judge(project: Path, asset_id: str, verdict: dict) -> None:
         "covenant_approval_sha256": expected["covenant_approval_sha256"],
         "visual_paragraph_sha256": expected["visual_paragraph_sha256"],
         "judge_policy_sha256": expected["judge_policy_sha256"],
-        "verdict": verdict["verdict"],
-        "dimensions": verdict.get("dimensions", {}),
-        "hard_failures": verdict.get("hard_failures", []),
-        "warnings": verdict.get("warnings", []),
-        "reason": verdict.get("reason", "host multimodal judgment"),
-        "retry_strategy": verdict.get("retry_strategy"),
-        "judge_model": verdict.get("judge_model", "glm-vision"),
-        "judge_call_id": verdict.get("judge_call_id", f"call-judge-{asset_id}"),
-    }
-    verdict_relative = f"03_images_生成图片/judgments/{asset_id}_a{action['attempt']}.json"
-    _write_json(project / verdict_relative, payload)
-    event = {
+        "verdict": "pass",
+        "dimensions": {},
+        "hard_failures": [],
+        "warnings": [],
+        "reason": "offline production judge double",
+        "judge_model": "offline-judge",
+        "judge_call_id": "judge-double",
+    })
+    register_host_event(project, {
         "schema_version": "host-agent-event.v2",
         "action_id": action["action_id"],
         "event_type": "judge_visual_asset",
         "status": "succeeded",
         "idempotency_key": action["idempotency_key"],
-        "provider": "host-multimodal",
-        "tool_call_id": f"call-judge-{asset_id}-{action['attempt']}",
-        "output_path": verdict_relative,
-        "output_sha256": sha256_file(project / verdict_relative),
-    }
-    register_host_event(project, event)
+        "provider": "host-multimodal-double",
+        "tool_call_id": "judge-double",
+        "output_path": result_path.relative_to(project).as_posix(),
+        "output_sha256": sha256_file(result_path),
+    })
     apply_verdicts(project)
 
 
-def _catalog_asset(project: Path, asset_id: str) -> dict:
-    path = project / "manifests/asset_catalog/ASSET_CATALOG.v2.json"
-    catalog = json.loads(path.read_text(encoding="utf-8"))
-    for item in catalog["assets"]:
-        if item["asset_id"] == asset_id:
-            return item
-    raise AssertionError(f"asset {asset_id} not in catalog")
-
-
-def _events(project: Path) -> list[dict]:
-    return json.loads((project / EDIT_TIMELINE_REL).read_text(encoding="utf-8"))["events"]
-
-
-def _write_rendered_evidence(project: Path) -> None:
-    render_static(project)
-
-
-def test_autonomy_end_to_end_no_human_gates(tmp_path: Path) -> None:
+def test_autonomy_end_to_end_uses_runtime_wiring_and_one_covenant_approval(tmp_path: Path) -> None:
     project = _locked_project(tmp_path)
-    paragraphs = [
-        _vp("VP_001", 0.0, 8.0),
-        _vp("VP_002", 8.0, 16.0),
-        _vp("VP_003", 16.0, 24.0),
-        _vp("VP_004", 24.0, 32.0),
-        _vp("VP_005", 32.0, 40.0),
-    ]
-    decisions = [
-        _decision("VP_001", "generate_new", "PROD_001"),
-        _decision("VP_002", "hold_current"),
-        _decision("VP_003", "reuse_asset", "COV_LOC"),
-        _decision("VP_004", "reuse_asset", "COV_CHAR"),
-        _decision("VP_005", "reuse_asset", "COV_LOC"),
-    ]
-    plan_assets = [
-        _plan_asset("PROD_001", family="character:jane", func="character_narration", bound_paragraph_id="VP_001"),
-    ]
-    _director_and_plan(project, paragraphs=paragraphs, decisions=decisions, plan_assets=plan_assets)
 
-    # Autonomous Host loop: generate -> retryable judge -> revised generate -> pass.
+    planned = pipeline_status(project)
+    assert planned["status"] == "host_action_pending"
+    assert planned["host_action"]["action_type"] == "plan_visual_covenant"
+    action = planned["host_action"]
+    complete_visual_covenant_from_host_event(project, _host_covenant_double(project, action))
+    approval = record_visual_covenant_approval(
+        project,
+        reviewer="fixture-reviewer",
+        approved_at="2026-08-22T00:00:00+08:00",
+    )
+    promote_covenant_assets(project)
+    approval_events = list((project / "04_visual_covenant_视觉契约/approval_events").glob("*.json"))
+    assert len(approval_events) == 1
+
+    narration = run_narration_from_locked_script(project, _NarrationDouble())
+    assert narration["status"] == "audio_timeline_ready"
+    assert (project / "04_audio/AUDIO_TIMELINE.v2.json").is_file()
+
+    director_status = pipeline_status(project)
+    assert director_status["host_action"]["action_type"] == "plan_literary_director"
+    complete_literary_director_from_host_event(project, _host_director_double(project, director_status["host_action"]))
+    assert (project / "04_director/VISUAL_PARAGRAPHS.json").is_file()
+    assert (project / "04_director/EDIT_DECISIONS.v2.json").is_file()
+    assert (project / "04_director/PRODUCTION_IMAGE_PLAN.v2.json").is_file()
+
     ensure_generate_actions(project)
-    assert _simulate_generate(project, "PROD_001") == 1
-    _simulate_judge(project, "PROD_001", {
-        "verdict": "retryable_failure",
-        "hard_failures": ["anachronistic_modern_infection"],
-        "retry_strategy": {"prompt_strategy": "remove_modern_infection"},
-        "reason": "第一次画面出现现代污染。",
-    })
-    assert _catalog_asset(project, "PROD_001")["status"] == "pending_generation"
-    ensure_generate_actions(project)
-    assert _simulate_generate(project, "PROD_001") == 2
-    _simulate_judge(project, "PROD_001", {"verdict": "pass", "reason": "修改后的生产画面通过审查。"})
-    assert _catalog_asset(project, "PROD_001")["status"] == "approved_production_asset"
+    generation_action = _active_action(project, "generate_image", "GEN_PROD_VP_001:")
+    covenant = json.loads((project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json").read_text(encoding="utf-8"))
+    world_input = next(item for item in generation_action["inputs"] if item["kind"] == "world_profile")
+    assert world_input["sha256"] == covenant["world_profile_sha256"]
+    assert generation_action["expected_output"]["world_profile"] == covenant["world_profile"]
+    _host_generate_double(project, "PROD_VP_001")
+    _host_judge_double(project, "PROD_VP_001")
+    production_entry = next(
+        item for item in json.loads(
+            (project / "manifests/asset_catalog/ASSET_CATALOG.v2.json").read_text(encoding="utf-8")
+        )["assets"] if item["asset_id"] == "PROD_VP_001"
+    )
+    assert production_entry["world_profile_sha256"] == covenant["world_profile_sha256"]
     assert production_status(project)["status"] == "asset_catalog_ready"
+    assert resolve_edit_timeline(project)["status"] == "edit_timeline_resolved"
+    assert json.loads((project / EDIT_TIMELINE_REL).read_text(encoding="utf-8"))["events"]
 
-    # Only the failed PROD_001 was retried (attempts 1 and 2 only, no attempt 3),
-    # and the covenant assets were never sent through a generate action.
-    actions, _ = _ledgers(project)
-    gen_keys = [a["idempotency_key"] for a in actions if a["action_type"] == "generate_image"]
-    assert not any("attempt-3" in key for key in gen_keys)
-    for asset_id in ("COV_CHAR", "COV_LOC"):
-        assert not any(f"GEN_{asset_id}:" in key for key in gen_keys)
-    assert not any("GEN_PROD_001:" not in key and "GEN_" in key for key in gen_keys)
+    awaiting = pipeline_status(project)
+    assert awaiting["status"] == "awaiting_static_render"
+    assert "execute" in awaiting["command"]
+    assert not (project / "08_render_合成/final/V2_AUTONOMY.mp4").exists()
 
-    # Resolve edit timeline: hold_current -> PROD_001, and COV_LOC reused
-    # non-contiguously (VP_003 and VP_005 separated by COV_CHAR).
-    result = resolve_edit_timeline(project)
-    assert result["status"] == "edit_timeline_resolved"
-    events = _events(project)
-    assert [item["asset_id"] for item in events] == ["PROD_001", "COV_LOC", "COV_CHAR", "COV_LOC"]
-    assert events[1]["asset_id"] == "COV_LOC" and events[3]["asset_id"] == "COV_LOC"
-    assert events[1]["edit_id"] != events[3]["edit_id"]
-
-    # Static render + encoded QA + auto delivery, with a non-blocking bgm.
-    status = pipeline_status(project)
-    assert status["status"] == "delivered"
-    assert status["human_review_required"] is False
-    delivered = render_delivery_status(project)
-    assert delivered["status"] == "delivered"
-    verified = verify_delivery_manifest(project)
-    assert verified["status"] == "delivery_verified"
+    runner = Path(__file__).resolve().parents[1] / "scripts/run_v2_render.py"
+    executed = subprocess.run(
+        [sys.executable, str(runner), "execute", "--project", str(project)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    assert executed.returncode == 0, executed.stdout + executed.stderr
     manifest = json.loads((project / DELIVERY_MANIFEST_REL).read_text(encoding="utf-8"))
-    assert manifest["human_approved"] is False
     assert manifest["auto_delivered"] is True
-    audio = json.loads((project / "04_audio/AUDIO_TIMELINE.v2.json").read_text(encoding="utf-8"))
-    assert audio["bgm"]["bgm_mode"] == "none"
-
-    # Tampering the delivered video fails closed and never falls back to a human gate.
-    video_path = project / DEFAULT_VIDEO_REL
-    video_path.write_bytes(b"tampered-after-delivery")
-    with pytest.raises(V2RenderError) as excinfo:
-        verify_delivery_manifest(project)
-    assert "video sha256 is stale" in str(excinfo.value)
-    blocked = pipeline_status(project)
-    assert blocked["status"] == "blocked_by_encoded_qa"
-    assert blocked["human_review_required"] is False
+    assert json.loads((project / "08_render_合成/final/ENCODED_QA.v2.json").read_text(encoding="utf-8"))["status"] == "pass"
+    assert render_delivery_status(project)["status"] == "delivered"
+    assert verify_delivery_manifest(project)["status"] == "delivery_verified"
+    assert approval["visual_covenant_approval_sha256"]

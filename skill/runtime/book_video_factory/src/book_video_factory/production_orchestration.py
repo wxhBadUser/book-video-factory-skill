@@ -37,8 +37,10 @@ from book_video_factory.manifests import safe_project_output, sha256_file
 from book_video_factory.transaction_lock import project_transaction_lock
 from book_video_factory.visual_covenant import (
     CATALOG_REL,
+    COVENANT_REL,
     VisualCovenantError,
     load_asset_catalog,
+    load_visual_covenant,
     write_asset_catalog,
 )
 
@@ -124,6 +126,18 @@ def _verify_asset_catalog_safe(root: Path) -> dict[str, Any]:
             f"asset catalog is not verified: {status.get('status')}"
         )
     return status
+
+
+def _world_profile_evidence(root: Path) -> tuple[dict[str, Any], str]:
+    covenant = load_visual_covenant(root)
+    world_profile = covenant.get("world_profile")
+    world_profile_sha = covenant.get("world_profile_sha256")
+    if not isinstance(world_profile, dict) or not world_profile:
+        raise ProductionOrchestrationError("visual covenant is missing its world_profile")
+    expected = _sha_bytes(_canonical(world_profile))
+    if not isinstance(world_profile_sha, str) or world_profile_sha != expected:
+        raise ProductionOrchestrationError("visual covenant world_profile_sha256 is stale")
+    return world_profile, world_profile_sha
 
 
 @lru_cache(maxsize=1)
@@ -296,6 +310,7 @@ def _ensure_generate_actions_locked(project: Path) -> int:
     decisions, _ = _load_decisions(root)
     plan = _load_plan(root)
     approval_sha = _covenant_approval_sha(root)
+    world_profile, world_profile_sha = _world_profile_evidence(root)
     assets = _read_catalog_raw(root)
     asset_map = _catalog_asset_map(assets)
     state = read_ledgers(root)
@@ -356,6 +371,11 @@ def _ensure_generate_actions_locked(project: Path) -> int:
                 "sha256": _sha_bytes(_canonical(
                     {"bound_paragraph_id": plan_entry["bound_paragraph_id"]}
                 )),
+            }, {
+                "kind": "world_profile",
+                "path": COVENANT_REL,
+                "sha256": world_profile_sha,
+                "world_profile": world_profile,
             }],
             "expected_output": {
                 "kind": "production_image",
@@ -364,6 +384,8 @@ def _ensure_generate_actions_locked(project: Path) -> int:
                 "visual_function": func,
                 "reference_asset_id": reference,
                 "retry_strategy": retry_strategy,
+                "world_profile": world_profile,
+                "world_profile_sha256": world_profile_sha,
             },
             "max_runtime_seconds": GENERATE_RUNTIME_SECONDS,
         }
@@ -405,6 +427,7 @@ def _incorporate_generated_assets_locked(project: Path) -> int:
     """Verify real generated files and promote them into the catalog as pending_judge."""
     root = project.expanduser().resolve()
     approval_sha = _covenant_approval_sha(root)
+    world_profile, world_profile_sha = _world_profile_evidence(root)
     assets = _read_catalog_raw(root)
     asset_map = _catalog_asset_map(assets)
     state = read_ledgers(root)
@@ -447,6 +470,8 @@ def _incorporate_generated_assets_locked(project: Path) -> int:
             "path": output_path,
             "file_sha256": output_sha,
             "covenant_approval_sha256": approval_sha,
+            "world_profile": world_profile,
+            "world_profile_sha256": world_profile_sha,
             "provenance": {
                 "provider": str(event.get("provider", "")),
                 "tool_call_id": str(event.get("tool_call_id", "")),

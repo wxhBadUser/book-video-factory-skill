@@ -18,6 +18,7 @@ from book_video_factory.visual_covenant import (
     covenant_canonical_sha,
     record_visual_covenant_approval,
     verify_visual_covenant_approval,
+    world_profile_canonical_sha,
 )
 
 
@@ -162,8 +163,11 @@ def test_covenant_reapproval_appends_immutable_event(tmp_path: Path) -> None:
         "schema_version": "visual-covenant.v2",
         "release_id": "release-1",
         "project_id": project.name,
+        "locked_script_sha256": _sha("locked narration for transaction tests"),
+        "world_profile": {"period": "nineteenth-century Yorkshire", "palette": "muted earth tones"},
         "assets": [],
     }
+    covenant["world_profile_sha256"] = world_profile_canonical_sha(covenant["world_profile"])
     covenant["visual_covenant_sha256"] = covenant_canonical_sha(covenant)
     _write_json(covenant_path, covenant)
 

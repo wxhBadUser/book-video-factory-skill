@@ -26,6 +26,7 @@ from book_video_factory.visual_covenant import (
     covenant_canonical_sha,
     promote_covenant_assets,
     record_visual_covenant_approval,
+    world_profile_canonical_sha,
 )
 from book_video_factory.v2_render import (
     DEFAULT_VIDEO_REL,
@@ -109,8 +110,10 @@ def _locked_project(tmp_path: Path, *, name: str = "pilot", asset_ids: tuple[str
         "release_id": "release-1",
         "project_id": name,
         "locked_script_sha256": _sha(script_text),
+        "world_profile": {"period": "nineteenth-century Yorkshire", "palette": "muted earth tones"},
         "assets": assets,
     }
+    covenant_payload["world_profile_sha256"] = world_profile_canonical_sha(covenant_payload["world_profile"])
     covenant_payload["visual_covenant_sha256"] = covenant_canonical_sha(covenant_payload)
     _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", covenant_payload)
     record_visual_covenant_approval(project, reviewer="fixture-reviewer", approved_at="2026-08-22T00:00:00+08:00")
@@ -377,9 +380,11 @@ def test_pipeline_status_advances_to_render_when_catalog_ready(tmp_path: Path) -
     project = _render_eligible_project(tmp_path)
     resolve_edit_timeline(project)
     status = pipeline_status(project)
-    assert status["stage"] == "delivery"
-    assert status["status"] == "delivered"
+    assert status["stage"] == "render"
+    assert status["status"] == "awaiting_static_render"
     assert status["human_review_required"] is False
+    assert "execute" in status["command"]
+    assert not (project / DEFAULT_VIDEO_REL).exists()
     assert "awaiting_final_master_approval" not in json.dumps(status)
 
 

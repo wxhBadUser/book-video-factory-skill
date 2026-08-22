@@ -14,6 +14,7 @@ from book_video_factory.visual_covenant import (
     promote_covenant_assets,
     record_visual_covenant_approval,
     verify_visual_covenant,
+    world_profile_canonical_sha,
 )
 
 
@@ -63,6 +64,7 @@ def _locked_project(tmp_path: Path, *, name: str = "pilot") -> Path:
         "release_id": "release-1",
         "project_id": name,
         "locked_script_sha256": _sha(script_text),
+        "world_profile": {"period": "nineteenth-century Yorkshire", "palette": "muted earth tones"},
         "assets": [{
             "asset_id": "COV_JANE",
             "asset_family": "character:jane",
@@ -75,6 +77,7 @@ def _locked_project(tmp_path: Path, *, name: str = "pilot") -> Path:
             "provenance": {"provider": "host-imagegen", "tool_call_id": "call-cov-jane"},
         }],
     }
+    covenant_payload["world_profile_sha256"] = world_profile_canonical_sha(covenant_payload["world_profile"])
     covenant_payload["visual_covenant_sha256"] = covenant_canonical_sha(covenant_payload)
     _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", covenant_payload)
     record_visual_covenant_approval(project, reviewer="fixture-reviewer", approved_at="2026-08-22T00:00:00+08:00")
@@ -163,8 +166,9 @@ def test_missing_covenant_is_not_a_human_gate(tmp_path: Path) -> None:
     with mock.patch("book_video_factory.pipeline_runtime.repository_integrity_block", return_value=None):
         status = pipeline_status(project)
     assert status["stage"] == "visual_covenant"
-    assert status["status"] == "missing_visual_covenant"
+    assert status["status"] == "host_action_pending"
     assert status["human_review_required"] is False
+    assert status["host_action"]["action_type"] == "plan_visual_covenant"
 
 
 def test_missing_catalog_auto_promotes_covenant(tmp_path: Path) -> None:
@@ -193,7 +197,8 @@ def test_stale_catalog_triggers_re_promotion(tmp_path: Path) -> None:
         "schema_version": "visual-covenant.v2",
         "release_id": "release-1",
         "project_id": "pilot",
-        "locked_script_sha256": _sha("x"),
+        "locked_script_sha256": _sha("locked narration for pipeline status"),
+        "world_profile": {"period": "nineteenth-century Yorkshire", "palette": "muted earth tones"},
         "assets": [
             {
                 "asset_id": "COV_JANE",
@@ -219,6 +224,7 @@ def test_stale_catalog_triggers_re_promotion(tmp_path: Path) -> None:
             },
         ],
     }
+    covenant_payload["world_profile_sha256"] = world_profile_canonical_sha(covenant_payload["world_profile"])
     covenant_payload["visual_covenant_sha256"] = covenant_canonical_sha(covenant_payload)
     _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", covenant_payload)
     assert verify_visual_covenant(project)["status"] == "visual_covenant_verified"

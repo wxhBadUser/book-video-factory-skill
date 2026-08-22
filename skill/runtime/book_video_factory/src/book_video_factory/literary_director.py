@@ -11,7 +11,11 @@ from typing import Any
 from book_video_factory.host_orchestration import register_action, register_host_event
 from book_video_factory.locked_script import verify_locked_script
 from book_video_factory.manifests import safe_project_output, sha256_file
-from book_video_factory.visual_covenant import verify_asset_catalog, verify_visual_covenant_approval
+from book_video_factory.visual_covenant import (
+    load_visual_covenant,
+    verify_asset_catalog,
+    verify_visual_covenant_approval,
+)
 
 
 class LiteraryDirectorError(RuntimeError):
@@ -62,17 +66,28 @@ def register_literary_director_action(project: Path, *, policy_path: Path) -> di
     catalog = verify_asset_catalog(root)
     if catalog.get("status") != "asset_catalog_verified":
         raise LiteraryDirectorError(f"asset catalog is not verified: {catalog.get('status')}")
+    covenant = load_visual_covenant(root)
+    world_profile = covenant.get("world_profile")
+    world_profile_sha = covenant.get("world_profile_sha256")
+    if not isinstance(world_profile, dict) or not world_profile or not isinstance(world_profile_sha, str) or not world_profile_sha:
+        raise LiteraryDirectorError("visual covenant is missing complete world profile evidence")
     policy = policy_path.expanduser().resolve()
     package_policy = Path(__file__).resolve().parents[2] / "config" / "DIRECTOR_POLICY.json"
     if policy.is_symlink() or not policy.is_file() or (root not in policy.parents and policy != package_policy.resolve()):
         raise LiteraryDirectorError("director policy must be a project-local or packaged real file")
+    policy_reference = (
+        policy.relative_to(root).as_posix()
+        if root in policy.parents
+        else str(policy)
+    )
     inputs = [
         _input(root, str(lock["script_path"])),
         _input(root, "04_audio/AUDIO_TIMELINE.v2.json"),
         _input(root, "04_audio/CAPTION_TIMELINE.json"),
         _input(root, "04_visual_covenant_视觉契约/VISUAL_COVENANT_APPROVAL.v2.json"),
+        _input(root, "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json"),
         _input(root, "manifests/asset_catalog/ASSET_CATALOG.v2.json"),
-        {"kind": "director_policy", "path": policy.relative_to(root).as_posix(), "sha256": sha256_file(policy)},
+        {"kind": "director_policy", "path": policy_reference, "sha256": sha256_file(policy)},
     ]
     action = {
         "schema_version": "host-agent-action.v2",
@@ -172,6 +187,11 @@ def materialize_literary_director_result(project: Path, result_path: Path) -> di
         raise LiteraryDirectorError("director result audio/caption hash is stale")
     approval = verify_visual_covenant_approval(root)
     catalog = verify_asset_catalog(root)
+    covenant = load_visual_covenant(root)
+    world_profile = covenant.get("world_profile")
+    world_profile_sha = covenant.get("world_profile_sha256")
+    if not isinstance(world_profile, dict) or not world_profile or not isinstance(world_profile_sha, str) or not world_profile_sha:
+        raise LiteraryDirectorError("visual covenant is missing complete world profile evidence")
     if result["visual_covenant_approval_sha256"] != approval.get("visual_covenant_approval_sha256"):
         raise LiteraryDirectorError("director result covenant approval hash is stale")
     if result["asset_catalog_sha256"] != catalog.get("catalog_sha256"):
@@ -209,6 +229,8 @@ def materialize_literary_director_result(project: Path, result_path: Path) -> di
                 "bound_paragraph_id": item["paragraph_id"],
                 "minimal_generation_intent": item["minimal_generation_intent"],
                 "recommended_reference_asset_ids": item["recommended_reference_asset_ids"],
+                "world_profile": world_profile,
+                "world_profile_sha256": world_profile_sha,
             })
         decisions.append(edit)
     vp = {

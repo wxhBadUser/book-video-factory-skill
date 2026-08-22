@@ -32,6 +32,7 @@ from book_video_factory.visual_covenant import (
     covenant_canonical_sha,
     promote_covenant_assets,
     record_visual_covenant_approval,
+    world_profile_canonical_sha,
 )
 
 
@@ -94,8 +95,10 @@ def _locked_project(tmp_path: Path) -> Path:
         "release_id": "release-1",
         "project_id": "pilot",
         "locked_script_sha256": _sha(script),
+        "world_profile": {"period": "nineteenth-century Yorkshire", "palette": "muted earth tones"},
         "assets": [asset],
     }
+    covenant["world_profile_sha256"] = world_profile_canonical_sha(covenant["world_profile"])
     covenant["visual_covenant_sha256"] = covenant_canonical_sha(covenant)
     _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", covenant)
     return project
