@@ -60,7 +60,8 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
 
 def validate_visual_paragraphs(payload: dict[str, Any]) -> dict[str, Any]:
     """Validate the Visual Paragraph partition and its audio-timeline hash binding."""
-    if payload.get("schema_version") != "visual-paragraphs.v1":
+    schema_version = payload.get("schema_version")
+    if schema_version not in {"visual-paragraphs.v1", "visual-paragraphs.v2"}:
         raise DirectorStageV2Error("visual paragraphs schema_version is invalid")
     for field in ("release_id", "project_id"):
         if not isinstance(payload.get(field), str) or not payload.get(field):
@@ -101,14 +102,20 @@ def validate_visual_paragraphs(payload: dict[str, Any]) -> dict[str, Any]:
         for field in ("visual_intent", "mood"):
             if not isinstance(raw.get(field), str) or not raw.get(field).strip():
                 raise DirectorStageV2Error(f"paragraph {paragraph_id} requires {field}")
-        normalized.append({
+        item = {
             "paragraph_id": paragraph_id,
             "start": start,
             "end": end,
             "source_caption_ids": [str(item) for item in caption_ids],
             "visual_intent": str(raw.get("visual_intent")).strip(),
             "mood": str(raw.get("mood")).strip(),
-        })
+        }
+        if schema_version == "visual-paragraphs.v2":
+            for field in ("narrative_focus", "visual_function", "visual_center", "rationale"):
+                if not isinstance(raw.get(field), str) or not raw[field].strip():
+                    raise DirectorStageV2Error(f"paragraph {paragraph_id} requires {field}")
+                item[field] = raw[field].strip()
+        normalized.append(item)
         previous_end = end
     if abs(previous_end - duration) > 1e-3:
         raise DirectorStageV2Error(
@@ -116,7 +123,7 @@ def validate_visual_paragraphs(payload: dict[str, Any]) -> dict[str, Any]:
             f"({previous_end:.6g} != {duration:.6g})"
         )
     return {
-        "schema_version": "visual-paragraphs.v1",
+        "schema_version": schema_version,
         "release_id": payload["release_id"],
         "project_id": payload["project_id"],
         "audio_timeline_sha256": audio_sha,

@@ -1,0 +1,7 @@
+{
+  "schema_version": "director-policy.v2",
+  "policy_id": "literary-director-default",
+  "description": "Prefer stable narrative focus, one visual center, explicit reuse/hold decisions, and minimal new-generation intent.",
+  "decision_values": ["hold_current", "reuse_asset", "generate_new"],
+  "renderer_owns": ["time_bounds", "asset_ids", "cut_transitions", "motion_none"]
+}

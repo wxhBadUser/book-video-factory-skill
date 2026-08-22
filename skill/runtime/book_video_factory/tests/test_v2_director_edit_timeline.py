@@ -17,6 +17,7 @@ from book_video_factory.manifests import sha256_file
 from book_video_factory.visual_covenant import (
     covenant_canonical_sha,
     promote_covenant_assets,
+    record_visual_covenant_approval,
 )
 
 
@@ -103,6 +104,7 @@ def _promote(project: Path, *assets: dict) -> None:
     }
     payload["visual_covenant_sha256"] = covenant_canonical_sha(payload)
     _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", payload)
+    record_visual_covenant_approval(project, reviewer="fixture-reviewer", approved_at="2026-08-22T00:00:00+08:00")
     promote_covenant_assets(project)
 
 

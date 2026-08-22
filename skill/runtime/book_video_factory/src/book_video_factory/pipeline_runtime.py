@@ -11,14 +11,16 @@ from book_video_factory.manifests import sha256_file
 from book_video_factory.delivery_stage import FinalMasterApprovalError, verify_final_master_approval
 from book_video_factory.gates import current_approvals
 from book_video_factory.production_orchestration import ProductionOrchestrationError, production_status
+from book_video_factory.literary_director import LiteraryDirectorError, register_literary_director_action
 from book_video_factory.style_profiles import project_workflow
 from book_video_factory.repository_integrity import repository_integrity_block
-from book_video_factory.v2_render import V2RenderError, render_delivery_status
+from book_video_factory.v2_render import V2RenderError, render_delivery_status, render_static
 from book_video_factory.source_ingestion import source_rights_state
 from book_video_factory.visual_covenant import (
     VisualCovenantError,
     promote_covenant_assets,
     verify_asset_catalog,
+    verify_visual_covenant_approval,
     verify_visual_covenant,
 )
 from book_video_factory.visual_stage.approval import visual_stage_next_status
@@ -88,6 +90,16 @@ def _v2_host_orchestration(root: Path, release_id: str) -> dict[str, Any] | None
             "next_action": covenant_status.get("reason", "restore the Visual Covenant baseline evidence"),
             "command": None,
         }
+    covenant_approval = verify_visual_covenant_approval(root)
+    if covenant_approval.get("status") != "visual_covenant_approval_verified":
+        return {
+            "release_id": release_id,
+            "stage": "visual_covenant",
+            "status": "awaiting_visual_covenant_approval",
+            "human_review_required": True,
+            "next_action": "review and approve the Visual Covenant, then persist the independent approval event",
+            "command": None,
+        }
     catalog_status = verify_asset_catalog(root)
     if catalog_status.get("status") != "asset_catalog_verified":
         try:
@@ -109,6 +121,35 @@ def _v2_host_orchestration(root: Path, release_id: str) -> dict[str, Any] | None
             "next_action": f"auto-promoted {promote.get('promoted_count', 0)} covenant assets into the asset catalog",
             "command": None,
         }
+    audio_timeline = root / "04_audio/AUDIO_TIMELINE.v2.json"
+    caption_timeline = root / "04_audio/CAPTION_TIMELINE.json"
+    visual_paragraphs = root / "04_director/VISUAL_PARAGRAPHS.json"
+    if audio_timeline.is_file() and caption_timeline.is_file() and not visual_paragraphs.is_file():
+        package_policy = Path(__file__).resolve().parents[2] / "config" / "DIRECTOR_POLICY.json"
+        project_policy = root / "config/DIRECTOR_POLICY.json"
+        try:
+            action = register_literary_director_action(
+                root,
+                policy_path=project_policy if project_policy.is_file() else package_policy,
+            )
+        except LiteraryDirectorError as error:
+            return {
+                "release_id": release_id,
+                "stage": "literary_director",
+                "status": "blocked_by_literary_director_integrity",
+                "human_review_required": False,
+                "next_action": str(error),
+                "command": None,
+            }
+        return {
+            "release_id": release_id,
+            "stage": "literary_director",
+            "status": "host_action_pending",
+            "human_review_required": False,
+            "next_action": f"execute Host action {action['action_id']} and register its literary director result",
+            "command": None,
+            "host_action": action,
+        }
     try:
         production = production_status(root)
     except ProductionOrchestrationError as error:
@@ -123,7 +164,12 @@ def _v2_host_orchestration(root: Path, release_id: str) -> dict[str, Any] | None
     if production is not None:
         if production.get("status") == "asset_catalog_ready":
             try:
-                return render_delivery_status(root)
+                render_status = render_delivery_status(root)
+                if render_status.get("status") == "awaiting_static_render":
+                    render_static(root)
+                    render_delivery_status(root)
+                    return render_delivery_status(root)
+                return render_status
             except V2RenderError as error:
                 return {
                     "release_id": release_id,
@@ -453,7 +499,12 @@ def _enhance_status(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     # block with a blocked_* status but never pauses for a human approval.
     human_review_required = any(
         token in status
-        for token in ("awaiting_script_approval", "blocked_by_visual_approval", "awaiting_final_master_approval")
+        for token in (
+            "awaiting_script_approval",
+            "awaiting_visual_covenant_approval",
+            "blocked_by_visual_approval",
+            "awaiting_final_master_approval",
+        )
     )
     preflight = _json(root / "07_render/RENDER_PREFLIGHT.json") or {}
     mix = _json(root / "07_render/MIX_CALIBRATION.json") or {}

@@ -11,9 +11,18 @@ from book_video_factory.visual_covenant import (
     load_asset_catalog,
     load_visual_covenant,
     promote_covenant_assets,
+    record_visual_covenant_approval,
     verify_asset_catalog,
     verify_visual_covenant,
 )
+
+
+def _approve(project: Path) -> dict:
+    return record_visual_covenant_approval(
+        project,
+        reviewer="fixture-reviewer",
+        approved_at="2026-08-22T00:00:00+08:00",
+    )
 
 
 def _sha(text: str | bytes) -> str:
@@ -97,6 +106,7 @@ def test_eligible_covenant_asset_is_directly_reusable(tmp_path: Path) -> None:
     _asset_file(project, asset["path"])
     _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", _covenant_payload(assets=[asset]))
     assert verify_visual_covenant(project)["status"] == "visual_covenant_verified"
+    approval = _approve(project)
     promote_covenant_assets(project)
     production = covenant_production_assets(project)
     assert [item["asset_id"] for item in production] == ["COV_ASSET_02"]
@@ -108,14 +118,13 @@ def test_promotion_preserves_hash_and_provenance(tmp_path: Path) -> None:
     _asset_file(project, asset["path"], content=b"exact-raw-bytes")
     asset["file_sha256"] = _sha("exact-raw-bytes")
     _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", _covenant_payload(assets=[asset]))
+    approval = _approve(project)
     promote_covenant_assets(project)
     catalog = load_asset_catalog(project)
     entry = catalog["assets"][0]
     assert entry["file_sha256"] == _sha("exact-raw-bytes")
     assert entry["provenance"] == {"provider": "host-imagegen", "tool_call_id": "call-COV_JANE"}
-    assert entry["covenant_approval_sha256"] == covenant_canonical_sha(
-        _covenant_payload(assets=[asset])
-    )
+    assert entry["covenant_approval_sha256"] == approval["visual_covenant_approval_sha256"]
 
 
 def test_non_eligible_reference_does_not_enter_production_catalog(tmp_path: Path) -> None:
@@ -124,6 +133,7 @@ def test_non_eligible_reference_does_not_enter_production_catalog(tmp_path: Path
     reference["production_eligible"] = False
     _asset_file(project, reference["path"])
     _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", _covenant_payload(assets=[reference]))
+    _approve(project)
     promote_covenant_assets(project)
     assert verify_asset_catalog(project)["catalog_asset_count"] == 0
     assert covenant_production_assets(project) == []
@@ -135,6 +145,7 @@ def test_invalid_covenant_approval_invalidates_all_promotions(tmp_path: Path) ->
     _asset_file(project, asset["path"])
     covenant = _covenant_payload(assets=[asset])
     _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", covenant)
+    _approve(project)
     promote_covenant_assets(project)
     # Tamper with the covenant payload (change an asset family), leaving the self sha stale.
     tampered = dict(covenant)
@@ -160,6 +171,7 @@ def test_different_complexity_work_counts_differ_by_covenant(tmp_path: Path) -> 
         _asset_file(project, asset["path"], content=f"a-{asset['asset_id']}".encode())
         asset["file_sha256"] = _sha(f"a-{asset['asset_id']}")
     _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", _covenant_payload(assets=assets))
+    _approve(project)
     promote_covenant_assets(project)
     assert verify_asset_catalog(project)["catalog_asset_count"] == 3
     assert len(covenant_production_assets(project)) == 3

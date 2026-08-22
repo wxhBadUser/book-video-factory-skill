@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jaxxmind.local/schemas/visual_paragraphs.v2.schema.json",
+  "title": "Visual Paragraphs V2 contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "release_id", "project_id", "audio_timeline_sha256", "narration_duration_seconds", "paragraphs"],
+  "properties": {
+    "schema_version": {"const": "visual-paragraphs.v2"},
+    "release_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "audio_timeline_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "narration_duration_seconds": {"type": "number", "minimum": 0},
+    "paragraphs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["paragraph_id", "start", "end", "source_caption_ids", "visual_intent", "narrative_focus", "visual_function", "visual_center", "mood", "rationale"],
+        "properties": {
+          "paragraph_id": {"type": "string", "minLength": 1},
+          "start": {"type": "number", "minimum": 0},
+          "end": {"type": "number", "exclusiveMinimum": 0},
+          "source_caption_ids": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+          "visual_intent": {"type": "string", "minLength": 1},
+          "narrative_focus": {"type": "string", "minLength": 1},
+          "visual_function": {"type": "string", "minLength": 1},
+          "visual_center": {"type": "string", "minLength": 1},
+          "mood": {"type": "string", "minLength": 1},
+          "rationale": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

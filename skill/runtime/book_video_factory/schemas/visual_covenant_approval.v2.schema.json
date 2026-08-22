@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jaxxmind.local/schemas/visual_covenant_approval.v2.schema.json",
+  "title": "Visual Covenant Approval V2 contract",
+  "description": "The single human visual gate for the V2 production autonomy chain. Binds the approved Visual Covenant world (visual_covenant_sha256) to an independent approval event hash (visual_covenant_approval_sha256). Issued once, by a human reviewer, after the covenant is verified.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "release_id",
+    "project_id",
+    "approval_id",
+    "reviewer",
+    "approved_at",
+    "approval_status",
+    "visual_covenant_sha256",
+    "visual_covenant_approval_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "visual-covenant-approval.v2"},
+    "release_id": {"type": "string", "minLength": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "approval_id": {"type": "string", "minLength": 1},
+    "reviewer": {"type": "string", "minLength": 1},
+    "approved_at": {"type": "string", "minLength": 1},
+    "approval_status": {"const": "approved"},
+    "visual_covenant_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "visual_covenant_approval_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "additionalProperties": false
+}

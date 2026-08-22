@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import wave
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ from book_video_factory.production_orchestration import (
 from book_video_factory.visual_covenant import (
     covenant_canonical_sha,
     promote_covenant_assets,
+    record_visual_covenant_approval,
 )
 from book_video_factory.v2_render import (
     DEFAULT_VIDEO_REL,
@@ -32,6 +34,7 @@ from book_video_factory.v2_render import (
     V2RenderError,
     _media,
     finalize_delivery,
+    render_static,
     render_delivery_status,
     verify_delivery_manifest,
 )
@@ -110,6 +113,7 @@ def _locked_project(tmp_path: Path, *, name: str = "pilot", asset_ids: tuple[str
     }
     covenant_payload["visual_covenant_sha256"] = covenant_canonical_sha(covenant_payload)
     _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", covenant_payload)
+    record_visual_covenant_approval(project, reviewer="fixture-reviewer", approved_at="2026-08-22T00:00:00+08:00")
     promote_covenant_assets(project)
     return project
 
@@ -137,7 +141,15 @@ def _plan_asset(asset_id: str, *, family: str, func: str, bound_paragraph_id: st
 def _audio_timeline(project: Path, *, duration: float = 24.0) -> str:
     master_path = project / "04_audio/master.wav"
     master_path.parent.mkdir(parents=True, exist_ok=True)
-    master_path.write_bytes(b"real-narration-master-wav")
+    with wave.open(str(master_path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(8000)
+        handle.writeframes(b"\x00\x00" * int(duration * 8000))
+    provider_vtt = project / "04_audio/provider.vtt"
+    provider_vtt.write_text("WEBVTT\n\n1\n00:00:00.000 --> 00:00:01.000\nlocked narration\n", encoding="utf-8")
+    captions = project / "04_audio/CAPTION_TIMELINE.json"
+    _write_json(captions, {"captions": [{"start": 0.0, "end": duration, "text": "locked narration"}]})
     audio = {
         "schema_version": "audio-timeline.v2",
         "release_id": "release-1",
@@ -145,9 +157,9 @@ def _audio_timeline(project: Path, *, duration: float = 24.0) -> str:
         "narration_master_path": "04_audio/master.wav",
         "narration_master_sha256": sha256_file(master_path),
         "provider_vtt_path": "04_audio/provider.vtt",
-        "provider_vtt_sha256": _sha("vtt"),
+        "provider_vtt_sha256": sha256_file(provider_vtt),
         "caption_timeline_path": "04_audio/CAPTION_TIMELINE.json",
-        "caption_timeline_sha256": _sha("captions"),
+        "caption_timeline_sha256": sha256_file(captions),
         "timing_authority": "provider",
         "narration_duration_seconds": duration,
         "bgm": {"bgm_mode": "none"},
@@ -344,23 +356,9 @@ def _render_eligible_project(tmp_path: Path, *, asset_ids: tuple[str, ...] = ("C
     return project
 
 
-def _write_rendered_evidence(project: Path, *, video_bytes: bytes = b"real-v2-master-mp4") -> tuple[str, str]:
-    video_path = project / DEFAULT_VIDEO_REL
-    video_path.parent.mkdir(parents=True, exist_ok=True)
-    video_path.write_bytes(video_bytes)
-    video_sha = sha256_file(video_path)
-    qa = {
-        "schema_version": "encoded-visual-qa.v2",
-        "status": "pass",
-        "video_path": DEFAULT_VIDEO_REL,
-        "video_sha256": video_sha,
-        "encoder": "offline-fixture",
-        "checks_passed": ["semantic", "reality", "identity"],
-    }
-    qa_path = project / ENCODED_QA_REL
-    qa_path.parent.mkdir(parents=True, exist_ok=True)
-    qa_path.write_text(json.dumps(qa, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return video_sha, json.dumps(qa, ensure_ascii=False)
+def _write_rendered_evidence(project: Path) -> tuple[str, str]:
+    rendered = render_static(project)
+    return rendered["video_sha256"], json.dumps(rendered["qa"], ensure_ascii=False)
 
 
 def test_render_status_awaits_render_not_asset_catalog(tmp_path: Path) -> None:
@@ -379,8 +377,8 @@ def test_pipeline_status_advances_to_render_when_catalog_ready(tmp_path: Path) -
     project = _render_eligible_project(tmp_path)
     resolve_edit_timeline(project)
     status = pipeline_status(project)
-    assert status["stage"] == "render"
-    assert status["status"] == "awaiting_static_render"
+    assert status["stage"] == "delivery"
+    assert status["status"] == "delivered"
     assert status["human_review_required"] is False
     assert "awaiting_final_master_approval" not in json.dumps(status)
 
@@ -406,14 +404,12 @@ def test_finalize_delivery_binds_all_hashes(tmp_path: Path) -> None:
     resolve_edit_timeline(project)
     video_path = project / DEFAULT_VIDEO_REL
     video_path.parent.mkdir(parents=True, exist_ok=True)
-    video_path.write_bytes(b"master-video-bytes")
-    video_sha = sha256_file(video_path)
-    qa_payload = {"status": "pass", "encoder": "offline-fixture", "checks_passed": ["semantic"]}
+    rendered = render_static(project)
+    video_sha = rendered["video_sha256"]
     result = finalize_delivery(
         project,
         video_relative=DEFAULT_VIDEO_REL,
         video_sha=video_sha,
-        qa_payload=qa_payload,
     )
     assert result["status"] == "delivered"
     manifest = json.loads((project / DELIVERY_MANIFEST_REL).read_text(encoding="utf-8"))

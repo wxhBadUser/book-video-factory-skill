@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import wave
 from pathlib import Path
 
 import pytest
@@ -31,11 +32,13 @@ from book_video_factory.production_orchestration import (
 from book_video_factory.visual_covenant import (
     covenant_canonical_sha,
     promote_covenant_assets,
+    record_visual_covenant_approval,
 )
 from book_video_factory.v2_render import (
     DEFAULT_VIDEO_REL,
     DELIVERY_MANIFEST_REL,
     V2RenderError,
+    render_static,
     render_delivery_status,
     verify_delivery_manifest,
 )
@@ -121,6 +124,7 @@ def _locked_project(tmp_path: Path, *, name: str = "pilot") -> Path:
     }
     covenant_payload["visual_covenant_sha256"] = covenant_canonical_sha(covenant_payload)
     _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", covenant_payload)
+    record_visual_covenant_approval(project, reviewer="fixture-reviewer", approved_at="2026-08-22T00:00:00+08:00")
     promote_covenant_assets(project)
     return project
 
@@ -148,7 +152,15 @@ def _plan_asset(asset_id: str, *, family: str, func: str, bound_paragraph_id: st
 def _audio_timeline(project: Path, *, duration: float) -> str:
     master_path = project / "04_audio/master.wav"
     master_path.parent.mkdir(parents=True, exist_ok=True)
-    master_path.write_bytes(b"autonomy-narration-master-wav")
+    with wave.open(str(master_path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(8000)
+        handle.writeframes(b"\x00\x00" * int(duration * 8000))
+    provider_vtt = project / "04_audio/provider.vtt"
+    provider_vtt.write_text("WEBVTT\n\n1\n00:00:00.000 --> 00:00:01.000\nautonomous narration\n", encoding="utf-8")
+    captions = project / "04_audio/CAPTION_TIMELINE.json"
+    _write_json(captions, {"captions": [{"start": 0.0, "end": duration, "text": "autonomous narration"}]})
     audio = {
         "schema_version": "audio-timeline.v2",
         "release_id": "release-1",
@@ -156,9 +168,9 @@ def _audio_timeline(project: Path, *, duration: float) -> str:
         "narration_master_path": "04_audio/master.wav",
         "narration_master_sha256": sha256_file(master_path),
         "provider_vtt_path": "04_audio/provider.vtt",
-        "provider_vtt_sha256": _sha("vtt"),
+        "provider_vtt_sha256": sha256_file(provider_vtt),
         "caption_timeline_path": "04_audio/CAPTION_TIMELINE.json",
-        "caption_timeline_sha256": _sha("captions"),
+        "caption_timeline_sha256": sha256_file(captions),
         "timing_authority": "provider",
         "narration_duration_seconds": duration,
         "bgm": {"bgm_mode": "none"},
@@ -293,23 +305,7 @@ def _events(project: Path) -> list[dict]:
 
 
 def _write_rendered_evidence(project: Path) -> None:
-    video_path = project / DEFAULT_VIDEO_REL
-    video_path.parent.mkdir(parents=True, exist_ok=True)
-    video_path.write_bytes(b"autonomy-v2-master-mp4")
-    video_sha = sha256_file(video_path)
-    qa_path = project / "08_render_合成/final/ENCODED_QA.v2.json"
-    qa_path.parent.mkdir(parents=True, exist_ok=True)
-    qa_path.write_text(
-        json.dumps({
-            "schema_version": "encoded-visual-qa.v2",
-            "status": "pass",
-            "video_path": DEFAULT_VIDEO_REL,
-            "video_sha256": video_sha,
-            "encoder": "autonomy-fixture",
-            "checks_passed": ["semantic", "reality", "identity"],
-        }, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    render_static(project)
 
 
 def test_autonomy_end_to_end_no_human_gates(tmp_path: Path) -> None:
@@ -369,9 +365,8 @@ def test_autonomy_end_to_end_no_human_gates(tmp_path: Path) -> None:
 
     # Static render + encoded QA + auto delivery, with a non-blocking bgm.
     status = pipeline_status(project)
-    assert status["status"] == "awaiting_static_render"
+    assert status["status"] == "delivered"
     assert status["human_review_required"] is False
-    _write_rendered_evidence(project)
     delivered = render_delivery_status(project)
     assert delivered["status"] == "delivered"
     verified = verify_delivery_manifest(project)

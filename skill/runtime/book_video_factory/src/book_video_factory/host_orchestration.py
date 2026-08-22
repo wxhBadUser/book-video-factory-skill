@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -16,11 +17,26 @@ class HostActionError(ValueError):
 
 
 MAX_ATTEMPTS = 3
-ACTION_TYPES = {"generate_image", "judge_visual_asset", "select_bgm", "judge_bgm_fit"}
+ACTION_TYPES = {
+    "generate_image",
+    "judge_visual_asset",
+    "select_bgm",
+    "judge_bgm_fit",
+    "plan_literary_director",
+}
 _ACTIONS_REL = "manifests/host_orchestration/ACTIONS.v2.jsonl"
 _EVENTS_REL = "manifests/host_orchestration/EVENTS.v2.jsonl"
 _HASH = re.compile(r"^[0-9a-f]{64}$")
 _ATTEMPT = re.compile(r"^(?P<task>.+):attempt-(?P<attempt>\d+)$")
+
+
+def _failure_classification(event: dict[str, Any]) -> str:
+    failure_class = str(event.get("failure_class", "")).strip().lower()
+    if failure_class == "provider_transient" or failure_class.startswith(("provider_", "transport_")):
+        return "provider_transient"
+    if failure_class == "generation_quality_failure" or "quality" in failure_class:
+        return "generation_quality_failure"
+    return "contract_integrity_failure"
 
 
 def _jsonl(path: Path) -> list[dict[str, Any]]:
@@ -181,6 +197,8 @@ def verify_host_event(project: Path, event: dict[str, Any]) -> dict[str, Any]:
     action = actions[0]
     if valid["action_id"] != action["action_id"]:
         raise HostActionError("event action_id does not match the registered action")
+    if valid["event_type"] != action["action_type"]:
+        raise HostActionError("event_type does not match the registered action_type")
     if _str(valid.get("idempotency_key"), "idempotency_key") != key:
         raise HostActionError("event idempotency_key does not match the registered action")
     terminal = [item for item in state["events"] if item.get("idempotency_key") == key]
@@ -239,6 +257,13 @@ def derive_next_action(project: Path, manifest_path: Path | None = None) -> dict
         key = event["idempotency_key"]
         if event["status"] != "failed" or not event.get("retryable"):
             continue
+        classification = _failure_classification(event)
+        if classification == "contract_integrity_failure":
+            continue
+        if classification == "generation_quality_failure":
+            strategy = event.get("retry_strategy")
+            if not isinstance(strategy, dict) or not strategy:
+                continue
         task, attempt = _parse_key(key)
         if attempt >= MAX_ATTEMPTS:
             continue
@@ -246,10 +271,13 @@ def derive_next_action(project: Path, manifest_path: Path | None = None) -> dict
             if candidate["idempotency_key"] == key:
                 pending = dict(candidate)
                 failed_note = {
+                    "classification": classification,
                     "failure_class": event.get("failure_class"),
                     "retryable": event.get("retryable"),
                     "has_registered_output": event.get("has_registered_output"),
                 }
+                if isinstance(event.get("retry_strategy"), dict):
+                    failed_note["retry_strategy"] = dict(event["retry_strategy"])
                 break
         if pending is not None:
             break
@@ -263,6 +291,24 @@ def derive_next_action(project: Path, manifest_path: Path | None = None) -> dict
     retry["action_id"] = f"{retry['action_id']}-a{next_attempt}"
     retry["retry_of"] = pending.get("action_id")
     retry["previous_failure"] = failed_note
+    retry["retry_classification"] = failed_note["classification"]
+    retry["retry_log"] = {
+        "retry_of": pending.get("action_id"),
+        "previous_failure": failed_note,
+        "attempt": next_attempt,
+    }
+    if failed_note["classification"] == "generation_quality_failure":
+        strategy = failed_note.get("retry_strategy")
+        strategy_bytes = json.dumps(strategy, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        retry["retry_strategy"] = strategy
+        retry["inputs"] = [
+            *list(retry.get("inputs", [])),
+            {
+                "kind": "retry_strategy",
+                "sha256": hashlib.sha256(strategy_bytes).hexdigest(),
+            },
+        ]
+    register_action(root, retry)
     return retry
 
 

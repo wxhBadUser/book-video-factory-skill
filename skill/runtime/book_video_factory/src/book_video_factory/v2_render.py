@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +25,7 @@ from book_video_factory.director_stage.contracts import (
 from book_video_factory.manifests import safe_project_output, sha256_file
 from book_video_factory.visual_covenant import (
     VisualCovenantError,
+    load_asset_catalog,
     verify_asset_catalog,
 )
 
@@ -35,6 +39,13 @@ ENCODED_QA_REL = "08_render_合成/final/ENCODED_QA.v2.json"
 DEFAULT_VIDEO_REL = "08_render_合成/final/v2_master.mp4"
 DELIVERY_SCHEMA_VERSION = "render-delivery.v2"
 DECISION_SCHEMA_VERSION = "render-decision.v2"
+
+
+def _tool(name: str) -> str:
+    path = shutil.which(name)
+    if not path:
+        raise V2RenderError(f"{name} is unavailable")
+    return path
 
 
 def _canonical(value: Any) -> bytes:
@@ -248,23 +259,139 @@ def _encoded_qa_payload(
     return payload
 
 
+def _probe_encoded_qa(root: Path, video_relative: str) -> dict[str, Any]:
+    video = _media(root, video_relative, "final video")
+    try:
+        completed = subprocess.run(
+            [_tool("ffprobe"), "-v", "error", "-show_streams", "-show_format", "-of", "json", str(video)],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        probe = json.loads(completed.stdout)
+    except (OSError, subprocess.CalledProcessError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise V2RenderError(f"ffprobe failed for final video: {error}") from error
+    streams = probe.get("streams") if isinstance(probe, dict) else None
+    if not isinstance(streams, list):
+        raise V2RenderError("ffprobe returned no streams")
+    video_stream = next((item for item in streams if item.get("codec_type") == "video"), None)
+    audio_stream = next((item for item in streams if item.get("codec_type") == "audio"), None)
+    if not isinstance(video_stream, dict) or not isinstance(audio_stream, dict):
+        raise V2RenderError("encoded master must contain video and audio streams")
+    if video_stream.get("codec_name") != "h264" or audio_stream.get("codec_name") != "aac":
+        raise V2RenderError("encoded master codecs must be H.264 video and AAC audio")
+    if video_stream.get("width") != 1280 or video_stream.get("height") != 720:
+        raise V2RenderError("encoded master resolution must be 1280x720")
+    fps = str(video_stream.get("r_frame_rate", ""))
+    if fps not in {"30/1", "30000/1001"}:
+        raise V2RenderError("encoded master frame rate must be 30fps")
+    format_payload = probe.get("format") if isinstance(probe, dict) else None
+    duration = float(format_payload.get("duration", 0.0)) if isinstance(format_payload, dict) else 0.0
+    if duration <= 0.0:
+        raise V2RenderError("encoded master duration is empty")
+    timeline = _load_object(root, "04_audio/AUDIO_TIMELINE.v2.json", "audio timeline")
+    expected_duration = float(timeline.get("narration_duration_seconds", 0.0))
+    if abs(duration - expected_duration) > 0.5:
+        raise V2RenderError("encoded master duration differs from narration duration")
+    return {
+        "schema_version": "encoded-visual-qa.v2",
+        "status": "pass",
+        "video_path": video_relative,
+        "video_sha256": sha256_file(video),
+        "probe": {
+            "format_name": format_payload.get("format_name") if isinstance(format_payload, dict) else None,
+            "duration": duration,
+            "video_codec": video_stream.get("codec_name"),
+            "audio_codec": audio_stream.get("codec_name"),
+            "width": video_stream.get("width"),
+            "height": video_stream.get("height"),
+            "frame_rate": fps,
+            "video_frames": video_stream.get("nb_frames"),
+        },
+        "checks_passed": ["stream_presence", "resolution", "frame_rate", "duration", "codec_container"],
+    }
+
+
+def render_static(project: Path) -> dict[str, Any]:
+    """Render the resolved V2 timeline through the local FFmpeg adapter."""
+    root = project.expanduser().resolve()
+    decision = build_render_decision(root)
+    video_relative = DEFAULT_VIDEO_REL
+    video = safe_project_output(root, Path(video_relative))
+    video.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="v2-render-") as temp:
+        temp_root = Path(temp)
+        catalog_assets = load_asset_catalog(root).get("assets", [])
+        segments: list[Path] = []
+        for index, event in enumerate(decision["events"], start=1):
+            try:
+                asset_relative = next(
+                    item["path"] for item in catalog_assets
+                    if item.get("asset_id") == event["asset_id"]
+                )
+            except StopIteration as error:
+                raise V2RenderError(f"scene asset is missing from catalog: {event['asset_id']}") from error
+            image = _media(root, str(asset_relative), "scene asset")
+            segment = temp_root / f"segment-{index:04d}.mp4"
+            duration = float(event["end"]) - float(event["start"])
+            try:
+                subprocess.run(
+                    [
+                        _tool("ffmpeg"), "-y", "-v", "error", "-loop", "1", "-i", str(image),
+                        "-t", f"{duration:.6f}", "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+                        "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", str(segment),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                )
+            except (OSError, subprocess.CalledProcessError) as error:
+                detail = getattr(error, "stderr", "")
+                raise V2RenderError(f"static image segment render failed: {detail or error}") from error
+            segments.append(segment)
+        if not segments:
+            raise V2RenderError("edit timeline contains no render events")
+        concat = temp_root / "segments.txt"
+        concat.write_text("\n".join(f"file '{path.as_posix()}'" for path in segments) + "\n", encoding="utf-8")
+        video_only = temp_root / "video-only.mp4"
+        command = [
+            _tool("ffmpeg"), "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(concat),
+            "-c", "copy", str(video_only),
+        ]
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8")
+            command = [
+                _tool("ffmpeg"), "-y", "-v", "error", "-i", str(video_only),
+                "-i", str(_media(root, str(decision["narration_master"]["path"]), "narration master")),
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-vf", f"subtitles=filename='{str(_media(root, str(_load_object(root, '04_audio/AUDIO_TIMELINE.v2.json', 'audio timeline').get('provider_vtt_path')), 'provider VTT')).replace(chr(92), '/').replace(':', '\\:')}'",
+                "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                "-shortest", "-t", f"{float(decision['events'][-1]['end']):.6f}", str(video),
+            ]
+            subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8")
+        except (OSError, subprocess.CalledProcessError) as error:
+            detail = getattr(error, "stderr", "")
+            raise V2RenderError(f"static FFmpeg render failed: {detail or error}") from error
+    qa = _probe_encoded_qa(root, video_relative)
+    return {"status": "rendered", "video_path": video_relative, "video_sha256": qa["video_sha256"], "qa": qa}
+
+
 def finalize_delivery(
     project: Path,
     *,
     video_relative: str,
     video_sha: str,
-    qa_payload: dict[str, Any],
 ) -> dict[str, Any]:
-    """Write encoded QA + delivery manifest after verifying every bound hash."""
+    """Write probe-derived encoded QA + delivery manifest."""
     root = project.expanduser().resolve()
     edit_sha, catalog_sha, audio_sha = _extract_decision_shas(root)
     decision_sha = _render_decision_sha(build_render_decision(root))
-    encoded = _encoded_qa_payload(
-        root,
-        video_relative=video_relative,
-        video_sha=video_sha,
-        qa_payload=qa_payload,
-    )
+    video = _media(root, video_relative, "final video")
+    if sha256_file(video) != video_sha:
+        raise V2RenderError("final video sha256 is stale before delivery")
+    encoded = _probe_encoded_qa(root, video_relative)
     qa_path = safe_project_output(root, Path(ENCODED_QA_REL))
     _atomic_json(qa_path, encoded)
     qa_sha = sha256_file(qa_path)
@@ -359,24 +486,10 @@ def render_delivery_status(project: Path) -> dict[str, Any]:
 
     if video_present:
         video_sha = sha256_file(video_path)
-        qa_ok = (
-            isinstance(qa_payload, dict)
-            and qa_payload.get("status") == "pass"
-            and str(qa_payload.get("video_sha256", "")) == video_sha
-        )
-        if qa_ok:
-            return finalize_delivery(
-                root,
-                video_relative=video_relative,
-                video_sha=video_sha,
-                qa_payload=qa_payload,
-            )
-        return _status_blocked(
-            root,
-            status="blocked_by_encoded_qa",
-            next_action="repair the rendered master and regenerate passing encoded QA before delivery",
-            stage="encoded_qa",
-        )
+        try:
+            return finalize_delivery(root, video_relative=video_relative, video_sha=video_sha)
+        except V2RenderError:
+            return _status_blocked(root, status="blocked_by_encoded_qa", next_action="repair the rendered master and regenerate probe-derived encoded QA before delivery", stage="encoded_qa")
 
     return {
         "release_id": str(timeline.get("release_id", "")),

@@ -12,6 +12,7 @@ from book_video_factory.pipeline_runtime import pipeline_status
 from book_video_factory.visual_covenant import (
     covenant_canonical_sha,
     promote_covenant_assets,
+    record_visual_covenant_approval,
     verify_visual_covenant,
 )
 
@@ -76,6 +77,7 @@ def _locked_project(tmp_path: Path, *, name: str = "pilot") -> Path:
     }
     covenant_payload["visual_covenant_sha256"] = covenant_canonical_sha(covenant_payload)
     _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", covenant_payload)
+    record_visual_covenant_approval(project, reviewer="fixture-reviewer", approved_at="2026-08-22T00:00:00+08:00")
     promote_covenant_assets(project)
     return project
 
@@ -220,6 +222,12 @@ def test_stale_catalog_triggers_re_promotion(tmp_path: Path) -> None:
     covenant_payload["visual_covenant_sha256"] = covenant_canonical_sha(covenant_payload)
     _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", covenant_payload)
     assert verify_visual_covenant(project)["status"] == "visual_covenant_verified"
+    with mock.patch("book_video_factory.pipeline_runtime.repository_integrity_block", return_value=None):
+        status = pipeline_status(project)
+    assert status["stage"] == "visual_covenant"
+    assert status["status"] == "awaiting_visual_covenant_approval"
+    assert status["human_review_required"] is True
+    record_visual_covenant_approval(project, reviewer="fixture-reviewer", approved_at="2026-08-22T00:00:00+08:00")
     with mock.patch("book_video_factory.pipeline_runtime.repository_integrity_block", return_value=None):
         status = pipeline_status(project)
     assert status["stage"] == "asset_catalog"

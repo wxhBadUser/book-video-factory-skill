@@ -21,7 +21,7 @@
     "release_id": {"type": "string", "minLength": 1},
     "project_id": {"type": "string", "minLength": 1},
     "action_type": {
-      "enum": ["generate_image", "judge_visual_asset", "select_bgm", "judge_bgm_fit"]
+      "enum": ["generate_image", "judge_visual_asset", "select_bgm", "judge_bgm_fit", "plan_literary_director"]
     },
     "idempotency_key": {"type": "string", "minLength": 1},
     "attempt": {"type": "integer", "minimum": 1},

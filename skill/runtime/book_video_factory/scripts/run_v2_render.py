@@ -9,15 +9,14 @@ import _bootstrap  # noqa: F401
 from book_video_factory.v2_render import (
     V2RenderError,
     build_render_decision,
+    render_static,
     render_delivery_status,
 )
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Report the V2 static render state and the deterministic render input "
-        "(Stage 6, fail-closed). The Python Runtime never renders the video itself."
-    )
+    parser = argparse.ArgumentParser(description="V2 static render status/execute CLI")
+    parser.add_argument("command", nargs="?", choices=("status", "execute"), default="status")
     parser.add_argument("--project", type=Path, required=True)
     args = parser.parse_args()
 
@@ -26,6 +25,10 @@ def main() -> int:
         print(json.dumps({"status": "failed", "error": f"project path is not a directory: {project}"}, ensure_ascii=False))
         return 2
     try:
+        if args.command == "execute":
+            rendered = render_static(project)
+            print(json.dumps({"status": "executed", "render": rendered, "delivery": render_delivery_status(project)}, ensure_ascii=False, indent=2))
+            return 0
         payload = {
             "status": render_delivery_status(project),
             "render_decision": build_render_decision(project),

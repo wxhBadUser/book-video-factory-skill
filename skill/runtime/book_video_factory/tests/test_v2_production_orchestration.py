@@ -24,6 +24,7 @@ from book_video_factory.production_orchestration import (
 from book_video_factory.visual_covenant import (
     covenant_canonical_sha,
     promote_covenant_assets,
+    record_visual_covenant_approval,
 )
 
 
@@ -94,6 +95,7 @@ def _locked_project(tmp_path: Path, *, name: str = "pilot") -> Path:
     }
     covenant_payload["visual_covenant_sha256"] = covenant_canonical_sha(covenant_payload)
     _write_json(project / "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json", covenant_payload)
+    record_visual_covenant_approval(project, reviewer="fixture-reviewer", approved_at="2026-08-22T00:00:00+08:00")
     promote_covenant_assets(project)
     return project
 
