@@ -26,12 +26,15 @@ from book_video_factory.director_stage.contracts import (
 )
 from book_video_factory.host_orchestration import (
     MAX_ATTEMPTS,
+    HostActionError,
     derive_next_action,
     read_ledgers,
+    reconcile_prepared_completions,
     register_action,
     verify_host_event,
 )
 from book_video_factory.manifests import safe_project_output, sha256_file
+from book_video_factory.transaction_lock import project_transaction_lock
 from book_video_factory.visual_covenant import (
     CATALOG_REL,
     VisualCovenantError,
@@ -286,7 +289,7 @@ def _succeeded_generate_events(state: dict[str, Any]) -> list[tuple[dict[str, An
     return result
 
 
-def ensure_generate_actions(project: Path) -> int:
+def _ensure_generate_actions_locked(project: Path) -> int:
     """Register generate_image actions for assets needing a new or revised attempt."""
     root = project.expanduser().resolve()
     release_id = _release_id(root)
@@ -379,7 +382,26 @@ def ensure_generate_actions(project: Path) -> int:
     return registered
 
 
+def ensure_generate_actions(project: Path) -> int:
+    with project_transaction_lock(project) as root:
+        try:
+            reconcile_prepared_completions(root)
+        except HostActionError as error:
+            raise ProductionOrchestrationError(str(error)) from error
+        return _ensure_generate_actions_locked(root)
+
+
 def incorporate_generated_assets(project: Path) -> int:
+    """Reconcile prepared completions before promoting generated assets."""
+    with project_transaction_lock(project) as root:
+        try:
+            reconcile_prepared_completions(root)
+        except HostActionError as error:
+            raise ProductionOrchestrationError(str(error)) from error
+        return _incorporate_generated_assets_locked(root)
+
+
+def _incorporate_generated_assets_locked(project: Path) -> int:
     """Verify real generated files and promote them into the catalog as pending_judge."""
     root = project.expanduser().resolve()
     approval_sha = _covenant_approval_sha(root)
@@ -451,7 +473,7 @@ def incorporate_generated_assets(project: Path) -> int:
     return changed
 
 
-def ensure_judge_actions(project: Path) -> int:
+def _ensure_judge_actions_locked(project: Path) -> int:
     """Register judge_visual_asset actions for every verified pending_judge asset."""
     root = project.expanduser().resolve()
     release_id = _release_id(root)
@@ -497,6 +519,15 @@ def ensure_judge_actions(project: Path) -> int:
         if result.get("registered"):
             registered += 1
     return registered
+
+
+def ensure_judge_actions(project: Path) -> int:
+    with project_transaction_lock(project) as root:
+        try:
+            reconcile_prepared_completions(root)
+        except HostActionError as error:
+            raise ProductionOrchestrationError(str(error)) from error
+        return _ensure_judge_actions_locked(root)
 
 
 def plan_bound_paragraph(root: Path, asset_id: str) -> str:
@@ -671,7 +702,7 @@ def _apply_verdict(
     return updated
 
 
-def apply_verdicts(project: Path) -> int:
+def _apply_verdicts_locked(project: Path) -> int:
     """Attach terminal judge verdicts to pending_judge catalog assets (idempotent)."""
     root = project.expanduser().resolve()
     release_id = _release_id(root)
@@ -701,7 +732,17 @@ def apply_verdicts(project: Path) -> int:
     return changed
 
 
-def production_status(project: Path) -> dict[str, Any] | None:
+def apply_verdicts(project: Path) -> int:
+    """Reconcile prepared completions before applying judge results to the catalog."""
+    with project_transaction_lock(project) as root:
+        try:
+            reconcile_prepared_completions(root)
+        except HostActionError as error:
+            raise ProductionOrchestrationError(str(error)) from error
+        return _apply_verdicts_locked(root)
+
+
+def _production_status_locked(project: Path) -> dict[str, Any] | None:
     """Advance the Host generation/judge loop and report the V2 production state.
 
     Returns None when the Director edit decisions are not yet present, so the
@@ -767,3 +808,13 @@ def production_status(project: Path) -> dict[str, Any] | None:
         "next_action": "production assets approved; resolve the EDIT_TIMELINE for rendering",
         "command": None,
     }
+
+
+def production_status(project: Path) -> dict[str, Any] | None:
+    """Reconcile prepared completions before consuming production catalogs."""
+    with project_transaction_lock(project) as root:
+        try:
+            reconcile_prepared_completions(root)
+        except HostActionError as error:
+            raise ProductionOrchestrationError(str(error)) from error
+        return _production_status_locked(root)

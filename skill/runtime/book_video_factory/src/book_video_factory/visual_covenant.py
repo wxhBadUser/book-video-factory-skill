@@ -12,6 +12,8 @@ from typing import Any
 
 from book_video_factory.locked_script import verify_locked_script
 from book_video_factory.manifests import safe_project_output, sha256_file
+from book_video_factory.host_orchestration import HostActionError, reconcile_prepared_completions
+from book_video_factory.transaction_lock import project_transaction_lock
 
 
 class VisualCovenantError(ValueError):
@@ -21,6 +23,7 @@ class VisualCovenantError(ValueError):
 COVENANT_REL = "04_visual_covenant_视觉契约/VISUAL_COVENANT.v2.json"
 CATALOG_REL = "manifests/asset_catalog/ASSET_CATALOG.v2.json"
 APPROVAL_REL = "04_visual_covenant_视觉契约/VISUAL_COVENANT_APPROVAL.v2.json"
+APPROVAL_EVENTS_REL = "04_visual_covenant_视觉契约/approval_events"
 PROMOTION_EVENTS_REL = "manifests/asset_catalog/ASSET_PROMOTION.v2.jsonl"
 
 
@@ -77,6 +80,15 @@ def verify_visual_covenant(
 ) -> dict[str, Any]:
     """Recompute boundaries and hashes, returning an authoritative fail-closed status."""
     root = project.expanduser().resolve()
+    try:
+        reconcile_prepared_completions(root)
+    except HostActionError as error:
+        return {
+            "schema_version": "visual-covenant.v2",
+            "status": "blocked_by_completion_reconciliation",
+            "verified": False,
+            "reason": str(error),
+        }
     lock_status = verify_locked_script(root)
     if lock_status.get("status") != "script_locked":
         return {
@@ -186,6 +198,8 @@ def _approval_canonical(approval: dict[str, Any]) -> bytes:
     """Canonical bytes over the approval artifact with its own event hash stripped."""
     normalized = copy.deepcopy(approval)
     normalized.pop("visual_covenant_approval_sha256", None)
+    normalized.pop("current_event_path", None)
+    normalized.pop("current_event_sha256", None)
     return _canonical(normalized)
 
 
@@ -210,32 +224,45 @@ def record_visual_covenant_approval(
     (``visual_covenant_approval_sha256``). It is the sole human gate; no other
     stage may approve a world/aesthetic boundary.
     """
-    root = project.expanduser().resolve()
-    if not isinstance(reviewer, str) or not reviewer or reviewer != reviewer.strip():
-        raise VisualCovenantError("reviewer must be a nonempty trimmed string")
-    if not isinstance(approved_at, str) or not approved_at:
-        raise VisualCovenantError("approved_at must be a nonempty string")
-    covenant_status = verify_visual_covenant(root)
-    if covenant_status.get("status") != "visual_covenant_verified":
-        raise VisualCovenantError(
-            f"cannot approve an unverified covenant: {covenant_status.get('status')}"
+    with project_transaction_lock(project) as root:
+        if not isinstance(reviewer, str) or not reviewer or reviewer != reviewer.strip():
+            raise VisualCovenantError("reviewer must be a nonempty trimmed string")
+        if not isinstance(approved_at, str) or not approved_at:
+            raise VisualCovenantError("approved_at must be a nonempty string")
+        covenant_status = verify_visual_covenant(root)
+        if covenant_status.get("status") != "visual_covenant_verified":
+            raise VisualCovenantError(
+                f"cannot approve an unverified covenant: {covenant_status.get('status')}"
+            )
+        visual_covenant_sha = covenant_status["visual_covenant_sha256"]
+        payload = {
+            "schema_version": "visual-covenant-approval.v2",
+            "release_id": covenant_status["release_id"],
+            "project_id": root.name,
+            "approval_id": str(uuid.uuid4()),
+            "reviewer": reviewer,
+            "approved_at": approved_at,
+            "approval_status": "approved",
+            "visual_covenant_sha256": visual_covenant_sha,
+            "visual_covenant_approval_sha256": "",
+        }
+        payload["visual_covenant_approval_sha256"] = _sha_bytes(_approval_canonical(payload))
+        event_path = safe_project_output(
+            root,
+            Path(APPROVAL_EVENTS_REL) / f"{payload['visual_covenant_approval_sha256']}.json",
         )
-    visual_covenant_sha = covenant_status["visual_covenant_sha256"]
-    payload = {
-        "schema_version": "visual-covenant-approval.v2",
-        "release_id": covenant_status["release_id"],
-        "project_id": root.name,
-        "approval_id": str(uuid.uuid4()),
-        "reviewer": reviewer,
-        "approved_at": approved_at,
-        "approval_status": "approved",
-        "visual_covenant_sha256": visual_covenant_sha,
-        "visual_covenant_approval_sha256": "",
-    }
-    payload["visual_covenant_approval_sha256"] = _sha_bytes(_approval_canonical(payload))
-    approval_path = safe_project_output(root, Path(APPROVAL_REL))
-    _write_approval_json(approval_path, payload)
-    return payload
+        event_bytes = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+        if event_path.is_file() and event_path.read_bytes() != event_bytes:
+            raise VisualCovenantError("immutable Visual Covenant approval event conflicts with existing bytes")
+        if not event_path.is_file():
+            event_path.parent.mkdir(parents=True, exist_ok=True)
+            event_path.write_bytes(event_bytes)
+        pointer = dict(payload)
+        pointer["current_event_path"] = event_path.relative_to(root).as_posix()
+        pointer["current_event_sha256"] = payload["visual_covenant_approval_sha256"]
+        approval_path = safe_project_output(root, Path(APPROVAL_REL))
+        _write_approval_json(approval_path, pointer)
+        return payload
 
 
 def verify_visual_covenant_approval(project: Path) -> dict[str, Any]:
@@ -309,6 +336,41 @@ def verify_visual_covenant_approval(project: Path) -> dict[str, Any]:
             "status": "invalid_visual_covenant_approval",
             "verified": False,
         }
+    event_path_value = approval.get("current_event_path")
+    event_sha_value = approval.get("current_event_sha256")
+    if event_path_value is not None or event_sha_value is not None:
+        if not isinstance(event_path_value, str) or not isinstance(event_sha_value, str):
+            return {
+                "schema_version": "visual-covenant-approval.v2",
+                "status": "invalid_visual_covenant_approval",
+                "verified": False,
+            }
+        if event_sha_value != expected_event_sha:
+            return {
+                "schema_version": "visual-covenant-approval.v2",
+                "status": "invalid_visual_covenant_approval",
+                "verified": False,
+            }
+        try:
+            event_path = safe_project_output(root, Path(event_path_value))
+        except (OSError, ValueError):
+            return {
+                "schema_version": "visual-covenant-approval.v2",
+                "status": "invalid_visual_covenant_approval",
+                "verified": False,
+            }
+        event = _load_payload(root, event_path.relative_to(root).as_posix())
+        event_payload = {
+            key: value
+            for key, value in approval.items()
+            if key not in {"current_event_path", "current_event_sha256"}
+        }
+        if event is None or _canonical(event) != _canonical(event_payload):
+            return {
+                "schema_version": "visual-covenant-approval.v2",
+                "status": "invalid_visual_covenant_approval",
+                "verified": False,
+            }
     return {
         "schema_version": "visual-covenant-approval.v2",
         "status": "visual_covenant_approval_verified",
@@ -357,7 +419,7 @@ def _write_immutable_json(path: Path, payload: dict[str, Any]) -> None:
     )
 
 
-def write_asset_catalog(
+def _write_asset_catalog_locked(
     project: Path,
     *,
     release_id: str,
@@ -378,7 +440,23 @@ def write_asset_catalog(
     return payload
 
 
-def promote_covenant_assets(project: Path) -> dict[str, Any]:
+def write_asset_catalog(
+    project: Path,
+    *,
+    release_id: str,
+    approval_sha: str,
+    assets: list[dict[str, Any]],
+) -> dict[str, Any]:
+    with project_transaction_lock(project):
+        return _write_asset_catalog_locked(
+            project,
+            release_id=release_id,
+            approval_sha=approval_sha,
+            assets=assets,
+        )
+
+
+def _promote_covenant_assets_locked(project: Path) -> dict[str, Any]:
     """Promote only production_eligible covenant assets into the asset catalog."""
     root = project.expanduser().resolve()
     covenant = load_visual_covenant(project)
@@ -492,9 +570,24 @@ def promote_covenant_assets(project: Path) -> dict[str, Any]:
     }
 
 
+def promote_covenant_assets(project: Path) -> dict[str, Any]:
+    """Promote Covenant assets under the same project transaction lock as Host ledgers."""
+    with project_transaction_lock(project):
+        return _promote_covenant_assets_locked(project)
+
+
 def verify_asset_catalog(project: Path) -> dict[str, Any]:
     """Fail-closed verification binding the catalog to the current covenant approval."""
     root = project.expanduser().resolve()
+    try:
+        reconcile_prepared_completions(root)
+    except HostActionError as error:
+        return {
+            "schema_version": "asset-catalog.v2",
+            "status": "blocked_by_completion_reconciliation",
+            "verified": False,
+            "reason": str(error),
+        }
     covenant_status = verify_visual_covenant(root)
     if covenant_status.get("status") != "visual_covenant_verified":
         return {

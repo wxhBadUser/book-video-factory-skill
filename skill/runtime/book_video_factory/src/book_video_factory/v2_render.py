@@ -23,6 +23,8 @@ from book_video_factory.director_stage.contracts import (
     resolve_edit_timeline,
 )
 from book_video_factory.manifests import safe_project_output, sha256_file
+from book_video_factory.host_orchestration import reconcile_prepared_completions
+from book_video_factory.transaction_lock import project_transaction_lock
 from book_video_factory.visual_covenant import (
     VisualCovenantError,
     load_asset_catalog,
@@ -437,7 +439,7 @@ def _status_blocked(project: Path, *, status: str, next_action: str, stage: str 
     }
 
 
-def render_delivery_status(project: Path) -> dict[str, Any]:
+def _render_delivery_status_locked(project: Path) -> dict[str, Any]:
     """Advance and report the V2 static render / encoded QA / auto delivery state."""
     root = project.expanduser().resolve()
     try:
@@ -502,3 +504,10 @@ def render_delivery_status(project: Path) -> dict[str, Any]:
             f"--project '{root}'"
         ),
     }
+
+
+def render_delivery_status(project: Path) -> dict[str, Any]:
+    """Reconcile prepared completions before reading render-owned artifacts."""
+    with project_transaction_lock(project) as root:
+        reconcile_prepared_completions(root)
+        return _render_delivery_status_locked(root)

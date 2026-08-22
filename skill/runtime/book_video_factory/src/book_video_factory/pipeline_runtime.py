@@ -5,7 +5,11 @@ from pathlib import Path
 from typing import Any
 
 from book_video_factory.audio_stage.status import audio_stage_status
-from book_video_factory.host_orchestration import derive_next_action
+from book_video_factory.host_orchestration import (
+    HostActionError,
+    derive_next_action,
+    reconcile_prepared_completions,
+)
 from book_video_factory.locked_script import verify_locked_script
 from book_video_factory.manifests import sha256_file
 from book_video_factory.delivery_stage import FinalMasterApprovalError, verify_final_master_approval
@@ -54,6 +58,17 @@ def _release_id(root: Path) -> str:
 
 
 def _v2_host_orchestration(root: Path, release_id: str) -> dict[str, Any] | None:
+    try:
+        reconcile_prepared_completions(root)
+    except HostActionError as error:
+        return {
+            "release_id": release_id,
+            "stage": "host_orchestration",
+            "status": "blocked_by_completion_reconciliation",
+            "human_review_required": False,
+            "next_action": f"repair the prepared completion transaction: {error}",
+            "command": None,
+        }
     lock_status = verify_locked_script(root)
     status = lock_status.get("status")
     if status in {"missing_locked_script", "invalid_locked_script"}:
@@ -543,4 +558,14 @@ def _enhance_status(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
 
 def pipeline_status(project: Path) -> dict[str, Any]:
     root = project.expanduser().resolve()
+    try:
+        reconcile_prepared_completions(root)
+    except HostActionError as error:
+        return {
+            "stage": "host_orchestration",
+            "status": "blocked_by_completion_reconciliation",
+            "human_review_required": False,
+            "next_action": f"repair the prepared completion transaction: {error}",
+            "command": None,
+        }
     return _enhance_status(root, _raw_pipeline_status(root))

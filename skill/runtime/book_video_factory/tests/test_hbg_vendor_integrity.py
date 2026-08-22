@@ -5,7 +5,16 @@ import json
 import unittest
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
+
+
+def _repository_root(start: Path) -> Path:
+    for candidate in (start, *start.parents):
+        if (candidate / "vendor/hbg-life-simulation/UPSTREAM_LOCK.json").is_file():
+            return candidate
+    raise RuntimeError("could not locate repository root from vendor integrity test")
+
+
+REPO = _repository_root(Path(__file__).resolve().parent)
 VENDOR = REPO / "vendor/hbg-life-simulation"
 LOCK = VENDOR / "UPSTREAM_LOCK.json"
 EXPECTED_COMMIT = "63aa262d88f18c6058b205c2dd582cf909b219a4"
